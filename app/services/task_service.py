@@ -12,9 +12,10 @@ from fastapi import HTTPException, UploadFile, status
 
 from ..core.config import ENABLE_BACKGROUND_WORKER, RESULT_DIR, UPLOAD_DIR
 from ..core.logging_config import get_api_logger, get_task_logger
-from ..queue.task_queue import TaskQueue
+from ..queue.redis_queue import RedisQueue
 from ..schemas.response import FileResult, TaskDetail, TaskResultResponse, TaskSummary
 from .file_service import FileService
+from .pdf_service import PdfService
 
 #TaskService 是 FastAPI 路由和 FileService 的中间层 + 异步队列调度中心,后用redis替代任务存储 + 队列管理 + 异步执行
 @dataclass(slots=True)
@@ -55,7 +56,8 @@ class TaskService:
         self._logger = get_api_logger()
         self._task_logger = get_task_logger()
         self._file_service = FileService()
-        self._queue = TaskQueue()
+        self._pdf_service = PdfService()
+        self._queue = RedisQueue()
         self._records: dict[str, TaskRecord] = {}
         self._lock = Lock()
         self._worker_stop = Event()
@@ -67,7 +69,7 @@ class TaskService:
         task_id = self._queue.dequeue()
         if task_id is None:
             return None
-        return self._process_task(task_id)
+        return self.process_task(task_id)
 
     def process_all(self) -> list[TaskRecord]:
         processed: list[TaskRecord] = []
@@ -127,20 +129,28 @@ class TaskService:
             task_id = self._queue.dequeue(block=True, timeout=0.5)
             if task_id is None:
                 continue
-            self._process_task(task_id)
+            self.process_task(task_id)
 
-    def _process_task(self, task_id: str) -> TaskRecord:
+    def process_task(self, task_id: str) -> TaskRecord:
+        record = self._ensure_record(task_id)
+        if record.result_path and Path(record.result_path).exists():
+            self._task_logger.info("Skipping already processed task %s", task_id)
+            return record
+
         with self._lock:
-            record = self._records.get(task_id)
-            if record is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found.")
+            record = self._records[task_id]
             record.status = "processing"
             record.updated_at = self._now()
 
         self._task_logger.info("Processing task %s for %s", task_id, record.file_name)
         try:
-            analysis = self._file_service.analyze_file(Path(record.storage_path))
+            storage_path = Path(record.storage_path)
+            if record.file_type == "pdf":
+                analysis = self._pdf_service.analyze_pdf(storage_path)
+            else:
+                analysis = self._file_service.analyze_file(storage_path)
             result_path = RESULT_DIR / f"{task_id}.json"
+            result_path.parent.mkdir(parents=True, exist_ok=True)
             result_path.write_text(json.dumps(asdict(analysis), ensure_ascii=False, indent=2), encoding="utf-8")#转化为json返回
             with self._lock:
                 record.status = "success"
@@ -149,19 +159,58 @@ class TaskService:
                 record.error = None
             self._task_logger.info("Finished task %s", task_id)
         except Exception as exc:  # pragma: no cover - defensive guard for unexpected failures
+            result_path = RESULT_DIR / f"{task_id}.json"
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            result_path.write_text(
+                json.dumps(
+                    {
+                        "file_name": record.file_name,
+                        "file_size": record.file_size,
+                        "file_type": record.file_type,
+                        "processing_time_ms": 0.0,
+                        "title": None,
+                        "abstract": None,
+                        "body_preview": None,
+                        "error": str(exc),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
             with self._lock:
                 record.status = "failed"
                 record.updated_at = self._now()
+                record.result_path = str(result_path)
                 record.error = str(exc)
             self._task_logger.exception("Task %s failed", task_id)
         return record
+
+    def scan_uploads(self) -> list[TaskRecord]:
+        records: list[TaskRecord] = []
+        if not UPLOAD_DIR.exists():
+            return records
+        for task_dir in sorted(path for path in UPLOAD_DIR.iterdir() if path.is_dir()):
+            try:
+                records.append(self._ensure_record(task_dir.name))
+            except HTTPException:
+                self._task_logger.warning("Skipping upload directory without a PDF: %s", task_dir)
+        return records
+
+    def process_uploads(self) -> list[TaskRecord]:
+        processed: list[TaskRecord] = []
+        for record in self.scan_uploads():
+            if record.result_path and Path(record.result_path).exists():
+                continue
+            processed.append(self.process_task(record.task_id))
+        return processed
 
     async def save_uploads(self, uploads: Iterable[UploadFile]) -> list[TaskRecord]:
         created: list[TaskRecord] = []
         for upload in uploads:
             file_name = Path(upload.filename or "").name
             task_id = uuid4().hex
-            storage_path = UPLOAD_DIR / f"{task_id}_{file_name}"
+            storage_path = UPLOAD_DIR / task_id / file_name
             saved_name, file_size, file_type = await self._file_service.save_upload(upload, storage_path)
             now = self._now()
             record = TaskRecord(
@@ -183,3 +232,45 @@ class TaskService:
 
     def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    def _ensure_record(self, task_id: str) -> TaskRecord:
+        with self._lock:
+            record = self._records.get(task_id)
+        if record is not None:
+            return record
+
+        task_dir = UPLOAD_DIR / task_id
+        if not task_dir.is_dir():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found.")
+        pdfs = sorted(task_dir.glob("*.pdf"))
+        if not pdfs:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PDF upload not found.")
+        storage_path = pdfs[0]
+        result_path = RESULT_DIR / f"{task_id}.json"
+        status_value = "success" if result_path.exists() else "queued"
+        now = self._now()
+        error = None
+        if result_path.exists():
+            try:
+                payload = json.loads(result_path.read_text(encoding="utf-8"))
+                error = payload.get("error")
+                status_value = "failed" if error else "success"
+            except json.JSONDecodeError:
+                status_value = "failed"
+                error = "Result file is not valid JSON."
+
+        record = TaskRecord(
+            task_id=task_id,
+            file_name=storage_path.name,
+            file_size=storage_path.stat().st_size,
+            file_type=storage_path.suffix.lower().lstrip("."),
+            status=status_value,
+            created_at=now,
+            updated_at=now,
+            storage_path=str(storage_path),
+            result_path=str(result_path) if result_path.exists() else None,
+            error=error,
+        )
+        with self._lock:
+            self._records[task_id] = record
+        return record
