@@ -1,0 +1,38 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+env/
+venv/
+
+# VSCode settings
+.vscode/
+
+# macOS files
+.DS_Store
+*.swp
+*.swo
+
+# Logs
+logs/
+*.log
+
+# Uploads and temporary data
+data/uploads/
+data/tmp/
+tmp_*
+
+# Results / output files
+data/results/
+*.json
+
+# Pytest cache
+.pytest_cache/
+
+# Ignore .env file with secrets
+.env
+.env.*.local
