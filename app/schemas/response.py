@@ -12,10 +12,13 @@ class FileResult(BaseModel):
     file_name: str
     file_size: int
     file_type: str
-    total_lines: int
-    error_count: int
-    warn_count: int
+    total_lines: int | None = None
+    error_count: int | None = None
+    warn_count: int | None = None
     processing_time_ms: float
+    title: str | None = None
+    abstract: str | None = None
+    body_preview: str | None = None
 
 
 class TaskSummary(BaseModel):
@@ -42,6 +45,7 @@ class TaskResultResponse(BaseModel):
 class UploadResponse(BaseModel):
     tasks: list[TaskSummary]
     queue_size: int
+    task_id: str | None = None
 
 
 class ProcessResponse(BaseModel):
@@ -52,4 +56,3 @@ class HealthResponse(BaseModel):
     status: str
     queued_tasks: int
     tracked_tasks: int
-

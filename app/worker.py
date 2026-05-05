@@ -6,7 +6,7 @@ import sys
 import time
 
 from .core import config
-config.ENABLE_BACKGROUND_WORKER = False
+config.ENABLE_BACKGROUND_WORKER = False#禁用    TaskService 内部的后台 Worker,改动增worker,typer,redis
 
 from .core.config import ensure_runtime_dirs
 from .services.task_service import TaskService
@@ -19,7 +19,7 @@ logger = logging.getLogger("worker")
 
 stop_requested = False
 
-def handle_shutdown(signum, frame) -> None:
+def handle_shutdown(signum, frame) -> None:#停机信号处理
     global stop_requested
     logger.info("Shutdown signal received. Stopping worker after current task...")
     stop_requested = True
@@ -27,7 +27,7 @@ def handle_shutdown(signum, frame) -> None:
 signal.signal(signal.SIGINT, handle_shutdown)
 signal.signal(signal.SIGTERM, handle_shutdown)
 
-def run_worker() -> None:
+def run_worker() -> None:#worker主循环
     ensure_runtime_dirs()
     service = TaskService()
     logger.info("Worker started, waiting for tasks on Redis queue...")
