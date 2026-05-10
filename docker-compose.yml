@@ -16,7 +16,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     environment:
       DATA_DIR: /app/data
       LOG_DIR: /app/logs
@@ -37,7 +37,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["python", "-m", "app.worker"]
+    command: ["python3", "-u", "-m", "app.worker"]
     environment:
       DATA_DIR: /app/data
       LOG_DIR: /app/logs

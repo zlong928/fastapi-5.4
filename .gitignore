@@ -17,6 +17,11 @@ venv/
 *.swp
 *.swo
 
+dump.rdb
+appendonly.aof
+appendonlydir/
+data/
+logs/
 # Logs
 logs/
 *.log
