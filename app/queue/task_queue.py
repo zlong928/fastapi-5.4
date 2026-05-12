@@ -30,3 +30,7 @@ class TaskQueue:
         with self._condition:
             return list(self._items)
 
+    def remove_many(self, task_ids: list[str]) -> None:
+        with self._condition:
+            blocked = set(task_ids)
+            self._items = deque(item for item in self._items if item not in blocked)

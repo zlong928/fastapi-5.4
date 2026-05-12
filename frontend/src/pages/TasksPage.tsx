@@ -1,20 +1,26 @@
 import { RefreshCw, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { TaskTable } from "@/components/TaskTable";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTasks } from "@/hooks/useTasks";
+import { clearTasks } from "@/lib/api";
 
 export function TasksPage() {
   const { data = [], error, isError, isLoading, isFetching, refetch } = useTasks();
-  const [clearedTasks, setClearedTasks] = useState<Set<string>>(new Set());
+  const queryClient = useQueryClient();
+  const clearMutation = useMutation({
+    mutationFn: clearTasks,
+    onSuccess: () => {
+      queryClient.setQueryData(["tasks"], []);
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+    }
+  });
 
   const handleClear = () => {
-    setClearedTasks(new Set(data.map((task) => task.task_id)));
+    clearMutation.mutate();
   };
-
-  const displayedTasks = data.filter((task) => !clearedTasks.has(task.task_id));
 
   return (
     <div className="space-y-6">
@@ -37,7 +43,7 @@ export function TasksPage() {
             variant="outline"
             onClick={handleClear}
             className="gap-2"
-            disabled={displayedTasks.length === 0}
+            disabled={data.length === 0 || clearMutation.isPending}
           >
             <Trash2 className="h-4 w-4" /> Clear
           </Button>
@@ -50,7 +56,12 @@ export function TasksPage() {
           <AlertDescription>{error.message}</AlertDescription>
         </Alert>
       ) : null}
-      {!isLoading && !isError ? <TaskTable tasks={displayedTasks} /> : null}
+      {clearMutation.isError ? (
+        <Alert variant="destructive">
+          <AlertDescription>{clearMutation.error.message}</AlertDescription>
+        </Alert>
+      ) : null}
+      {!isLoading && !isError ? <TaskTable tasks={data} /> : null}
     </div>
   );
 }

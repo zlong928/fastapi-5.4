@@ -26,3 +26,7 @@ class RedisQueue:
 
     def snapshot(self) -> list[str]:
         return self._redis.lrange(self.queue_name, 0, -1)
+
+    def remove_many(self, task_ids: list[str]) -> None:
+        for task_id in task_ids:
+            self._redis.lrem(self.queue_name, 0, task_id)

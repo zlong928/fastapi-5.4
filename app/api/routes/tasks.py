@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from ...api.deps import get_current_user
 from ...models import User
+from ...schemas.auth import MessageResponse
 from ...schemas.response import ProcessResponse, TaskDetail, TaskResultResponse
 
 router = APIRouter()
@@ -15,6 +16,16 @@ def list_tasks(
 ) -> list[TaskDetail]:
     service = request.app.state.task_service
     return [task.to_detail() for task in service.list_tasks(status, user_id=current_user.id)]
+
+
+@router.delete("/tasks", response_model=MessageResponse)
+def clear_tasks(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> MessageResponse:
+    service = request.app.state.task_service
+    deleted_count = service.clear_tasks(user_id=current_user.id)
+    return MessageResponse(message=f"Cleared {deleted_count} task records.")
 
 
 @router.get("/tasks/{task_id}", response_model=TaskDetail)

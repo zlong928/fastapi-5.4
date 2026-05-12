@@ -109,6 +109,12 @@ export function getTasks() {
   return request<TaskRecord[]>("/tasks");
 }
 
+export function clearTasks() {
+  return request<MessageResponse>("/tasks", {
+    method: "DELETE"
+  });
+}
+
 export async function getTask(taskId: string): Promise<TaskRecord> {
   const task = await request<TaskRecord>(`/tasks/${encodeURIComponent(taskId)}`);
   if (task.status === "success" || task.status === "failed") {

@@ -112,6 +112,22 @@ class TaskService:
         records = [self._refresh_record_from_result(record) for record in records]
         return sorted(records, key=lambda record: record.created_at)
 
+    def clear_tasks(self, user_id: int) -> int:
+        with SessionLocal() as db:
+            tasks = db.scalars(select(Task).where(Task.user_id == user_id)).all()
+            task_ids = [task.task_id for task in tasks]
+            for task in tasks:
+                db.delete(task)
+            db.commit()
+
+        if task_ids and hasattr(self._queue, "remove_many"):
+            self._queue.remove_many(task_ids)
+
+        with self._lock:
+            for task_id in task_ids:
+                self._records.pop(task_id, None)
+        return len(task_ids)
+
     def _refresh_record_from_result(self, record: TaskRecord) -> TaskRecord:
         if record.status in {"success", "failed"}:
             return record
