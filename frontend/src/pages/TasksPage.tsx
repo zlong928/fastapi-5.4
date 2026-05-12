@@ -1,5 +1,8 @@
 import { RefreshCw } from "lucide-react";
 import { TaskTable } from "@/components/TaskTable";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useTasks } from "@/hooks/useTasks";
 
 export function TasksPage() {
@@ -12,17 +15,22 @@ export function TasksPage() {
           <p className="text-sm font-medium uppercase tracking-wide text-slate-500">Tasks</p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight">Task queue</h1>
         </div>
-        <button
+        <Button
           type="button"
+          variant="outline"
           onClick={() => refetch()}
-          className="inline-flex items-center gap-2 rounded-md border border-border bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+          className="gap-2"
         >
           <RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} /> Refresh
-        </button>
+        </Button>
       </div>
 
-      {isLoading ? <div className="rounded-lg bg-white p-8 text-slate-500">Loading tasks...</div> : null}
-      {isError ? <div className="rounded-lg bg-red-50 p-4 text-red-700">{error.message}</div> : null}
+      {isLoading ? <Skeleton className="h-64 w-full" /> : null}
+      {isError ? (
+        <Alert variant="destructive">
+          <AlertDescription>{error.message}</AlertDescription>
+        </Alert>
+      ) : null}
       {!isLoading && !isError ? <TaskTable tasks={data} /> : null}
     </div>
   );

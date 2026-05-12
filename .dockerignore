@@ -12,3 +12,6 @@ data
 .planning
 .vscode
 dump.rdb
+frontend/dist
+frontend/node_modules
+frontend/tsconfig.tsbuildinfo

@@ -5,6 +5,7 @@ FastAPI + Redis + worker service for asynchronous file and PDF processing, with 
 ## Features
 
 - JWT registration and login
+- GitHub and Google OAuth login
 - Private file uploads and task records per user
 - SQLite task persistence shared by API and worker
 - Redis-backed processing queue
@@ -53,3 +54,37 @@ The browser-facing frontend should use `http://localhost:8000` for the API, not 
 2. Log in with that account.
 3. Uploads, task list, task detail, and task result requests use `Authorization: Bearer <token>`.
 4. Requests without a token return `401`; tasks owned by another user return `404`.
+
+## OAuth Setup
+
+Backend environment variables:
+
+```bash
+FRONTEND_URL=http://localhost:3000
+SESSION_SECRET_KEY=change-me
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+```
+
+GitHub OAuth App:
+
+```text
+Authorization callback URL: http://localhost:8000/auth/github/callback
+```
+
+Google OAuth Client:
+
+```text
+Authorized redirect URI: http://localhost:8000/auth/google/callback
+```
+
+Local test flow:
+
+1. Start backend and frontend.
+2. Open `http://localhost:3000/login`.
+3. Click `Continue with GitHub` or `Continue with Google`.
+4. After provider login, the backend redirects to `/oauth/callback?token=...`.
+5. The frontend stores this project JWT and redirects to the dashboard.
+6. `GET /auth/me` should return the current local user.

@@ -2,8 +2,12 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle2, FileUp, Loader2 } from "lucide-react";
 import { DragEvent, useRef, useState } from "react";
 import { TaskCard } from "@/components/TaskCard";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { uploadFile } from "@/lib/api";
 import { TaskRecord } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 type UploadItem = {
   name: string;
@@ -69,19 +73,22 @@ export function FileUploader() {
         }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={onDrop}
-        className={`rounded-lg border-2 border-dashed bg-white p-10 text-center shadow-soft transition ${isDragging ? "border-blue-400 bg-blue-50" : "border-slate-300"}`}
+        className={cn(
+          "rounded-lg border-2 border-dashed bg-card p-10 text-center shadow-soft transition",
+          isDragging ? "border-blue-400 bg-blue-50" : "border-slate-300"
+        )}
       >
         <input ref={inputRef} type="file" accept="application/pdf,.pdf" multiple className="hidden" onChange={(event) => event.target.files && uploadFiles(event.target.files)} />
         <FileUp className="mx-auto h-10 w-10 text-slate-500" />
         <h2 className="mt-4 text-lg font-semibold">Drop PDF files here</h2>
         <p className="mt-2 text-sm text-slate-500">Multiple files are uploaded one request at a time.</p>
-        <button
+        <Button
           type="button"
           onClick={() => inputRef.current?.click()}
-          className="mt-6 inline-flex items-center justify-center rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
+          className="mt-6"
         >
           Select PDFs
-        </button>
+        </Button>
       </div>
 
       {items.length ? (
@@ -91,16 +98,25 @@ export function FileUploader() {
             <div key={`${item.name}-${index}`}>
               {item.task ? (
                 <TaskCard task={item.task} />
+              ) : item.status === "failed" ? (
+                <Alert variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>
+                    <span className="font-medium">{item.name}</span>
+                    <span className="block">{item.error ?? "Upload failed"}</span>
+                  </AlertDescription>
+                </Alert>
               ) : (
-                <div className="flex items-start gap-3 rounded-lg border border-border bg-white p-4">
+                <Card>
+                  <CardContent className="flex items-start gap-3 p-4">
                   {item.status === "uploading" ? <Loader2 className="mt-0.5 h-5 w-5 animate-spin text-blue-600" /> : null}
-                  {item.status === "failed" ? <AlertCircle className="mt-0.5 h-5 w-5 text-red-600" /> : null}
                   {item.status === "success" ? <CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-600" /> : null}
                   <div>
                     <p className="font-medium">{item.name}</p>
-                    <p className={item.status === "failed" ? "text-sm text-red-600" : "text-sm text-slate-500"}>{item.error ?? item.status}</p>
+                    <p className="text-sm text-slate-500">{item.error ?? item.status}</p>
                   </div>
-                </div>
+                  </CardContent>
+                </Card>
               )}
             </div>
           ))}

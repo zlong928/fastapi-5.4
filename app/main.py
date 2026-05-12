@@ -4,15 +4,17 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 
 # 绝对导入路由
 from app.api.routes.auth import router as auth_router
 from app.api.routes.health import router as health_router
+from app.api.routes.oauth import router as oauth_router
 from app.api.routes.tasks import router as tasks_router
 from app.api.routes.upload import router as upload_router
 
 # 导入核心模块和服务
-from app.core.config import ensure_runtime_dirs
+from app.core.config import SESSION_SECRET_KEY, ensure_runtime_dirs
 from app.core.logging_config import configure_logging
 from app.db.session import create_db_and_tables
 from app.services.task_service import TaskService
@@ -33,6 +35,13 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="File Processing Service", lifespan=lifespan)
 
 app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET_KEY,
+    same_site="lax",
+    https_only=False,  # Set True behind HTTPS in production.
+)
+
+app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
@@ -47,6 +56,7 @@ async def root():
 
 # 注册路由
 app.include_router(auth_router)
+app.include_router(oauth_router)
 app.include_router(health_router)
 app.include_router(upload_router)
 app.include_router(tasks_router)

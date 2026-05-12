@@ -1,6 +1,12 @@
 import { FormEvent, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
+import { GitHubIcon, GoogleIcon } from "@/components/BrandIcons";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { API_BASE_URL } from "@/lib/api";
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -26,27 +32,64 @@ export function LoginPage() {
     }
   }
 
+  function startOAuth(provider: "github" | "google") {
+    window.location.href = `${API_BASE_URL}/auth/${provider}/login`;
+  }
+
   return (
-    <div className="mx-auto max-w-md rounded-lg border border-border bg-white p-6 shadow-soft">
-      <h1 className="text-2xl font-semibold">Login</h1>
-      <p className="mt-2 text-sm text-slate-500">Sign in to upload files and view your private tasks.</p>
-      <form onSubmit={onSubmit} className="mt-6 space-y-4">
+    <Card className="mx-auto max-w-md">
+      <CardHeader>
+        <CardTitle>Login</CardTitle>
+        <CardDescription>Sign in to upload files and view your private tasks.</CardDescription>
+      </CardHeader>
+      <CardContent>
+      <form onSubmit={onSubmit} className="space-y-4">
         <label className="block">
           <span className="text-sm font-medium text-slate-700">Email</span>
-          <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" required className="mt-1 w-full rounded-md border border-border px-3 py-2 outline-none focus:ring-2 focus:ring-slate-300" />
+          <Input value={email} onChange={(event) => setEmail(event.target.value)} type="email" required className="mt-1" />
         </label>
         <label className="block">
           <span className="text-sm font-medium text-slate-700">Password</span>
-          <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" required className="mt-1 w-full rounded-md border border-border px-3 py-2 outline-none focus:ring-2 focus:ring-slate-300" />
+          <Input value={password} onChange={(event) => setPassword(event.target.value)} type="password" required className="mt-1" />
         </label>
-        {error ? <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
-        <button type="submit" disabled={isSubmitting} className="w-full rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60">
+        {error ? (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+        <Button type="submit" disabled={isSubmitting} className="w-full">
           {isSubmitting ? "Signing in..." : "Sign in"}
-        </button>
+        </Button>
       </form>
+      <div className="my-5 flex items-center gap-3">
+        <div className="h-px flex-1 bg-border" />
+        <span className="text-xs uppercase tracking-wide text-slate-400">or</span>
+        <div className="h-px flex-1 bg-border" />
+      </div>
+      <div className="space-y-3">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => startOAuth("github")}
+          className="w-full gap-3"
+        >
+          <GitHubIcon />
+          Continue with GitHub
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => startOAuth("google")}
+          className="w-full gap-3"
+        >
+          <GoogleIcon />
+          Continue with Google
+        </Button>
+      </div>
       <p className="mt-4 text-sm text-slate-500">
         No account yet? <Link to="/register" className="font-medium text-blue-700">Create one</Link>
       </p>
-    </div>
+      </CardContent>
+    </Card>
   );
 }

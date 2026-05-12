@@ -5,9 +5,21 @@
 :root {
   --background: 210 40% 98%;
   --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --primary: 222 47% 11%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 210 40% 94%;
+  --secondary-foreground: 222 47% 11%;
+  --accent: 210 40% 94%;
+  --accent-foreground: 222 47% 11%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 98%;
   --muted: 210 40% 94%;
   --muted-foreground: 215 16% 47%;
   --border: 214 32% 91%;
+  --input: 214 32% 91%;
+  --ring: 222 47% 11%;
 }
 
 * {
