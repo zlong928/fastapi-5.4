@@ -27,7 +27,7 @@ class DocumentEvent(Base):
     event_type: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
     # uploaded, parse_started, parse_succeeded, parse_failed, retry_started, deleted
     message: Mapped[str] = mapped_column(String(500), nullable=False)
-    metadata: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 格式
+    event_metadata: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 格式
 
     # 时间戳
     created_at: Mapped[datetime] = mapped_column(

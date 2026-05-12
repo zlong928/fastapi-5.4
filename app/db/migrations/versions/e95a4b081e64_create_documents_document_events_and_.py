@@ -54,7 +54,7 @@ def upgrade() -> None:
         sa.Column('user_id', sa.Integer(), nullable=False),
         sa.Column('event_type', sa.String(length=50), nullable=False),
         sa.Column('message', sa.String(length=500), nullable=False),
-        sa.Column('metadata', sa.Text(), nullable=True),
+        sa.Column('event_metadata', sa.Text(), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(['document_id'], ['documents.id'], ),
         sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),

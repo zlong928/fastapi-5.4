@@ -259,7 +259,7 @@ class DocumentService:
             user_id=user_id,
             event_type=event_type,
             message=message,
-            metadata=metadata_str,
+            event_metadata=metadata_str,
         )
         self.db.add(event)
         self.db.commit()

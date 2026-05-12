@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from app.core.config import settings
+from app.core import config
 
 
 class FileStorageService:
@@ -15,7 +15,7 @@ class FileStorageService:
         Args:
             upload_dir: 上传目录，默认从配置读取
         """
-        self.upload_dir = Path(upload_dir or settings.UPLOAD_DIR)
+        self.upload_dir = Path(upload_dir or config.UPLOAD_DIR)
         self.upload_dir.mkdir(parents=True, exist_ok=True)
 
     def store_file(

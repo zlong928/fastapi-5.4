@@ -11,7 +11,7 @@ class DocumentEventRead(BaseModel):
     user_id: int
     event_type: str
     message: str
-    metadata: Optional[str] = None
+    event_metadata: Optional[str] = None
     created_at: datetime
 
     class Config:
