@@ -1,13 +1,16 @@
-import { FileUploader } from "@/components/FileUploader";
+import { DocumentUploader } from "@/components/DocumentUploader";
 
 export function UploadPage() {
   return (
     <div className="space-y-6">
       <div>
         <p className="text-sm font-medium uppercase tracking-wide text-slate-500">Upload</p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight">Upload PDF files</h1>
+        <h1 className="mt-2 text-3xl font-semibold tracking-tight">Upload Documents</h1>
+        <p className="mt-2 text-sm text-slate-500">
+          Upload PDF, Markdown, or text files to your knowledge base. They will be automatically parsed and indexed.
+        </p>
       </div>
-      <FileUploader />
+      <DocumentUploader />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { HealthResponse, LoginRequest, MessageResponse, PasswordForgotRequest, PasswordResetRequest, RegisterRequest, TaskRecord, TaskResultResponse, TokenResponse, UploadResponse, UserRead } from "./types";
+import { DocumentListResponse, DocumentRead, HealthResponse, LoginRequest, MessageResponse, PasswordForgotRequest, PasswordResetRequest, RegisterRequest, TaskRecord, TaskResultResponse, TokenResponse, UploadResponse, UserRead } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 const TOKEN_KEY = "file_processing_token";
@@ -120,6 +120,39 @@ export async function getTask(taskId: string): Promise<TaskRecord> {
     }
   }
   return task;
+}
+
+// Document API functions
+export async function uploadDocument(file: File, title?: string): Promise<any> {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (title) {
+    formData.append("title", title);
+  }
+  return request<any>("/documents/upload", {
+    method: "POST",
+    body: formData
+  });
+}
+
+export function getDocuments(skip: number = 0, limit: number = 20): Promise<DocumentListResponse> {
+  return request<DocumentListResponse>(`/documents?skip=${skip}&limit=${limit}`);
+}
+
+export function getDocument(documentId: number): Promise<DocumentRead> {
+  return request<DocumentRead>(`/documents/${documentId}`);
+}
+
+export function retryDocumentParse(documentId: number): Promise<DocumentRead> {
+  return request<DocumentRead>(`/documents/${documentId}/retry-parse`, {
+    method: "POST"
+  });
+}
+
+export function deleteDocument(documentId: number): Promise<MessageResponse> {
+  return request<MessageResponse>(`/documents/${documentId}`, {
+    method: "DELETE"
+  });
 }
 
 export { API_BASE_URL, TOKEN_KEY };

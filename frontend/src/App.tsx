@@ -4,6 +4,8 @@ import { Route, Routes } from "react-router-dom";
 import { Layout } from "@/components/Layout";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { DashboardPage } from "@/pages/DashboardPage";
+import { DocumentDetailPage } from "@/pages/DocumentDetailPage";
+import { DocumentsPage } from "@/pages/DocumentsPage";
 import { ForgotPasswordPage } from "@/pages/ForgotPasswordPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { OAuthCallbackPage } from "@/pages/OAuthCallbackPage";
@@ -37,6 +39,8 @@ export function App() {
           <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
           <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
           <Route path="/upload" element={<ProtectedRoute><UploadPage /></ProtectedRoute>} />
+          <Route path="/documents" element={<ProtectedRoute><DocumentsPage /></ProtectedRoute>} />
+          <Route path="/documents/:id" element={<ProtectedRoute><DocumentDetailPage /></ProtectedRoute>} />
           <Route path="/tasks" element={<ProtectedRoute><TasksPage /></ProtectedRoute>} />
           <Route path="/tasks/:id" element={<ProtectedRoute><TaskDetailPage /></ProtectedRoute>} />
         </Routes>

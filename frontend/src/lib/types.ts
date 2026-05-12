@@ -71,3 +71,61 @@ export interface TokenResponse {
   access_token: string;
   token_type: string;
 }
+
+export type DocumentStatus = "pending" | "processing" | "parsed" | "failed" | "deleted";
+export type DocumentSourceType = "pdf" | "markdown" | "txt";
+
+export interface DocumentEventRead {
+  id: number;
+  document_id: number;
+  user_id: number;
+  event_type: string;
+  message: string;
+  event_metadata?: string;
+  created_at: string;
+}
+
+export interface DocumentRead {
+  id: number;
+  user_id: number;
+  title: string;
+  original_filename: string;
+  stored_filename: string;
+  original_file_path: string;
+  file_size: number;
+  mime_type: string;
+  source_type: DocumentSourceType;
+  parsed_text?: string | null;
+  status: DocumentStatus;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+  uploaded_at: string;
+  parsed_at?: string | null;
+  events: DocumentEventRead[];
+}
+
+export interface DocumentListItem {
+  id: number;
+  title: string;
+  original_filename: string;
+  file_size: number;
+  source_type: DocumentSourceType;
+  status: DocumentStatus;
+  created_at: string;
+  uploaded_at: string;
+  parsed_at?: string | null;
+}
+
+export interface DocumentListResponse {
+  total: number;
+  items: DocumentListItem[];
+}
+
+export interface DocumentUploadResponse {
+  id: number;
+  title: string;
+  original_filename: string;
+  status: DocumentStatus;
+  created_at: string;
+}

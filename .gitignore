@@ -50,3 +50,5 @@ frontend/*.tsbuildinfo
 !frontend/package.json
 !frontend/package-lock.json
 !frontend/tsconfig.json
+.opencode
+.gstack/
