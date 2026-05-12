@@ -92,3 +92,26 @@ def test_kg_extraction_persists_entities_and_evidence_backed_relations(tmp_path:
         ("PostgreSQL", "supports", "pgvector"),
     }
     db.close()
+
+
+def test_parse_pipeline_auto_extracts_kg_relations(tmp_path: Path):
+    session_factory = make_session_factory()
+    user = create_user(session_factory)
+    storage = FileStorageService(upload_dir=str(tmp_path))
+
+    document_id = create_parsed_document(
+        session_factory,
+        storage,
+        user.id,
+        "SQLite supports migrations.",
+    )
+
+    db = session_factory()
+    relations = db.scalars(select(KgRelation).where(KgRelation.document_id == document_id)).all()
+
+    assert len(relations) == 1
+    assert relations[0].subject_text == "SQLite"
+    assert relations[0].predicate == "supports"
+    assert relations[0].object_text == "migrations"
+    assert relations[0].evidence_text == "SQLite supports migrations"
+    db.close()
