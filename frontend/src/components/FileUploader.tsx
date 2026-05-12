@@ -1,0 +1,111 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { AlertCircle, CheckCircle2, FileUp, Loader2 } from "lucide-react";
+import { DragEvent, useRef, useState } from "react";
+import { TaskCard } from "@/components/TaskCard";
+import { uploadFile } from "@/lib/api";
+import { TaskRecord } from "@/lib/types";
+
+type UploadItem = {
+  name: string;
+  status: "uploading" | "success" | "failed";
+  task?: TaskRecord;
+  error?: string;
+};
+
+export function FileUploader() {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
+  const [isDragging, setIsDragging] = useState(false);
+  const [items, setItems] = useState<UploadItem[]>([]);
+
+  const mutation = useMutation({
+    mutationFn: async (files: File[]) => {
+      const uploaded: UploadItem[] = [];
+      for (const file of files) {
+        setItems((current) => [...current, { name: file.name, status: "uploading" }]);
+        try {
+          const response = await uploadFile(file);
+          const task = response.tasks?.[0] ?? {
+            task_id: response.task_id,
+            file_name: response.file_name ?? response.filename ?? file.name,
+            status: response.status ?? "queued"
+          };
+          uploaded.push({ name: file.name, status: "success", task });
+          setItems((current) => current.map((item) => (item.name === file.name && item.status === "uploading" ? { name: file.name, status: "success", task } : item)));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Upload failed";
+          uploaded.push({ name: file.name, status: "failed", error: message });
+          setItems((current) => current.map((item) => (item.name === file.name && item.status === "uploading" ? { name: file.name, status: "failed", error: message } : item)));
+        }
+      }
+      return uploaded;
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+    }
+  });
+
+  function uploadFiles(fileList: FileList | File[]) {
+    const files = Array.from(fileList).filter((file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+    if (!files.length) {
+      setItems([{ name: "No PDF selected", status: "failed", error: "Please choose one or more PDF files." }]);
+      return;
+    }
+    mutation.mutate(files);
+  }
+
+  function onDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setIsDragging(false);
+    uploadFiles(event.dataTransfer.files);
+  }
+
+  return (
+    <div className="space-y-6">
+      <div
+        onDragOver={(event) => {
+          event.preventDefault();
+          setIsDragging(true);
+        }}
+        onDragLeave={() => setIsDragging(false)}
+        onDrop={onDrop}
+        className={`rounded-lg border-2 border-dashed bg-white p-10 text-center shadow-soft transition ${isDragging ? "border-blue-400 bg-blue-50" : "border-slate-300"}`}
+      >
+        <input ref={inputRef} type="file" accept="application/pdf,.pdf" multiple className="hidden" onChange={(event) => event.target.files && uploadFiles(event.target.files)} />
+        <FileUp className="mx-auto h-10 w-10 text-slate-500" />
+        <h2 className="mt-4 text-lg font-semibold">Drop PDF files here</h2>
+        <p className="mt-2 text-sm text-slate-500">Multiple files are uploaded one request at a time.</p>
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          className="mt-6 inline-flex items-center justify-center rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
+        >
+          Select PDFs
+        </button>
+      </div>
+
+      {items.length ? (
+        <div className="space-y-4">
+          <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Upload results</h3>
+          {items.map((item, index) => (
+            <div key={`${item.name}-${index}`}>
+              {item.task ? (
+                <TaskCard task={item.task} />
+              ) : (
+                <div className="flex items-start gap-3 rounded-lg border border-border bg-white p-4">
+                  {item.status === "uploading" ? <Loader2 className="mt-0.5 h-5 w-5 animate-spin text-blue-600" /> : null}
+                  {item.status === "failed" ? <AlertCircle className="mt-0.5 h-5 w-5 text-red-600" /> : null}
+                  {item.status === "success" ? <CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-600" /> : null}
+                  <div>
+                    <p className="font-medium">{item.name}</p>
+                    <p className={item.status === "failed" ? "text-sm text-red-600" : "text-sm text-slate-500"}>{item.error ?? item.status}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}

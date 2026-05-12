@@ -9,9 +9,12 @@ from typing import Iterable
 from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile, status
+from sqlalchemy import select
 
 from ..core.config import ENABLE_BACKGROUND_WORKER, RESULT_DIR, UPLOAD_DIR
+from ..db.session import SessionLocal
 from ..core.logging_config import get_api_logger, get_task_logger
+from ..models import Task
 from ..queue.redis_queue import RedisQueue
 from ..schemas.response import FileResult, TaskDetail, TaskResultResponse, TaskSummary
 from .file_service import FileService
@@ -28,6 +31,7 @@ class TaskRecord:#service实例内部存储任务状态
     created_at: str
     updated_at: str
     storage_path: str
+    user_id: int | None = None
     result_path: str | None = None
     error: str | None = None
 
@@ -80,15 +84,14 @@ class TaskService:
             processed.append(task)
         return processed
 
-    def get_task(self, task_id: str) -> TaskRecord:
-        with self._lock:
-            record = self._records.get(task_id)
+    def get_task(self, task_id: str, user_id: int | None = None) -> TaskRecord:
+        record = self._record_from_db(task_id, user_id=user_id)
         if record is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found.")
-        return record
+        return self._refresh_record_from_result(record)
 
-    def get_result(self, task_id: str) -> TaskResultResponse:
-        record = self.get_task(task_id)
+    def get_result(self, task_id: str, user_id: int | None = None) -> TaskResultResponse:
+        record = self.get_task(task_id, user_id=user_id)
         if record.status != "success" or not record.result_path:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Task result is not ready.")
         result_file = Path(record.result_path)
@@ -97,19 +100,56 @@ class TaskService:
         result = FileResult(**json.loads(result_file.read_text(encoding="utf-8")))
         return TaskResultResponse(task=record.to_detail(), result=result)
 
-    def list_tasks(self, status_filter: str | None = None) -> list[TaskRecord]:
-        with self._lock:
-            records = list(self._records.values())
-        if status_filter:
-            records = [record for record in records if record.status == status_filter]
+    def list_tasks(self, status_filter: str | None = None, user_id: int | None = None) -> list[TaskRecord]:
+        with SessionLocal() as db:
+            statement = select(Task)
+            if user_id is not None:
+                statement = statement.where(Task.user_id == user_id)
+            if status_filter:
+                statement = statement.where(Task.status == status_filter)
+            statement = statement.order_by(Task.created_at)
+            records = [self._record_from_model(task) for task in db.scalars(statement).all()]
+        records = [self._refresh_record_from_result(record) for record in records]
         return sorted(records, key=lambda record: record.created_at)
+
+    def _refresh_record_from_result(self, record: TaskRecord) -> TaskRecord:
+        if record.status in {"success", "failed"}:
+            return record
+
+        result_path = RESULT_DIR / f"{record.task_id}.json"
+        if not result_path.exists():
+            return record
+
+        error = None
+        next_status = "success"
+        try:
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+            error = payload.get("error")
+            if error:
+                next_status = "failed"
+        except json.JSONDecodeError:
+            error = "Result file is not valid JSON."
+            next_status = "failed"
+
+        with SessionLocal() as db:
+            task = db.get(Task, record.task_id)
+            if task is not None:
+                task.status = next_status
+                task.result_path = str(result_path)
+                task.error = error
+                db.commit()
+                db.refresh(task)
+                record = self._record_from_model(task)
+        with self._lock:
+            self._records[record.task_id] = record
+        return record
 
     def queue_size(self) -> int:
         return self._queue.size()
 
     def tracked_count(self) -> int:
-        with self._lock:
-            return len(self._records)
+        with SessionLocal() as db:
+            return db.query(Task).count()
 
     def start_background_worker(self) -> None:
         if self._worker and self._worker.is_alive():
@@ -137,10 +177,7 @@ class TaskService:
             self._task_logger.info("Skipping already processed task %s", task_id)
             return record
 
-        with self._lock:
-            record = self._records[task_id]
-            record.status = "processing"
-            record.updated_at = self._now()
+        record = self._update_task(task_id, status="processing")
 
         self._task_logger.info("Processing task %s for %s", task_id, record.file_name)
         try:
@@ -152,11 +189,7 @@ class TaskService:
             result_path = RESULT_DIR / f"{task_id}.json"
             result_path.parent.mkdir(parents=True, exist_ok=True)
             result_path.write_text(json.dumps(asdict(analysis), ensure_ascii=False, indent=2), encoding="utf-8")#转化为json返回
-            with self._lock:
-                record.status = "success"
-                record.updated_at = self._now()
-                record.result_path = str(result_path)
-                record.error = None
+            record = self._update_task(task_id, status="success", result_path=str(result_path), error=None)
             self._task_logger.info("Finished task %s", task_id)
         except Exception as exc:  # pragma: no cover - defensive guard for unexpected failures
             result_path = RESULT_DIR / f"{task_id}.json"
@@ -178,11 +211,7 @@ class TaskService:
                 ),
                 encoding="utf-8",
             )
-            with self._lock:
-                record.status = "failed"
-                record.updated_at = self._now()
-                record.result_path = str(result_path)
-                record.error = str(exc)
+            record = self._update_task(task_id, status="failed", result_path=str(result_path), error=str(exc))
             self._task_logger.exception("Task %s failed", task_id)
         return record
 
@@ -205,7 +234,7 @@ class TaskService:
             processed.append(self.process_task(record.task_id))
         return processed
 
-    async def save_uploads(self, uploads: Iterable[UploadFile]) -> list[TaskRecord]:
+    async def save_uploads(self, uploads: Iterable[UploadFile], user_id: int) -> list[TaskRecord]:
         created: list[TaskRecord] = []
         for upload in uploads:
             file_name = Path(upload.filename or "").name
@@ -213,16 +242,20 @@ class TaskService:
             storage_path = UPLOAD_DIR / task_id / file_name
             saved_name, file_size, file_type = await self._file_service.save_upload(upload, storage_path)
             now = self._now()
-            record = TaskRecord(
-                task_id=task_id,
-                file_name=saved_name,
-                file_size=file_size,
-                file_type=file_type,
-                status="queued",
-                created_at=now,
-                updated_at=now,
-                storage_path=str(storage_path),
-            )
+            with SessionLocal() as db:
+                task = Task(
+                    task_id=task_id,
+                    user_id=user_id,
+                    file_name=saved_name,
+                    file_size=file_size,
+                    file_type=file_type,
+                    status="queued",
+                    storage_path=str(storage_path),
+                )
+                db.add(task)
+                db.commit()
+                db.refresh(task)
+                record = self._record_from_model(task)
             with self._lock:
                 self._records[task_id] = record
             self._queue.enqueue(task_id)
@@ -237,6 +270,12 @@ class TaskService:
         with self._lock:
             record = self._records.get(task_id)
         if record is not None:
+            return record
+
+        record = self._record_from_db(task_id)
+        if record is not None:
+            with self._lock:
+                self._records[task_id] = record
             return record
 
         task_dir = UPLOAD_DIR / task_id
@@ -271,6 +310,44 @@ class TaskService:
             result_path=str(result_path) if result_path.exists() else None,
             error=error,
         )
+        with self._lock:
+            self._records[task_id] = record
+        return record
+
+    def _record_from_db(self, task_id: str, user_id: int | None = None) -> TaskRecord | None:
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            if task is None:
+                return None
+            if user_id is not None and task.user_id != user_id:
+                return None
+            return self._record_from_model(task)
+
+    def _record_from_model(self, task: Task) -> TaskRecord:
+        return TaskRecord(
+            task_id=task.task_id,
+            file_name=task.file_name,
+            file_size=task.file_size,
+            file_type=task.file_type,
+            status=task.status,
+            created_at=task.created_at.isoformat(),
+            updated_at=task.updated_at.isoformat(),
+            storage_path=task.storage_path,
+            user_id=task.user_id,
+            result_path=task.result_path,
+            error=task.error,
+        )
+
+    def _update_task(self, task_id: str, **values: str | None) -> TaskRecord:
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            if task is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found.")
+            for key, value in values.items():
+                setattr(task, key, value)
+            db.commit()
+            db.refresh(task)
+            record = self._record_from_model(task)
         with self._lock:
             self._records[task_id] = record
         return record

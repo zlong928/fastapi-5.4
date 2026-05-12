@@ -41,3 +41,12 @@ data/results/
 # Ignore .env file with secrets
 .env
 .env.*.local
+
+# Frontend
+frontend/.next/
+frontend/dist/
+frontend/node_modules/
+frontend/*.tsbuildinfo
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/tsconfig.json

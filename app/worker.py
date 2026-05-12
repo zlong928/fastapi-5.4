@@ -9,6 +9,7 @@ from .core import config
 config.ENABLE_BACKGROUND_WORKER = False#禁用    TaskService 内部的后台 Worker,改动增worker,typer,redis
 
 from .core.config import ensure_runtime_dirs
+from .db.session import create_db_and_tables
 from .services.task_service import TaskService
 
 logging.basicConfig(
@@ -29,6 +30,7 @@ signal.signal(signal.SIGTERM, handle_shutdown)
 
 def run_worker() -> None:#worker主循环
     ensure_runtime_dirs()
+    create_db_and_tables()
     service = TaskService()
     logger.info("Worker started, waiting for tasks on Redis queue...")
     
