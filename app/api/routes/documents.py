@@ -7,6 +7,7 @@ from app.models import User
 from app.schemas.document import (
     DocumentDetailResponse,
     DocumentEventRead,
+    DocumentKgResponse,
     DocumentListResponse,
     DocumentSearchResponse,
     DocumentUploadResponse,
@@ -14,6 +15,7 @@ from app.schemas.document import (
 from app.services.document_service import DocumentService
 from app.services.document_search_service import DocumentSearchService
 from app.services.file_storage import FileStorageService
+from app.models import KgEntity, KgRelation
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -482,3 +484,43 @@ async def get_document_events(
         )
 
     return [DocumentEventRead.model_validate(event) for event in document.events]
+
+
+@router.get("/{document_id}/kg", response_model=DocumentKgResponse)
+async def get_document_kg(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> DocumentKgResponse:
+    service = DocumentService(db)
+    document = service.get_document_by_id(document_id)
+
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found.",
+        )
+
+    if document.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to access this document.",
+        )
+
+    entities = (
+        db.query(KgEntity)
+        .filter(KgEntity.document_id == document_id)
+        .order_by(KgEntity.name)
+        .all()
+    )
+    relations = (
+        db.query(KgRelation)
+        .filter(KgRelation.document_id == document_id)
+        .order_by(KgRelation.id)
+        .all()
+    )
+    return DocumentKgResponse(
+        document_id=document_id,
+        entities=entities,
+        relations=relations,
+    )

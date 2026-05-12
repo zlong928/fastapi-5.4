@@ -142,6 +142,32 @@ export interface DocumentSearchResponse {
   items: DocumentSearchResult[];
 }
 
+export interface KgEntityRead {
+  id: number;
+  document_id: number;
+  chunk_id?: number | null;
+  name: string;
+  entity_type: string;
+  normalized_name: string;
+}
+
+export interface KgRelationRead {
+  id: number;
+  document_id: number;
+  chunk_id: number;
+  subject_text: string;
+  predicate: string;
+  object_text: string;
+  evidence_text: string;
+  confidence: number;
+}
+
+export interface DocumentKgResponse {
+  document_id: number;
+  entities: KgEntityRead[];
+  relations: KgRelationRead[];
+}
+
 export interface DocumentUploadResponse {
   id: number;
   title: string;

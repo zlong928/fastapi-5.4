@@ -140,3 +140,35 @@ class DocumentSearchResponse(BaseModel):
     query: str
     total: int
     items: list[DocumentSearchResult]
+
+
+class KgEntityRead(BaseModel):
+    id: int
+    document_id: int
+    chunk_id: Optional[int] = None
+    name: str
+    entity_type: str
+    normalized_name: str
+
+    class Config:
+        from_attributes = True
+
+
+class KgRelationRead(BaseModel):
+    id: int
+    document_id: int
+    chunk_id: int
+    subject_text: str
+    predicate: str
+    object_text: str
+    evidence_text: str
+    confidence: int
+
+    class Config:
+        from_attributes = True
+
+
+class DocumentKgResponse(BaseModel):
+    document_id: int
+    entities: list[KgEntityRead]
+    relations: list[KgRelationRead]
