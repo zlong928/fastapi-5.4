@@ -13,6 +13,8 @@ if TYPE_CHECKING:
     from app.models.chunk import Chunk
     from app.models.document_asset import DocumentAsset
     from app.models.document_chunk import DocumentChunk
+    from app.models.kg_entity import KgEntity
+    from app.models.kg_relation import KgRelation
     from app.models.parse_job import ParseJob
     from app.models.user import User
 
@@ -94,6 +96,16 @@ class Document(Base):
     )
     parse_jobs: Mapped[list[ParseJob]] = relationship(
         "ParseJob",
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )
+    kg_entities: Mapped[list[KgEntity]] = relationship(
+        "KgEntity",
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )
+    kg_relations: Mapped[list[KgRelation]] = relationship(
+        "KgRelation",
         back_populates="document",
         cascade="all, delete-orphan",
     )

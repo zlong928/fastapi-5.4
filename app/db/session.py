@@ -24,7 +24,7 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def create_db_and_tables() -> None:
-    from app.models import Chunk, Document, DocumentAsset, DocumentChunk, DocumentEvent, OAuthAccount, ParseJob, Task, User  # noqa: F401
+    from app.models import Chunk, Document, DocumentAsset, DocumentChunk, DocumentEvent, KgEntity, KgRelation, OAuthAccount, ParseJob, Task, User  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     _ensure_sqlite_users_password_nullable()
