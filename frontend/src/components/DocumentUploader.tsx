@@ -57,13 +57,17 @@ export function DocumentUploader() {
   });
 
   function uploadFiles(fileList: FileList | File[]) {
-    const supportedTypes = ["application/pdf", "text/markdown", "text/plain"];
+    const supportedTypes = ["application/pdf", "text/markdown", "text/plain", "image/png", "image/jpeg", "image/webp"];
     const files = Array.from(fileList).filter((file) => {
       const isSupportedType = supportedTypes.includes(file.type);
       const isSupportedExt =
         file.name.toLowerCase().endsWith(".pdf") ||
         file.name.toLowerCase().endsWith(".md") ||
-        file.name.toLowerCase().endsWith(".txt");
+        file.name.toLowerCase().endsWith(".txt") ||
+        file.name.toLowerCase().endsWith(".png") ||
+        file.name.toLowerCase().endsWith(".jpg") ||
+        file.name.toLowerCase().endsWith(".jpeg") ||
+        file.name.toLowerCase().endsWith(".webp");
       return isSupportedType || isSupportedExt;
     });
 
@@ -73,7 +77,7 @@ export function DocumentUploader() {
           id: `error-${Date.now()}`,
           name: "No supported files selected",
           status: "failed",
-          error: "Please choose PDF, Markdown (.md), or text (.txt) files."
+          error: "Please choose PDF, Markdown (.md), text (.txt), or image files."
         }
       ]);
       return;
@@ -131,7 +135,7 @@ export function DocumentUploader() {
         <input
           ref={inputRef}
           type="file"
-          accept=".pdf,.md,.txt,application/pdf,text/markdown,text/plain"
+          accept=".pdf,.md,.txt,.png,.jpg,.jpeg,.webp,application/pdf,text/markdown,text/plain,image/png,image/jpeg,image/webp"
           multiple
           disabled={mutation.isPending}
           className="hidden"
@@ -140,7 +144,7 @@ export function DocumentUploader() {
         <FileUp className="mx-auto h-10 w-10 text-slate-500" />
         <h2 className="mt-4 text-lg font-semibold">Drop files here</h2>
         <p className="mt-2 text-sm text-slate-500">
-          Supports PDF, Markdown (.md), and text (.txt) files
+          Supports PDF, Markdown (.md), text (.txt), and images
         </p>
         <Button
           type="button"

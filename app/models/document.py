@@ -11,6 +11,9 @@ from app.db.session import Base
 if TYPE_CHECKING:
     from app.models.document_event import DocumentEvent
     from app.models.chunk import Chunk
+    from app.models.document_asset import DocumentAsset
+    from app.models.document_chunk import DocumentChunk
+    from app.models.parse_job import ParseJob
     from app.models.user import User
 
 
@@ -34,6 +37,9 @@ class Document(Base):
 
     # 解析结果
     parsed_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cleaned_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    parse_quality_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    references_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # 状态管理
     status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False, index=True)
@@ -73,6 +79,21 @@ class Document(Base):
     )
     chunks: Mapped[list[Chunk]] = relationship(
         "Chunk",
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )
+    document_chunks: Mapped[list[DocumentChunk]] = relationship(
+        "DocumentChunk",
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )
+    assets: Mapped[list[DocumentAsset]] = relationship(
+        "DocumentAsset",
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )
+    parse_jobs: Mapped[list[ParseJob]] = relationship(
+        "ParseJob",
         back_populates="document",
         cascade="all, delete-orphan",
     )

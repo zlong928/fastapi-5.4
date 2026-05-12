@@ -73,7 +73,7 @@ export interface TokenResponse {
 }
 
 export type DocumentStatus = "pending" | "processing" | "parsed" | "failed" | "deleted";
-export type DocumentSourceType = "pdf" | "markdown" | "txt";
+export type DocumentSourceType = "pdf" | "markdown" | "txt" | "image";
 
 export interface DocumentEventRead {
   id: number;
@@ -96,6 +96,9 @@ export interface DocumentRead {
   mime_type: string;
   source_type: DocumentSourceType;
   parsed_text?: string | null;
+  cleaned_text?: string | null;
+  parse_quality_json?: string | null;
+  references_text?: string | null;
   status: DocumentStatus;
   error_message?: string | null;
   created_at: string;
@@ -120,6 +123,22 @@ export interface DocumentListItem {
 export interface DocumentListResponse {
   total: number;
   items: DocumentListItem[];
+}
+
+export interface DocumentSearchResult {
+  id: number;
+  title: string;
+  source_type: DocumentSourceType;
+  status: DocumentStatus;
+  snippet: string;
+  matched_field: string;
+  parsed_at?: string | null;
+}
+
+export interface DocumentSearchResponse {
+  query: string;
+  total: number;
+  items: DocumentSearchResult[];
 }
 
 export interface DocumentUploadResponse {

@@ -30,6 +30,9 @@ class DocumentRead(BaseModel):
     mime_type: str
     source_type: str
     parsed_text: Optional[str] = None
+    cleaned_text: Optional[str] = None
+    parse_quality_json: Optional[str] = None
+    references_text: Optional[str] = None
     status: str
     error_message: Optional[str] = None
     created_at: datetime
@@ -62,8 +65,8 @@ class DocumentCreate(BaseModel):
     title: Optional[str] = None
     mime_type: str
     source_type: str = Field(
-        pattern="^(pdf|markdown|txt)$",
-        description="File type: pdf, markdown, or txt"
+        pattern="^(pdf|markdown|txt|image)$",
+        description="File type: pdf, markdown, txt, or image"
     )
     file_size: int = Field(gt=0, description="File size in bytes")
 
@@ -109,6 +112,9 @@ class DocumentDetailResponse(BaseModel):
     file_size: int
     mime_type: str
     parsed_text: Optional[str] = None
+    cleaned_text: Optional[str] = None
+    parse_quality_json: Optional[str] = None
+    references_text: Optional[str] = None
     error_message: Optional[str] = None
     created_at: datetime
     uploaded_at: datetime
@@ -117,3 +123,19 @@ class DocumentDetailResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class DocumentSearchResult(BaseModel):
+    id: int
+    title: str
+    source_type: str
+    status: str
+    snippet: str
+    matched_field: str
+    parsed_at: Optional[datetime] = None
+
+
+class DocumentSearchResponse(BaseModel):
+    query: str
+    total: int
+    items: list[DocumentSearchResult]

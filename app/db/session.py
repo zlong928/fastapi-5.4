@@ -24,10 +24,11 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def create_db_and_tables() -> None:
-    from app.models import OAuthAccount, Task, User  # noqa: F401
+    from app.models import Chunk, Document, DocumentAsset, DocumentChunk, DocumentEvent, OAuthAccount, ParseJob, Task, User  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     _ensure_sqlite_users_password_nullable()
+    _ensure_sqlite_document_processing_mvp()
 
 
 def _ensure_sqlite_users_password_nullable() -> None:
@@ -56,3 +57,24 @@ def _ensure_sqlite_users_password_nullable() -> None:
             )
         )
         connection.execute(text("DROP TABLE users_old"))
+
+
+def _ensure_sqlite_document_processing_mvp() -> None:
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+
+    inspector = inspect(engine)
+    if "documents" not in inspector.get_table_names():
+        return
+
+    existing = {column["name"] for column in inspector.get_columns("documents")}
+    additions = {
+        "cleaned_text": "TEXT",
+        "parse_quality_json": "TEXT",
+        "references_text": "TEXT",
+    }
+
+    with engine.begin() as connection:
+        for column_name, column_type in additions.items():
+            if column_name not in existing:
+                connection.execute(text(f"ALTER TABLE documents ADD COLUMN {column_name} {column_type}"))

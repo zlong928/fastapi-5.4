@@ -40,10 +40,10 @@ class FileStorageService:
             ValueError: 如果文件扩展名无效
         """
         # 验证扩展名
-        if file_extension.lower() not in ("pdf", "md", "txt"):
+        if file_extension.lower() not in ("pdf", "md", "txt", "png", "jpg", "jpeg", "webp"):
             raise ValueError(
                 f"Unsupported file extension: {file_extension}. "
-                f"Only pdf, md, txt are allowed."
+                f"Only pdf, md, txt, png, jpg, jpeg, webp are allowed."
             )
 
         # 生成安全的文件名

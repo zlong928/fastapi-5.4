@@ -1,4 +1,4 @@
-import { DocumentListResponse, DocumentRead, HealthResponse, LoginRequest, MessageResponse, PasswordForgotRequest, PasswordResetRequest, RegisterRequest, TaskRecord, TaskResultResponse, TokenResponse, UploadResponse, UserRead } from "./types";
+import { DocumentListResponse, DocumentRead, DocumentSearchResponse, HealthResponse, LoginRequest, MessageResponse, PasswordForgotRequest, PasswordResetRequest, RegisterRequest, TaskRecord, TaskResultResponse, TokenResponse, UploadResponse, UserRead } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 const TOKEN_KEY = "file_processing_token";
@@ -147,6 +147,11 @@ export function getDocuments(skip: number = 0, limit: number = 20): Promise<Docu
 
 export function getDocument(documentId: number): Promise<DocumentRead> {
   return request<DocumentRead>(`/documents/${documentId}`);
+}
+
+export function searchDocuments(query: string, limit: number = 20): Promise<DocumentSearchResponse> {
+  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  return request<DocumentSearchResponse>(`/documents/search?${params.toString()}`);
 }
 
 export function retryDocumentParse(documentId: number): Promise<DocumentRead> {

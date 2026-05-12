@@ -4,6 +4,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.models import Document, DocumentEvent
+from app.services.document_parse_pipeline import DocumentParsePipeline
 from app.services.document_parser import DocumentParserService
 from app.services.file_storage import FileStorageService
 
@@ -90,31 +91,15 @@ class DocumentService:
         self.db.commit()
 
         try:
-            # 读取文件
-            file_content = self.file_storage.read_file(document.original_file_path)
-
-            # 解析文件
-            # 需要临时文件来解析（pyp pdf 需要文件路径）
-            from tempfile import NamedTemporaryFile
-
-            with NamedTemporaryFile(suffix=f".{document.source_type}", delete=False) as tmp:
-                tmp.write(file_content)
-                tmp.flush()
-                parsed_text = self.parser.parse(tmp.name, document.source_type)
-
-            # 保存解析结果
-            document.parsed_text = parsed_text
-            document.status = "parsed"
-            document.parsed_at = datetime.now(timezone.utc)
+            pipeline = DocumentParsePipeline(file_storage=self.file_storage)
+            document = pipeline.run(document.id)
             self.log_event(
                 document.id,
                 document.user_id,
                 "parse_succeeded",
                 "解析成功",
-                metadata={"char_count": len(parsed_text)},
+                metadata={"char_count": len(document.parsed_text or "")},
             )
-            self.db.commit()
-            self.db.refresh(document)
 
         except Exception as e:
             # 保存错误信息

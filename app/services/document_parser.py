@@ -27,19 +27,21 @@ class DocumentParserService:
             raise ImportError("pypdf is not installed. Install it with: pip install pypdf")
 
         try:
-            text = ""
-            with open(file_path, "rb") as f:
-                reader = pypdf.PdfReader(f)
-                for page_num, page in enumerate(reader.pages):
-                    page_text = page.extract_text()
-                    if page_text:
-                        text += page_text
-                    # 在页面之间添加分隔符
-                    if page_num < len(reader.pages) - 1:
-                        text += "\n--- Page Break ---\n"
-            return text.strip()
+            return "\n--- Page Break ---\n".join(DocumentParserService.parse_pdf_pages(file_path)).strip()
         except Exception as e:
             raise ValueError(f"Failed to parse PDF: {e}")
+
+    @staticmethod
+    def parse_pdf_pages(file_path: str | Path) -> list[str]:
+        if pypdf is None:
+            raise ImportError("pypdf is not installed. Install it with: pip install pypdf")
+
+        pages: list[str] = []
+        with open(file_path, "rb") as f:
+            reader = pypdf.PdfReader(f)
+            for page in reader.pages:
+                pages.append(page.extract_text() or "")
+        return pages
 
     @staticmethod
     def parse_markdown(file_path: str | Path) -> str:

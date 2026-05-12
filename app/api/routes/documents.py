@@ -8,9 +8,11 @@ from app.schemas.document import (
     DocumentDetailResponse,
     DocumentEventRead,
     DocumentListResponse,
+    DocumentSearchResponse,
     DocumentUploadResponse,
 )
 from app.services.document_service import DocumentService
+from app.services.document_search_service import DocumentSearchService
 from app.services.file_storage import FileStorageService
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -69,12 +71,16 @@ async def upload_document(
         "markdown": "markdown",
         "txt": "txt",
         "text": "txt",
+        "png": "image",
+        "jpg": "image",
+        "jpeg": "image",
+        "webp": "image",
     }
 
     if ext not in ext_map:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unsupported file type. Only PDF, Markdown, and TXT are allowed.",
+            detail="Unsupported file type. Only PDF, Markdown, TXT, PNG, JPG, JPEG, and WEBP are allowed.",
         )
 
     source_type = ext_map[ext]
@@ -161,6 +167,10 @@ async def upload_batch(
                 "markdown": "markdown",
                 "txt": "txt",
                 "text": "txt",
+                "png": "image",
+                "jpg": "image",
+                "jpeg": "image",
+                "webp": "image",
             }
 
             if ext not in ext_map:
@@ -248,6 +258,33 @@ async def list_documents(
     return DocumentListResponse(total=total, items=items)
 
 
+@router.get("/search", response_model=DocumentSearchResponse)
+async def search_documents(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=50),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> DocumentSearchResponse:
+    service = DocumentSearchService(db)
+    hits = service.search(current_user.id, q, limit=limit)
+    return DocumentSearchResponse(
+        query=q,
+        total=len(hits),
+        items=[
+            {
+                "id": hit.document.id,
+                "title": hit.document.title,
+                "source_type": hit.document.source_type,
+                "status": hit.document.status,
+                "snippet": hit.snippet,
+                "matched_field": hit.matched_field,
+                "parsed_at": hit.document.parsed_at,
+            }
+            for hit in hits
+        ],
+    )
+
+
 @router.get("/{document_id}", response_model=DocumentDetailResponse)
 async def get_document_detail(
     document_id: int,
@@ -294,6 +331,9 @@ async def get_document_detail(
         file_size=document.file_size,
         mime_type=document.mime_type,
         parsed_text=document.parsed_text,
+        cleaned_text=document.cleaned_text,
+        parse_quality_json=document.parse_quality_json,
+        references_text=document.references_text,
         error_message=document.error_message,
         created_at=document.created_at,
         uploaded_at=document.uploaded_at,
@@ -350,6 +390,9 @@ async def retry_parse_document(
             file_size=document.file_size,
             mime_type=document.mime_type,
             parsed_text=document.parsed_text,
+            cleaned_text=document.cleaned_text,
+            parse_quality_json=document.parse_quality_json,
+            references_text=document.references_text,
             error_message=document.error_message,
             created_at=document.created_at,
             uploaded_at=document.uploaded_at,
