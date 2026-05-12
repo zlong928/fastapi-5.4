@@ -29,6 +29,10 @@ class DocumentChunk(Base):
     char_end: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     token_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     metadata_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    embedding_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    embedding_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    embedding_dim: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    embedded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

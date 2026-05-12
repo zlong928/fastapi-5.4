@@ -78,3 +78,18 @@ def _ensure_sqlite_document_processing_mvp() -> None:
         for column_name, column_type in additions.items():
             if column_name not in existing:
                 connection.execute(text(f"ALTER TABLE documents ADD COLUMN {column_name} {column_type}"))
+
+    if "document_chunks" not in inspector.get_table_names():
+        return
+
+    chunk_columns = {column["name"] for column in inspector.get_columns("document_chunks")}
+    chunk_additions = {
+        "embedding_json": "TEXT",
+        "embedding_model": "VARCHAR(100)",
+        "embedding_dim": "INTEGER",
+        "embedded_at": "DATETIME",
+    }
+    with engine.begin() as connection:
+        for column_name, column_type in chunk_additions.items():
+            if column_name not in chunk_columns:
+                connection.execute(text(f"ALTER TABLE document_chunks ADD COLUMN {column_name} {column_type}"))
