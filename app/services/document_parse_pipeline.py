@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db.session import SessionLocal
 from app.models import Document, DocumentAsset, DocumentChunk, ParseJob
 from app.services.chunking_service import ChunkingService
+from app.services.document_embedding_service import EmbeddingProvider, DocumentEmbeddingService
 from app.services.document_parser import DocumentParserService
 from app.services.file_storage import FileStorageService
 from app.services.ocr_service import OcrService
@@ -21,10 +22,12 @@ class DocumentParsePipeline:
         session_factory: sessionmaker[Session] = SessionLocal,
         file_storage: FileStorageService | None = None,
         ocr_service: OcrService | None = None,
+        embedding_provider: EmbeddingProvider | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.file_storage = file_storage or FileStorageService()
         self.ocr_service = ocr_service or OcrService()
+        self.embedding_provider = embedding_provider
         self.parser = DocumentParserService()
         self.cleaner = TextCleaner()
         self.chunker = ChunkingService()
@@ -116,6 +119,11 @@ class DocumentParsePipeline:
                 job.status = "succeeded"
                 job.finished_at = datetime.now(timezone.utc)
                 db.commit()
+                db.refresh(document)
+                DocumentEmbeddingService(
+                    session_factory=self.session_factory,
+                    embedding_provider=self.embedding_provider,
+                ).embed_document(document.id)
                 db.refresh(document)
                 return document
 

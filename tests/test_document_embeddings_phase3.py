@@ -105,6 +105,48 @@ def test_embedding_job_stores_vectors_on_document_chunks(tmp_path: Path):
     db.close()
 
 
+def test_parse_pipeline_auto_embeds_generated_chunks(tmp_path: Path):
+    session_factory = make_session_factory()
+    user = create_user(session_factory)
+    storage = FileStorageService(upload_dir=str(tmp_path))
+    relative_path, stored_filename = storage.store_file(
+        user_id=user.id,
+        original_filename="auto_embed.txt",
+        file_content=b"Auto embedding target.",
+        file_extension="txt",
+    )
+    db = session_factory()
+    document = Document(
+        user_id=user.id,
+        title="Auto Embed",
+        original_filename="auto_embed.txt",
+        stored_filename=stored_filename,
+        original_file_path=relative_path,
+        file_size=22,
+        mime_type="text/plain",
+        source_type="txt",
+        status="pending",
+    )
+    db.add(document)
+    db.commit()
+    document_id = document.id
+    db.close()
+
+    DocumentParsePipeline(
+        session_factory=session_factory,
+        file_storage=storage,
+        embedding_provider=FakeEmbeddingProvider(),
+    ).run(document_id)
+
+    db = session_factory()
+    chunk = db.scalar(select(DocumentChunk).where(DocumentChunk.document_id == document_id))
+
+    assert chunk is not None
+    assert chunk.embedding_json is not None
+    assert chunk.embedding_model == "fake-embedding-v1"
+    db.close()
+
+
 def test_hybrid_search_returns_vector_matches_without_keyword_overlap(tmp_path: Path):
     session_factory = make_session_factory()
     user = create_user(session_factory)
