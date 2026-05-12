@@ -52,6 +52,9 @@ export function LoginPage() {
           <span className="text-sm font-medium text-slate-700">Password</span>
           <Input value={password} onChange={(event) => setPassword(event.target.value)} type="password" required className="mt-1" />
         </label>
+        <div className="text-right text-sm">
+          <Link to="/forgot-password" className="font-medium text-blue-700">Forgot password?</Link>
+        </div>
         {error ? (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>

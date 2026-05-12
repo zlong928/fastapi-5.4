@@ -1,4 +1,4 @@
-import { HealthResponse, LoginRequest, RegisterRequest, TaskRecord, TaskResultResponse, TokenResponse, UploadResponse, UserRead } from "./types";
+import { HealthResponse, LoginRequest, MessageResponse, PasswordForgotRequest, PasswordResetRequest, RegisterRequest, TaskRecord, TaskResultResponse, TokenResponse, UploadResponse, UserRead } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 const TOKEN_KEY = "file_processing_token";
@@ -36,7 +36,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     if (response.status === 401) {
       clearToken();
-      if (!window.location.pathname.startsWith("/login") && !window.location.pathname.startsWith("/register")) {
+      if (!window.location.pathname.startsWith("/login") && !window.location.pathname.startsWith("/register") && !window.location.pathname.startsWith("/forgot-password") && !window.location.pathname.startsWith("/reset-password")) {
         window.location.assign("/login");
       }
     }
@@ -64,6 +64,20 @@ export async function login(payload: LoginRequest) {
   });
   setToken(response.access_token);
   return response;
+}
+
+export function forgotPassword(payload: PasswordForgotRequest) {
+  return request<MessageResponse>("/auth/password/forgot", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function resetPassword(payload: PasswordResetRequest) {
+  return request<MessageResponse>("/auth/password/reset", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
 }
 
 export function getCurrentUser() {
