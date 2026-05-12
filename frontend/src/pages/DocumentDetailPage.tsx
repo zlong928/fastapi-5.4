@@ -7,14 +7,15 @@ import {
   RefreshCw,
   Trash2,
   Clock,
-  Download
+  Network,
+  Sparkles
 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { deleteDocument, getDocument, retryDocumentParse } from "@/lib/api";
+import { deleteDocument, getDocument, getDocumentKg, retryDocumentParse } from "@/lib/api";
 import { DocumentStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -78,6 +79,11 @@ export function DocumentDetailPage() {
     queryKey: ["document", documentId],
     queryFn: () => getDocument(documentId),
     enabled: documentId > 0
+  });
+  const { data: kgData, isLoading: isKgLoading } = useQuery({
+    queryKey: ["document", documentId, "kg"],
+    queryFn: () => getDocumentKg(documentId),
+    enabled: documentId > 0 && data?.status === "parsed"
   });
 
   const retryMutation = useMutation({
@@ -171,6 +177,23 @@ export function DocumentDetailPage() {
 
   const document = data;
   const events = data.events || [];
+  const quality = document.parse_quality_json
+    ? (() => {
+        try {
+          return JSON.parse(document.parse_quality_json) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+  const qualityStats: Array<[string, string]> = quality
+    ? [
+        ["Pages", String(quality.page_count ?? "-")],
+        ["Raw chars", String(quality.raw_chars ?? "-")],
+        ["Cleaned chars", String(quality.cleaned_chars ?? "-")],
+        ["Captions", String(quality.caption_count ?? "-")]
+      ]
+    : [];
 
   return (
     <div className="space-y-6">
@@ -253,6 +276,65 @@ export function DocumentDetailPage() {
         )}
       </div>
 
+      {(quality || document.cleaned_text || document.references_text) && (
+        <Card>
+          <CardHeader className="border-b border-slate-200 pb-4">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-blue-600" />
+              <h2 className="font-semibold">Processing Output</h2>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-5 p-6">
+            {quality && (
+              <div className="grid gap-3 sm:grid-cols-4">
+                {qualityStats.map(([label, value]) => (
+                  <div key={label} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+                    <p className="mt-1 text-lg font-medium">{value}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {document.cleaned_text && (
+              <div>
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                    Cleaned Text
+                  </h3>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleCopyEvent(-2, document.cleaned_text || "")}
+                    className="gap-2"
+                  >
+                    <Copy className="h-4 w-4" />
+                    {copiedIndex === -2 ? "Copied!" : "Copy"}
+                  </Button>
+                </div>
+                <div className="max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-white p-4">
+                  <pre className="whitespace-pre-wrap text-sm text-slate-700">
+                    {document.cleaned_text.substring(0, 3000)}
+                    {document.cleaned_text.length > 3000 && "..."}
+                  </pre>
+                </div>
+              </div>
+            )}
+
+            {document.references_text && (
+              <div>
+                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+                  References
+                </h3>
+                <div className="max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <pre className="whitespace-pre-wrap text-sm text-slate-700">{document.references_text}</pre>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Parsed Text Preview */}
       {document.parsed_text && (
         <Card>
@@ -280,6 +362,81 @@ export function DocumentDetailPage() {
             <p className="mt-2 text-xs text-slate-500">
               {document.parsed_text.length} characters extracted
             </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {document.status === "parsed" && (
+        <Card>
+          <CardHeader className="border-b border-slate-200 pb-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Network className="h-5 w-5 text-blue-600" />
+                <h2 className="font-semibold">Knowledge Graph</h2>
+              </div>
+              {kgData ? (
+                <span className="text-sm text-slate-500">
+                  {kgData.entities.length} entities · {kgData.relations.length} relations
+                </span>
+              ) : null}
+            </div>
+          </CardHeader>
+          <CardContent className="p-6">
+            {isKgLoading ? (
+              <p className="text-sm text-slate-500">Loading graph...</p>
+            ) : kgData && kgData.relations.length > 0 ? (
+              <div className="space-y-5">
+                <div>
+                  <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+                    Entities
+                  </h3>
+                  <div className="flex flex-wrap gap-2">
+                    {kgData.entities.map((entity) => (
+                      <span
+                        key={entity.id}
+                        className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm text-slate-700"
+                      >
+                        {entity.name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+                    Evidence-backed Relations
+                  </h3>
+                  <div className="overflow-x-auto rounded-lg border border-slate-200">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                        <tr>
+                          <th className="px-4 py-3">Subject</th>
+                          <th className="px-4 py-3">Predicate</th>
+                          <th className="px-4 py-3">Object</th>
+                          <th className="px-4 py-3">Evidence</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {kgData.relations.map((relation) => (
+                          <tr key={relation.id}>
+                            <td className="px-4 py-3 font-medium">{relation.subject_text}</td>
+                            <td className="px-4 py-3 text-slate-600">{relation.predicate}</td>
+                            <td className="px-4 py-3 font-medium">{relation.object_text}</td>
+                            <td className="max-w-md px-4 py-3 text-slate-600">
+                              {relation.evidence_text}
+                              <span className="ml-2 text-xs text-slate-400">chunk #{relation.chunk_id}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">
+                No knowledge graph relations were extracted for this document.
+              </p>
+            )}
           </CardContent>
         </Card>
       )}
