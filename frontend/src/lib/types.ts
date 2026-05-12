@@ -132,6 +132,7 @@ export interface DocumentSearchResult {
   status: DocumentStatus;
   snippet: string;
   matched_field: string;
+  score: number;
   parsed_at?: string | null;
 }
 

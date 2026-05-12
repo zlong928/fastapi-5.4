@@ -262,11 +262,12 @@ async def list_documents(
 async def search_documents(
     q: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=50),
+    mode: str = Query("keyword", pattern="^(keyword|hybrid)$"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DocumentSearchResponse:
     service = DocumentSearchService(db)
-    hits = service.search(current_user.id, q, limit=limit)
+    hits = service.hybrid_search(current_user.id, q, limit=limit) if mode == "hybrid" else service.search(current_user.id, q, limit=limit)
     return DocumentSearchResponse(
         query=q,
         total=len(hits),
@@ -278,6 +279,7 @@ async def search_documents(
                 "status": hit.document.status,
                 "snippet": hit.snippet,
                 "matched_field": hit.matched_field,
+                "score": hit.score,
                 "parsed_at": hit.document.parsed_at,
             }
             for hit in hits

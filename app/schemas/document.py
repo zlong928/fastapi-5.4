@@ -132,6 +132,7 @@ class DocumentSearchResult(BaseModel):
     status: str
     snippet: str
     matched_field: str
+    score: float = 0.0
     parsed_at: Optional[datetime] = None
 
 

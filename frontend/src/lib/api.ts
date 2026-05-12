@@ -149,8 +149,8 @@ export function getDocument(documentId: number): Promise<DocumentRead> {
   return request<DocumentRead>(`/documents/${documentId}`);
 }
 
-export function searchDocuments(query: string, limit: number = 20): Promise<DocumentSearchResponse> {
-  const params = new URLSearchParams({ q: query, limit: String(limit) });
+export function searchDocuments(query: string, limit: number = 20, mode: "keyword" | "hybrid" = "keyword"): Promise<DocumentSearchResponse> {
+  const params = new URLSearchParams({ q: query, limit: String(limit), mode });
   return request<DocumentSearchResponse>(`/documents/search?${params.toString()}`);
 }
 
