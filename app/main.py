@@ -16,7 +16,7 @@ from app.api.routes.tasks import router as tasks_router
 from app.api.routes.upload import router as upload_router
 
 # 导入核心模块和服务
-from app.core.config import SESSION_SECRET_KEY, ensure_runtime_dirs
+from app.core.config import CORS_ALLOWED_ORIGINS, CORS_ALLOWED_ORIGIN_REGEX, SESSION_SECRET_KEY, ensure_runtime_dirs
 from app.core.logging_config import configure_logging
 from app.db.session import create_db_and_tables
 from app.services.task_service import TaskService
@@ -45,10 +45,8 @@ app.add_middleware(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=CORS_ALLOWED_ORIGINS,
+    allow_origin_regex=CORS_ALLOWED_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

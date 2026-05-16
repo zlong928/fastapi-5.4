@@ -30,6 +30,19 @@ JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-me-in-production")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+
+def parse_cors_allowed_origins(frontend_url: str, extra_origins: str = "") -> list[str]:
+    origins: list[str] = []
+    for origin in [frontend_url, "http://localhost:3000", "http://127.0.0.1:3000", *extra_origins.split(",")]:
+        normalized = origin.strip().rstrip("/")
+        if normalized and normalized not in origins:
+            origins.append(normalized)
+    return origins
+
+
+CORS_ALLOWED_ORIGINS = parse_cors_allowed_origins(FRONTEND_URL, os.getenv("CORS_ALLOWED_ORIGINS", ""))
+CORS_ALLOWED_ORIGIN_REGEX = os.getenv("CORS_ALLOWED_ORIGIN_REGEX", r"https://.*\.vercel\.app")
 SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY", "change-me-in-production")
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
