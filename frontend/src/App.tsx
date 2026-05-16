@@ -6,6 +6,8 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { DocumentDetailPage } from "@/pages/DocumentDetailPage";
 import { DocumentsPage } from "@/pages/DocumentsPage";
+import { BookReaderPage } from "@/pages/BookReaderPage";
+import { BooksPage } from "@/pages/BooksPage";
 import { ForgotPasswordPage } from "@/pages/ForgotPasswordPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { OAuthCallbackPage } from "@/pages/OAuthCallbackPage";
@@ -41,6 +43,8 @@ export function App() {
           <Route path="/upload" element={<ProtectedRoute><UploadPage /></ProtectedRoute>} />
           <Route path="/documents" element={<ProtectedRoute><DocumentsPage /></ProtectedRoute>} />
           <Route path="/documents/:id" element={<ProtectedRoute><DocumentDetailPage /></ProtectedRoute>} />
+          <Route path="/books" element={<ProtectedRoute><BooksPage /></ProtectedRoute>} />
+          <Route path="/books/:bookId/reader" element={<ProtectedRoute><BookReaderPage /></ProtectedRoute>} />
           <Route path="/tasks" element={<ProtectedRoute><TasksPage /></ProtectedRoute>} />
           <Route path="/tasks/:id" element={<ProtectedRoute><TaskDetailPage /></ProtectedRoute>} />
         </Routes>

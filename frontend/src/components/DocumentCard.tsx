@@ -2,12 +2,13 @@ import { AlertCircle, CheckCircle2, Clock, HardDrive, Trash2, RefreshCw } from "
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { DocumentListItem, DocumentStatus } from "@/lib/types";
+import { DocumentListItem, DocumentStatus, processingModeLabel } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function getStatusIcon(status: DocumentStatus) {
   switch (status) {
-    case "pending":
+    case "uploaded":
+    case "queued":
     case "processing":
       return <Clock className="h-4 w-4 text-yellow-600" />;
     case "parsed":
@@ -23,8 +24,10 @@ function getStatusIcon(status: DocumentStatus) {
 
 function getStatusText(status: DocumentStatus) {
   switch (status) {
-    case "pending":
-      return "Pending";
+    case "uploaded":
+      return "Uploaded";
+    case "queued":
+      return "Queued";
     case "processing":
       return "Processing";
     case "parsed":
@@ -40,7 +43,8 @@ function getStatusText(status: DocumentStatus) {
 
 function getStatusColor(status: DocumentStatus) {
   switch (status) {
-    case "pending":
+    case "uploaded":
+    case "queued":
     case "processing":
       return "bg-yellow-50 text-yellow-700";
     case "parsed":
@@ -70,7 +74,6 @@ export function DocumentCard({
   isDeleting
 }: DocumentCardProps) {
   const navigate = useNavigate();
-
   const formatBytes = (bytes: number) => {
     if (bytes === 0) return "0 B";
     const k = 1024;
@@ -118,15 +121,28 @@ export function DocumentCard({
               <div className="capitalize text-slate-600">
                 {document.source_type}
               </div>
+              <div className="text-slate-600">
+                {processingModeLabel(document.processing_mode)}
+              </div>
               <div>
                 Uploaded {formatDate(document.created_at)}
               </div>
-              {document.parsed_at && (
+              {document.parsed_at && document.source_type !== "image" && (
                 <div>
                   Parsed {formatDate(document.parsed_at)}
                 </div>
               )}
+              {document.latest_parse_job_status && (
+                <div>
+                  Job {document.latest_parse_job_status}
+                </div>
+              )}
             </div>
+            {document.status === "failed" && document.error_message && (
+              <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+                {document.error_message}
+              </p>
+            )}
           </div>
           <div className="flex flex-shrink-0 gap-2" onClick={(e) => e.stopPropagation()}>
             {document.status === "failed" && (

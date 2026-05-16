@@ -22,6 +22,7 @@ class ParseJob(Base):
     status: Mapped[str] = mapped_column(String(50), default="queued", index=True, nullable=False)
     job_type: Mapped[str] = mapped_column(String(50), default="initial_parse", nullable=False)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -29,11 +30,11 @@ class ParseJob(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
-    updated_at: Mapped[datetime] = mapped_column(
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
-        nullable=False,
+        nullable=True,
     )
 
     document: Mapped[Document] = relationship("Document", back_populates="parse_jobs")

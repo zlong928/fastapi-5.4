@@ -16,6 +16,26 @@ type UploadItem = {
   error?: string;
 };
 
+function fallbackTaskFromUpload(response: Awaited<ReturnType<typeof uploadFile>>, file: File): TaskRecord {
+  return {
+    task_id: response.task_id,
+    task_kind: "basic_file_processing",
+    document_id: null,
+    file_name: response.file_name ?? response.filename ?? file.name,
+    file_size: file.size,
+    file_type: file.name.split(".").pop()?.toLowerCase() ?? "pdf",
+    status: response.status ?? "queued",
+    progress: response.status === "success" || response.status === "failed" ? 100 : 0,
+    error: null,
+    storage_path: null,
+    result_path: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    completed_at: null,
+    metadata_json: null
+  };
+}
+
 export function FileUploader() {
   const inputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
@@ -29,11 +49,7 @@ export function FileUploader() {
         setItems((current) => [...current, { name: file.name, status: "uploading" }]);
         try {
           const response = await uploadFile(file);
-          const task = response.tasks?.[0] ?? {
-            task_id: response.task_id,
-            file_name: response.file_name ?? response.filename ?? file.name,
-            status: response.status ?? "queued"
-          };
+          const task = response.tasks?.[0] ?? fallbackTaskFromUpload(response, file);
           uploaded.push({ name: file.name, status: "success", task });
           setItems((current) => current.map((item) => (item.name === file.name && item.status === "uploading" ? { name: file.name, status: "success", task } : item)));
         } catch (error) {

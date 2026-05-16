@@ -41,6 +41,12 @@ SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USERNAME)
 DEBUG_EMAIL_CODE = os.getenv("DEBUG_EMAIL_CODE", "False").lower() in ("true", "1", "t", "yes", "on")
+OBSIDIAN_API_URL = os.getenv("OBSIDIAN_API_URL", "http://127.0.0.1:27123")
+OBSIDIAN_API_KEY = os.getenv("OBSIDIAN_API_KEY", "")
+OBSIDIAN_TARGET_DIR = os.getenv("OBSIDIAN_TARGET_DIR", "Uploads")
+OBSIDIAN_SYNC_ENABLED = os.getenv("OBSIDIAN_SYNC_ENABLED", "False").lower() in ("true", "1", "t", "yes", "on")
+OBSIDIAN_CREATE_REFERENCE_NOTE = os.getenv("OBSIDIAN_CREATE_REFERENCE_NOTE", "True").lower() in ("true", "1", "t", "yes", "on")
+OBSIDIAN_VERIFY_SSL = os.getenv("OBSIDIAN_VERIFY_SSL", "False").lower() in ("true", "1", "t", "yes", "on")
 
 
 def ensure_runtime_dirs() -> None:

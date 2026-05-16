@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Activity, FileUp, ListChecks, Server } from "lucide-react";
+import { Activity, BookOpen, ListChecks, Server } from "lucide-react";
 import { Link } from "react-router-dom";
 import { TaskCard } from "@/components/TaskCard";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -20,17 +20,17 @@ export function DashboardPage() {
         <div>
           <p className="text-sm font-medium uppercase tracking-wide text-slate-500">Dashboard</p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight">File Processing Service</h1>
-          <p className="mt-2 max-w-2xl text-slate-600">Upload PDFs, watch queued jobs move through the worker, and inspect processing results from one clean workspace.</p>
+          <p className="mt-2 max-w-2xl text-slate-600">Process documents, watch queued jobs move through the worker, and inspect results from one clean workspace.</p>
         </div>
         <div className="flex gap-3">
           <Button asChild>
-          <Link to="/upload" className="gap-2">
-            <FileUp className="h-4 w-4" /> Upload
+          <Link to="/documents" className="gap-2">
+            <BookOpen className="h-4 w-4" /> Documents
           </Link>
           </Button>
           <Button asChild variant="outline">
           <Link to="/tasks" className="gap-2">
-            <ListChecks className="h-4 w-4" /> Tasks
+            <ListChecks className="h-4 w-4" /> Task Center
           </Link>
           </Button>
         </div>

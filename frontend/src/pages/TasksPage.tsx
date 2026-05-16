@@ -8,7 +8,8 @@ import { useTasks } from "@/hooks/useTasks";
 import { clearTasks } from "@/lib/api";
 
 export function TasksPage() {
-  const { data = [], error, isError, isLoading, isFetching, refetch } = useTasks();
+  const { data, error, isError, isLoading, isFetching, refetch } = useTasks();
+  const tasks = data ?? [];
   const queryClient = useQueryClient();
   const clearMutation = useMutation({
     mutationFn: clearTasks,
@@ -19,15 +20,17 @@ export function TasksPage() {
   });
 
   const handleClear = () => {
-    clearMutation.mutate();
+    if (confirm("Clear task records from your task list? Document history remains attached to documents.")) {
+      clearMutation.mutate();
+    }
   };
 
   return (
     <div className="space-y-6">
       <div className="flex items-end justify-between gap-4">
         <div>
-          <p className="text-sm font-medium uppercase tracking-wide text-slate-500">Tasks</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight">Task queue</h1>
+          <p className="text-sm font-medium uppercase tracking-wide text-slate-500">Task Center</p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight">Background jobs</h1>
         </div>
         <div className="flex gap-2">
           <Button
@@ -43,7 +46,7 @@ export function TasksPage() {
             variant="outline"
             onClick={handleClear}
             className="gap-2"
-            disabled={data.length === 0 || clearMutation.isPending}
+            disabled={tasks.length === 0 || clearMutation.isPending}
           >
             <Trash2 className="h-4 w-4" /> Clear
           </Button>
@@ -61,7 +64,7 @@ export function TasksPage() {
           <AlertDescription>{clearMutation.error.message}</AlertDescription>
         </Alert>
       ) : null}
-      {!isLoading && !isError ? <TaskTable tasks={data} /> : null}
+      {!isLoading && !isError ? <TaskTable tasks={tasks} /> : null}
     </div>
   );
 }

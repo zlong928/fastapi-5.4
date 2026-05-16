@@ -25,5 +25,8 @@ class User(Base):
     )
 
     tasks = relationship("Task", back_populates="user", cascade="all, delete-orphan")
+    job_runs = relationship("JobRun", back_populates="user", cascade="all, delete-orphan")
     oauth_accounts = relationship("OAuthAccount", back_populates="user", cascade="all, delete-orphan")
     documents = relationship("Document", back_populates="user", cascade="all, delete-orphan")
+    books = relationship("Book", back_populates="user", cascade="all, delete-orphan")
+    book_progress_entries = relationship("BookProgress", back_populates="user", cascade="all, delete-orphan")

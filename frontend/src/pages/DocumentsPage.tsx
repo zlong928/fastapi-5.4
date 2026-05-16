@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Search } from "lucide-react";
+import { FileText, Search, Wrench } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { DocumentCard } from "@/components/DocumentCard";
+import { DocumentUploader } from "@/components/DocumentUploader";
 import { Button } from "@/components/ui/button";
 import { deleteDocument, getDocuments, retryDocumentParse, searchDocuments } from "@/lib/api";
 
@@ -17,7 +18,11 @@ export function DocumentsPage() {
 
   const { data: response, isLoading, error } = useQuery({
     queryKey: ["documents", page],
-    queryFn: () => getDocuments((page - 1) * ITEMS_PER_PAGE, ITEMS_PER_PAGE)
+    queryFn: () => getDocuments((page - 1) * ITEMS_PER_PAGE, ITEMS_PER_PAGE),
+    refetchInterval: (query) => {
+      const docs = query.state.data?.items ?? [];
+      return docs.some((doc) => ["queued", "processing"].includes(doc.status)) ? 2000 : false;
+    }
   });
   const trimmedSearch = searchQuery.trim();
   const searchEnabled = trimmedSearch.length > 0;
@@ -31,6 +36,7 @@ export function DocumentsPage() {
     mutationFn: retryDocumentParse,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["documents"] });
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
     }
   });
 
@@ -57,7 +63,7 @@ export function DocumentsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-sm font-medium uppercase tracking-wide text-slate-500">Library</p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight">My Documents</h1>
@@ -65,14 +71,20 @@ export function DocumentsPage() {
             Manage your uploaded documents and knowledge base
           </p>
         </div>
-        <Button
-          size="lg"
-          onClick={() => navigate("/upload")}
-          className="gap-2"
-        >
-          <Plus className="h-5 w-5" />
-          Upload Document
+        <Button asChild variant="outline" className="gap-2">
+          <a href="/upload">
+            <Wrench className="h-4 w-4" />
+            Basic file parser
+          </a>
         </Button>
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white p-5">
+        <div className="mb-4 flex items-center gap-2">
+          <FileText className="h-5 w-5 text-blue-600" />
+          <h2 className="font-semibold">Upload and parse documents</h2>
+        </div>
+        <DocumentUploader />
       </div>
 
       <div className="rounded-lg border border-slate-200 bg-white p-4">
@@ -85,6 +97,7 @@ export function DocumentsPage() {
               placeholder="Search title, cleaned text, OCR, chunks, or vector matches"
               className="h-10 w-full rounded-md border border-slate-300 pl-9 pr-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
             />
+            <p className="mt-2 text-xs text-slate-500">Only parsed documents are searchable.</p>
           </div>
           <div className="flex rounded-md border border-slate-200 p-1">
             <button
@@ -198,14 +211,8 @@ export function DocumentsPage() {
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center">
           <p className="text-sm text-slate-600">No documents yet</p>
           <p className="mt-2 text-xs text-slate-500">
-            Upload your first document to get started
+            Upload your first document above to get started
           </p>
-          <Button
-            className="mt-4"
-            onClick={() => navigate("/upload")}
-          >
-            Upload Document
-          </Button>
         </div>
       )}
     </div>

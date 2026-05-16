@@ -1,34 +1,96 @@
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.models import User
+from app.models import User, Document, JobRun
 from app.schemas.document import (
+    DocumentBatchUploadItem,
+    DocumentChunkRead,
     DocumentDetailResponse,
     DocumentEventRead,
     DocumentKgResponse,
     DocumentListResponse,
+    DocumentProcessingMode,
+    ParseJobRead,
     DocumentSearchResponse,
     DocumentUploadResponse,
 )
 from app.services.document_service import DocumentService
 from app.services.document_search_service import DocumentSearchService
-from app.services.file_storage import FileStorageService
+from app.services.document_upload_service import DocumentUploadService
+from app.services.job_run_service import JobRunService
 from app.models import KgEntity, KgRelation
+from app.models import DocumentChunk
+from app.utils.json import json_loads_object_or_none
 
 router = APIRouter(prefix="/documents", tags=["documents"])
-
 
 def get_document_service(db: Session = Depends(get_db)) -> DocumentService:
     """获取文档服务实例。"""
     return DocumentService(db)
 
 
-@router.post("/upload", response_model=DocumentUploadResponse)
+def assert_document_owner(document: Document, current_user: User) -> None:
+    if document.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to access this document.",
+        )
+
+
+def serialize_latest_parse_job(job_run: JobRun | None) -> ParseJobRead | None:
+    if job_run is None:
+        return None
+    metadata = json_loads_object_or_none(job_run.metadata_json) or {}
+    return ParseJobRead(
+        id=job_run.id,
+        job_id=job_run.job_id,
+        document_id=job_run.document_id or 0,
+        user_id=job_run.user_id,
+        status=job_run.status,
+        job_type=str(metadata.get("job_type") or job_run.kind),
+        metadata_json=job_run.metadata_json,
+        error_message=job_run.error_message,
+        started_at=job_run.started_at,
+        finished_at=job_run.finished_at,
+        created_at=job_run.created_at,
+        updated_at=job_run.updated_at,
+    )
+
+
+def serialize_document_detail(document: Document, latest_parse_job=None) -> DocumentDetailResponse:
+    events = sorted(document.events, key=lambda event: event.created_at)
+    return DocumentDetailResponse(
+        id=document.id,
+        user_id=document.user_id,
+        title=document.title,
+        original_filename=document.original_filename,
+        source_type=document.source_type,
+        processing_mode=document.processing_mode,
+        processing_strategy=document.processing_strategy,
+        status=document.status,
+        file_size=document.file_size,
+        mime_type=document.mime_type,
+        parsed_text=document.parsed_text,
+        cleaned_text=document.cleaned_text,
+        parse_quality_json=document.parse_quality_json,
+        references_text=document.references_text,
+        error_message=document.error_message,
+        created_at=document.created_at,
+        uploaded_at=document.uploaded_at,
+        parsed_at=document.parsed_at,
+        latest_parse_job=serialize_latest_parse_job(latest_parse_job),
+        events=[DocumentEventRead.model_validate(event) for event in events],
+    )
+
+
+@router.post("/upload", response_model=DocumentUploadResponse, status_code=status.HTTP_202_ACCEPTED)
 async def upload_document(
     file: UploadFile = File(...),
-    title: str | None = None,
+    title: str | None = Form(None),
+    processing_mode: DocumentProcessingMode = Form(DocumentProcessingMode.AUTO),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DocumentUploadResponse:
@@ -48,96 +110,47 @@ async def upload_document(
     Raises:
         HTTPException: 文件类型不支持或上传失败
     """
-    # 验证文件类型
-    if not file.filename:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File name is required.",
-        )
-
-    # 获取文件扩展名
-    filename_parts = file.filename.rsplit(".", 1)
-    if len(filename_parts) != 2:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File must have an extension.",
-        )
-
-    original_filename, ext = filename_parts
-    ext = ext.lower()
-
-    # 映射扩展名到 source_type
-    ext_map = {
-        "pdf": "pdf",
-        "md": "markdown",
-        "markdown": "markdown",
-        "txt": "txt",
-        "text": "txt",
-        "png": "image",
-        "jpg": "image",
-        "jpeg": "image",
-        "webp": "image",
-    }
-
-    if ext not in ext_map:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unsupported file type. Only PDF, Markdown, TXT, PNG, JPG, JPEG, and WEBP are allowed.",
-        )
-
-    source_type = ext_map[ext]
-    mime_type = file.content_type or "application/octet-stream"
-
     try:
-        # 读取文件内容
-        content = await file.read()
-        file_size = len(content)
-
-        # 存储文件
-        file_storage = FileStorageService()
-        relative_path, stored_filename = file_storage.store_file(
-            user_id=current_user.id,
-            original_filename=file.filename,
-            file_content=content,
-            file_extension=ext,
+        result = await DocumentUploadService(db).upload_one(
+            file=file,
+            user=current_user,
+            title=title,
+            processing_mode=processing_mode,
         )
-
-        # 创建文档记录
-        service = DocumentService(db, file_storage)
-        document = service.create_document(
-            user_id=current_user.id,
-            title=title or original_filename,
-            original_filename=file.filename,
-            stored_filename=stored_filename,
-            original_file_path=relative_path,
-            file_size=file_size,
-            mime_type=mime_type,
-            source_type=source_type,
+        document = result.document
+        job = result.parse_job
+        return DocumentUploadResponse(
+            document_id=document.id,
+            status=document.status,
+            parse_job_id=job.id,
+            job_id=job.job_id,
+            processing_mode=document.processing_mode,
+            message="Document uploaded and queued for parsing.",
         )
-
-        # 同步解析（当前阶段）
-        document = service.parse_document(document.id)
-
-        return DocumentUploadResponse.model_validate(document)
-
-    except ValueError as e:
+    except ValueError as exc:
+        if str(exc).startswith("File is too large."):
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=str(exc),
+            ) from exc
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
-    except Exception as e:
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Upload failed: {str(e)}",
-        )
+            detail=f"Upload failed: {str(exc)}",
+        ) from exc
 
 
-@router.post("/batch-upload", response_model=list[DocumentUploadResponse])
+@router.post("/batch-upload", response_model=list[DocumentBatchUploadItem], status_code=status.HTTP_202_ACCEPTED)
 async def upload_batch(
     files: list[UploadFile] = File(...),
+    processing_mode: DocumentProcessingMode = Form(DocumentProcessingMode.AUTO),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> list[DocumentUploadResponse]:
+) -> list[DocumentBatchUploadItem]:
     """批量上传文档。
 
     Args:
@@ -148,72 +161,35 @@ async def upload_batch(
     Returns:
         list[DocumentUploadResponse]: 上传响应列表
     """
-    results = []
+    results: list[DocumentBatchUploadItem] = []
+    upload_service = DocumentUploadService(db)
 
     for file in files:
+        filename = file.filename or "unknown"
         try:
-            # 重用单个上传的逻辑
-            if not file.filename:
-                continue
-
-            filename_parts = file.filename.rsplit(".", 1)
-            if len(filename_parts) != 2:
-                continue
-
-            original_filename, ext = filename_parts
-            ext = ext.lower()
-
-            ext_map = {
-                "pdf": "pdf",
-                "md": "markdown",
-                "markdown": "markdown",
-                "txt": "txt",
-                "text": "txt",
-                "png": "image",
-                "jpg": "image",
-                "jpeg": "image",
-                "webp": "image",
-            }
-
-            if ext not in ext_map:
-                continue
-
-            source_type = ext_map[ext]
-            mime_type = file.content_type or "application/octet-stream"
-
-            # 读取文件内容
-            content = await file.read()
-            file_size = len(content)
-
-            # 存储文件
-            file_storage = FileStorageService()
-            relative_path, stored_filename = file_storage.store_file(
-                user_id=current_user.id,
-                original_filename=file.filename,
-                file_content=content,
-                file_extension=ext,
+            result = await upload_service.upload_one(
+                file=file,
+                user=current_user,
+                processing_mode=processing_mode,
+            )
+            document = result.document
+            job = result.parse_job
+            results.append(
+                DocumentBatchUploadItem(
+                    filename=filename,
+                    ok=True,
+                    document_id=document.id,
+                    parse_job_id=job.id,
+                    job_id=job.job_id,
+                    status=document.status,
+                    processing_mode=document.processing_mode,
+                )
             )
 
-            # 创建文档记录
-            service = DocumentService(db, file_storage)
-            document = service.create_document(
-                user_id=current_user.id,
-                title=original_filename,
-                original_filename=file.filename,
-                stored_filename=stored_filename,
-                original_file_path=relative_path,
-                file_size=file_size,
-                mime_type=mime_type,
-                source_type=source_type,
-            )
-
-            # 同步解析
-            document = service.parse_document(document.id)
-            results.append(DocumentUploadResponse.model_validate(document))
-
-        except Exception:
-            # 跳过错误的文件，继续处理其他文件
-            continue
+        except HTTPException as exc:
+            results.append(DocumentBatchUploadItem(filename=filename, ok=False, error=str(exc.detail)))
+        except Exception as exc:
+            results.append(DocumentBatchUploadItem(filename=filename, ok=False, error=str(exc)))
 
     return results
 
@@ -243,19 +219,26 @@ async def list_documents(
         limit=limit,
     )
 
-    items = [
-        {
+    items = []
+    for doc in documents:
+        latest_job = service.get_latest_parse_job(doc.id)
+        items.append(
+            {
             "id": doc.id,
             "title": doc.title,
+            "original_filename": doc.original_filename,
             "source_type": doc.source_type,
+            "processing_mode": doc.processing_mode,
+            "processing_strategy": doc.processing_strategy,
             "status": doc.status,
             "file_size": doc.file_size,
+            "error_message": doc.error_message,
+            "latest_parse_job_status": latest_job.status if latest_job else None,
             "created_at": doc.created_at,
             "uploaded_at": doc.uploaded_at,
             "parsed_at": doc.parsed_at,
-        }
-        for doc in documents
-    ]
+            }
+        )
 
     return DocumentListResponse(total=total, items=items)
 
@@ -265,11 +248,14 @@ async def search_documents(
     q: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=50),
     mode: str = Query("keyword", pattern="^(keyword|hybrid)$"),
+    include_unparsed: bool = Query(False),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DocumentSearchResponse:
     service = DocumentSearchService(db)
     hits = service.hybrid_search(current_user.id, q, limit=limit) if mode == "hybrid" else service.search(current_user.id, q, limit=limit)
+    if not include_unparsed:
+        hits = [hit for hit in hits if hit.document.status == "parsed"]
     return DocumentSearchResponse(
         query=q,
         total=len(hits),
@@ -323,26 +309,41 @@ async def get_document_detail(
             detail="You don't have permission to access this document.",
         )
 
-    events = [DocumentEventRead.model_validate(event) for event in document.events]
+    return serialize_document_detail(document, service.get_latest_parse_job(document.id))
 
-    return DocumentDetailResponse(
-        id=document.id,
-        user_id=document.user_id,
-        title=document.title,
-        original_filename=document.original_filename,
-        source_type=document.source_type,
-        status=document.status,
-        file_size=document.file_size,
-        mime_type=document.mime_type,
-        parsed_text=document.parsed_text,
-        cleaned_text=document.cleaned_text,
-        parse_quality_json=document.parse_quality_json,
-        references_text=document.references_text,
-        error_message=document.error_message,
-        created_at=document.created_at,
-        uploaded_at=document.uploaded_at,
-        parsed_at=document.parsed_at,
-        events=events,
+
+@router.get("/{document_id}/file")
+async def get_document_file(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    service = DocumentService(db)
+    document = service.get_document_by_id(document_id)
+
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found.",
+        )
+
+    if document.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to access this document.",
+        )
+
+    file_path = service.file_storage.get_file_path(document.original_file_path)
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found.",
+        )
+
+    return FileResponse(
+        path=file_path,
+        media_type=document.mime_type,
+        filename=document.original_filename,
     )
 
 
@@ -381,28 +382,16 @@ async def retry_parse_document(
         )
 
     try:
-        document = service.retry_parse(document_id)
-        events = [DocumentEventRead.model_validate(event) for event in document.events]
-
-        return DocumentDetailResponse(
-            id=document.id,
-            user_id=document.user_id,
-            title=document.title,
-            original_filename=document.original_filename,
-            source_type=document.source_type,
-            status=document.status,
-            file_size=document.file_size,
-            mime_type=document.mime_type,
-            parsed_text=document.parsed_text,
-            cleaned_text=document.cleaned_text,
-            parse_quality_json=document.parse_quality_json,
-            references_text=document.references_text,
-            error_message=document.error_message,
-            created_at=document.created_at,
-            uploaded_at=document.uploaded_at,
-            parsed_at=document.parsed_at,
-            events=events,
-        )
+        running_job = service.get_running_parse_job(document_id)
+        if running_job is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Document parsing is already queued or running.",
+            )
+        document, job = service.retry_parse(document_id)
+        return serialize_document_detail(document, job)
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -484,6 +473,54 @@ async def get_document_events(
         )
 
     return [DocumentEventRead.model_validate(event) for event in document.events]
+
+
+@router.get("/{document_id}/parse-jobs", response_model=list[ParseJobRead])
+async def get_document_parse_jobs(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[ParseJobRead]:
+    service = DocumentService(db)
+    document = service.get_document_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    assert_document_owner(document, current_user)
+    return [
+        serialized
+        for serialized in (
+            serialize_latest_parse_job(job_run)
+            for job_run in JobRunService(db).list_jobs(
+                user_id=current_user.id,
+                kind_filter="document_parse",
+                document_id=document.id,
+                limit=100,
+            )
+        )
+        if serialized is not None
+    ]
+
+
+@router.get("/{document_id}/chunks", response_model=list[DocumentChunkRead])
+async def get_document_chunks(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[DocumentChunkRead]:
+    service = DocumentService(db)
+    document = service.get_document_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    assert_document_owner(document, current_user)
+    if document.status == "deleted":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    chunks = (
+        db.query(DocumentChunk)
+        .filter(DocumentChunk.document_id == document.id)
+        .order_by(DocumentChunk.chunk_index)
+        .all()
+    )
+    return [DocumentChunkRead.model_validate(chunk) for chunk in chunks]
 
 
 @router.get("/{document_id}/kg", response_model=DocumentKgResponse)

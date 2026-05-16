@@ -8,6 +8,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 # 绝对导入路由
 from app.api.routes.auth import router as auth_router
+from app.api.routes.books import router as books_router
 from app.api.routes.documents import router as documents_router
 from app.api.routes.health import router as health_router
 from app.api.routes.oauth import router as oauth_router
@@ -62,6 +63,7 @@ async def root():
 app.include_router(auth_router)
 app.include_router(oauth_router)
 app.include_router(health_router)
+app.include_router(books_router, prefix="/api")
 app.include_router(documents_router)
 app.include_router(upload_router)
 app.include_router(tasks_router)

@@ -1,4 +1,4 @@
-import { DocumentKgResponse, DocumentListResponse, DocumentRead, DocumentSearchResponse, HealthResponse, LoginRequest, MessageResponse, PasswordForgotRequest, PasswordResetRequest, RegisterRequest, TaskRecord, TaskResultResponse, TokenResponse, UploadResponse, UserRead } from "./types";
+import { BookProgressRead, BookProgressUpdate, BookRead, BookUploadResponse, DocumentBatchUploadItem, DocumentChunk, DocumentKgResponse, DocumentListResponse, DocumentProcessingMode, DocumentRead, DocumentSearchResponse, DocumentUploadResponse, HealthResponse, LoginRequest, MessageResponse, PasswordForgotRequest, PasswordResetRequest, RegisterRequest, TaskRecord, TaskResultResponse, TokenResponse, UploadResponse, UserRead } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 const TOKEN_KEY = "file_processing_token";
@@ -117,7 +117,7 @@ export function clearTasks() {
 
 export async function getTask(taskId: string): Promise<TaskRecord> {
   const task = await request<TaskRecord>(`/tasks/${encodeURIComponent(taskId)}`);
-  if (task.status === "success" || task.status === "failed") {
+  if (task.task_kind === "basic_file_processing" && (task.status === "success" || task.status === "succeeded" || task.status === "failed")) {
     try {
       const resultResponse = await request<TaskResultResponse>(`/tasks/${encodeURIComponent(taskId)}/result`);
       return { ...resultResponse.task, result: resultResponse.result };
@@ -129,13 +129,24 @@ export async function getTask(taskId: string): Promise<TaskRecord> {
 }
 
 // Document API functions
-export async function uploadDocument(file: File, title?: string): Promise<any> {
+export async function uploadDocument(file: File, title?: string, processingMode: DocumentProcessingMode = "auto"): Promise<DocumentUploadResponse> {
   const formData = new FormData();
   formData.append("file", file);
+  formData.append("processing_mode", processingMode);
   if (title) {
     formData.append("title", title);
   }
-  return request<any>("/documents/upload", {
+  return request<DocumentUploadResponse>("/documents/upload", {
+    method: "POST",
+    body: formData
+  });
+}
+
+export async function batchUploadDocuments(files: File[], processingMode: DocumentProcessingMode = "auto"): Promise<DocumentBatchUploadItem[]> {
+  const formData = new FormData();
+  formData.append("processing_mode", processingMode);
+  files.forEach((file) => formData.append("files", file));
+  return request<DocumentBatchUploadItem[]>("/documents/batch-upload", {
     method: "POST",
     body: formData
   });
@@ -149,13 +160,34 @@ export function getDocument(documentId: number): Promise<DocumentRead> {
   return request<DocumentRead>(`/documents/${documentId}`);
 }
 
-export function searchDocuments(query: string, limit: number = 20, mode: "keyword" | "hybrid" = "keyword"): Promise<DocumentSearchResponse> {
-  const params = new URLSearchParams({ q: query, limit: String(limit), mode });
+export async function getDocumentFileBlob(documentId: number): Promise<Blob> {
+  const token = getToken();
+  const headers = new Headers();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  const response = await fetch(`${API_BASE_URL}/documents/${documentId}/file`, {
+    headers
+  });
+
+  if (!response.ok) {
+    throw new Error(response.statusText || `Request failed with ${response.status}`);
+  }
+
+  return response.blob();
+}
+
+export function searchDocuments(query: string, limit: number = 20, mode: "keyword" | "hybrid" = "keyword", includeUnparsed = false): Promise<DocumentSearchResponse> {
+  const params = new URLSearchParams({ q: query, limit: String(limit), mode, include_unparsed: String(includeUnparsed) });
   return request<DocumentSearchResponse>(`/documents/search?${params.toString()}`);
 }
 
 export function getDocumentKg(documentId: number): Promise<DocumentKgResponse> {
   return request<DocumentKgResponse>(`/documents/${documentId}/kg`);
+}
+
+export function getDocumentChunks(documentId: number): Promise<DocumentChunk[]> {
+  return request<DocumentChunk[]>(`/documents/${documentId}/chunks`);
 }
 
 export function retryDocumentParse(documentId: number): Promise<DocumentRead> {
@@ -168,6 +200,38 @@ export function deleteDocument(documentId: number): Promise<MessageResponse> {
   return request<MessageResponse>(`/documents/${documentId}`, {
     method: "DELETE"
   });
+}
+
+export async function uploadBook(file: File): Promise<BookUploadResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return request<BookUploadResponse>("/api/books/upload", {
+    method: "POST",
+    body: formData
+  });
+}
+
+export function getBooks(): Promise<BookRead[]> {
+  return request<BookRead[]>("/api/books");
+}
+
+export function getBook(bookId: number): Promise<BookRead> {
+  return request<BookRead>(`/api/books/${bookId}`);
+}
+
+export function getBookProgress(bookId: number): Promise<BookProgressRead | null> {
+  return request<BookProgressRead | null>(`/api/books/${bookId}/progress`);
+}
+
+export function saveBookProgress(bookId: number, payload: BookProgressUpdate): Promise<BookProgressRead> {
+  return request<BookProgressRead>(`/api/books/${bookId}/progress`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function getBookFileUrl(bookId: number): string {
+  return `${API_BASE_URL}/api/books/${bookId}/file`;
 }
 
 export { API_BASE_URL, TOKEN_KEY };

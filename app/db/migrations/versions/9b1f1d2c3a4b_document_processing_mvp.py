@@ -21,6 +21,8 @@ def upgrade() -> None:
     op.add_column("documents", sa.Column("cleaned_text", sa.Text(), nullable=True))
     op.add_column("documents", sa.Column("parse_quality_json", sa.Text(), nullable=True))
     op.add_column("documents", sa.Column("references_text", sa.Text(), nullable=True))
+    op.add_column("documents", sa.Column("processing_mode", sa.String(length=50), nullable=False, server_default="auto"))
+    op.add_column("documents", sa.Column("processing_strategy", sa.String(length=100), nullable=True))
 
     op.create_table(
         "parse_jobs",
@@ -30,10 +32,11 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=50), nullable=False),
         sa.Column("job_type", sa.String(length=50), nullable=False),
         sa.Column("error_message", sa.Text(), nullable=True),
+        sa.Column("metadata_json", sa.Text(), nullable=True),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["document_id"], ["documents.id"]),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),

@@ -1,4 +1,4 @@
-import { Activity, FileUp, LayoutDashboard, ListChecks, LogOut, BookOpen } from "lucide-react";
+import { Activity, Library, LayoutDashboard, ListChecks, LogOut, BookOpen } from "lucide-react";
 import { ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
@@ -6,9 +6,9 @@ import { Button } from "@/components/ui/button";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/upload", label: "Upload", icon: FileUp },
   { href: "/documents", label: "Documents", icon: BookOpen },
-  { href: "/tasks", label: "Tasks", icon: ListChecks }
+  { href: "/books", label: "Books", icon: Library },
+  { href: "/tasks", label: "Task Center", icon: ListChecks }
 ];
 
 export function Layout({ children }: { children: ReactNode }) {

@@ -5,7 +5,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { uploadDocument } from "@/lib/api";
-import { DocumentUploadResponse } from "@/lib/types";
+import { DOCUMENT_PROCESSING_MODE_OPTIONS, DocumentProcessingMode, DocumentUploadResponse } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type UploadItem = {
@@ -23,6 +23,8 @@ export function DocumentUploader() {
   const [isDragging, setIsDragging] = useState(false);
   const [items, setItems] = useState<UploadItem[]>([]);
   const [customTitle, setCustomTitle] = useState("");
+  const [processingMode, setProcessingMode] = useState<DocumentProcessingMode>("auto");
+  const selectedMode = DOCUMENT_PROCESSING_MODE_OPTIONS.find((option) => option.value === processingMode);
 
   const mutation = useMutation({
     mutationFn: async (files: File[]) => {
@@ -31,7 +33,7 @@ export function DocumentUploader() {
         const id = `${Date.now()}-${Math.random()}`;
         setItems((current) => [...current, { id, name: file.name, status: "uploading" }]);
         try {
-          const document = await uploadDocument(file, customTitle || undefined);
+          const document = await uploadDocument(file, customTitle || undefined, processingMode);
           uploaded.push({ id, name: file.name, status: "success", document });
           setItems((current) =>
             current.map((item) =>
@@ -53,6 +55,7 @@ export function DocumentUploader() {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["documents"] });
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
     }
   });
 
@@ -102,21 +105,48 @@ export function DocumentUploader() {
   return (
     <div className="space-y-6">
       {/* Custom Title Input */}
-      <div>
-        <label className="block text-sm font-medium text-slate-700">
-          Document Title (optional)
-        </label>
-        <input
-          type="text"
-          value={customTitle}
-          onChange={(e) => setCustomTitle(e.target.value)}
-          placeholder="e.g., My Research Paper"
-          disabled={mutation.isPending}
-          className="mt-2 block w-full rounded-lg border border-slate-300 px-4 py-2 text-sm focus:border-blue-500 focus:outline-none disabled:bg-slate-50 disabled:text-slate-500"
-        />
-        <p className="mt-1 text-xs text-slate-500">
-          If not provided, the filename will be used as the title.
-        </p>
+      <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(260px,360px)]">
+        <div>
+          <label className="block text-sm font-medium text-slate-700">
+            Document title (optional)
+          </label>
+          <input
+            type="text"
+            value={customTitle}
+            onChange={(e) => setCustomTitle(e.target.value)}
+            placeholder="e.g., My Research Paper"
+            disabled={mutation.isPending}
+            className="mt-2 block w-full rounded-lg border border-slate-300 px-4 py-2 text-sm focus:border-blue-500 focus:outline-none disabled:bg-slate-50 disabled:text-slate-500"
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            If not provided, the filename will be used as the title.
+          </p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-700">
+            Processing mode
+          </label>
+          <select
+            value={processingMode}
+            onChange={(event) => setProcessingMode(event.target.value as DocumentProcessingMode)}
+            disabled={mutation.isPending}
+            className="mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none disabled:bg-slate-50 disabled:text-slate-500"
+          >
+            {DOCUMENT_PROCESSING_MODE_OPTIONS.filter((option) => !option.advanced).map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+            <optgroup label="Advanced tools">
+              {DOCUMENT_PROCESSING_MODE_OPTIONS.filter((option) => option.advanced).map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </optgroup>
+          </select>
+          <p className="mt-1 text-xs text-slate-500">{selectedMode?.description}</p>
+        </div>
       </div>
 
       {/* Drop Zone */}
@@ -202,6 +232,7 @@ export function DocumentUploader() {
                       {item.document && (
                         <p className="text-sm text-slate-500">
                           Status: <span className="capitalize">{item.document.status}</span>
+                          <span className="ml-2">Mode: {selectedMode?.label}</span>
                         </p>
                       )}
                       {item.status === "uploading" && (

@@ -10,11 +10,11 @@ from app.db.session import Base
 
 if TYPE_CHECKING:
     from app.models.document_event import DocumentEvent
-    from app.models.chunk import Chunk
     from app.models.document_asset import DocumentAsset
     from app.models.document_chunk import DocumentChunk
     from app.models.kg_entity import KgEntity
     from app.models.kg_relation import KgRelation
+    from app.models.job_run import JobRun
     from app.models.parse_job import ParseJob
     from app.models.user import User
 
@@ -36,6 +36,8 @@ class Document(Base):
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
     source_type: Mapped[str] = mapped_column(String(50), nullable=False)  # pdf, markdown, txt
+    processing_mode: Mapped[str] = mapped_column(String(50), default="auto", nullable=False)
+    processing_strategy: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
     # 解析结果
     parsed_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -45,7 +47,9 @@ class Document(Base):
 
     # 状态管理
     status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False, index=True)
-    # pending -> processing -> parsed/failed -> deleted
+    # Document.status describes the business document lifecycle.
+    # JobRun.status describes execution of background work such as parsing.
+    # uploaded/queued/processing -> parsed/failed -> deleted
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # 时间戳
@@ -79,11 +83,6 @@ class Document(Base):
         cascade="all, delete-orphan",
         lazy="selectin",
     )
-    chunks: Mapped[list[Chunk]] = relationship(
-        "Chunk",
-        back_populates="document",
-        cascade="all, delete-orphan",
-    )
     document_chunks: Mapped[list[DocumentChunk]] = relationship(
         "DocumentChunk",
         back_populates="document",
@@ -96,6 +95,11 @@ class Document(Base):
     )
     parse_jobs: Mapped[list[ParseJob]] = relationship(
         "ParseJob",
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )
+    job_runs: Mapped[list[JobRun]] = relationship(
+        "JobRun",
         back_populates="document",
         cascade="all, delete-orphan",
     )

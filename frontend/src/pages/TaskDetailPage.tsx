@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useTask } from "@/hooks/useTask";
 import { API_BASE_URL } from "@/lib/api";
 
-function formatDate(value?: string) {
+function formatDate(value?: string | null) {
   return value ? new Date(value).toLocaleString() : "-";
 }
 

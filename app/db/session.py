@@ -24,7 +24,7 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def create_db_and_tables() -> None:
-    from app.models import Chunk, Document, DocumentAsset, DocumentChunk, DocumentEvent, KgEntity, KgRelation, OAuthAccount, ParseJob, Task, User  # noqa: F401
+    from app.models import Book, BookProgress, Document, DocumentAsset, DocumentChunk, DocumentEvent, JobRun, KgEntity, KgRelation, OAuthAccount, ParseJob, Task, User  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     _ensure_sqlite_users_password_nullable()
@@ -72,12 +72,20 @@ def _ensure_sqlite_document_processing_mvp() -> None:
         "cleaned_text": "TEXT",
         "parse_quality_json": "TEXT",
         "references_text": "TEXT",
+        "processing_mode": "VARCHAR(50) NOT NULL DEFAULT 'auto'",
+        "processing_strategy": "VARCHAR(100)",
     }
 
     with engine.begin() as connection:
         for column_name, column_type in additions.items():
             if column_name not in existing:
                 connection.execute(text(f"ALTER TABLE documents ADD COLUMN {column_name} {column_type}"))
+
+    if "parse_jobs" in inspector.get_table_names():
+        parse_job_columns = {column["name"] for column in inspector.get_columns("parse_jobs")}
+        with engine.begin() as connection:
+            if "metadata_json" not in parse_job_columns:
+                connection.execute(text("ALTER TABLE parse_jobs ADD COLUMN metadata_json TEXT"))
 
     if "document_chunks" not in inspector.get_table_names():
         return

@@ -10,6 +10,8 @@ config.ENABLE_BACKGROUND_WORKER = False#禁用    TaskService 内部的后台 Wo
 
 from .core.config import ensure_runtime_dirs
 from .db.session import create_db_and_tables
+from .queue.document_parse_queue import parse_document_parse_payload
+from .services.document_parse_pipeline import DocumentParsePipeline
 from .services.task_service import TaskService
 
 logging.basicConfig(
@@ -32,19 +34,37 @@ def run_worker() -> None:#worker主循环
     ensure_runtime_dirs()
     create_db_and_tables()
     service = TaskService()
+    document_pipeline = DocumentParsePipeline()
     logger.info("Worker started, waiting for tasks on Redis queue...")
     
     while not stop_requested:
-        task_id = service._queue.dequeue(block=True, timeout=1.0)
-        if task_id is None:
+        payload = service._queue.dequeue(block=True, timeout=1.0)
+        if payload is None:
             continue
             
-        logger.info(f"Picked up task {task_id}")
+        logger.info(f"Picked up task {payload}")
         try:
-            record = service.process_task(task_id)
+            document_parse = parse_document_parse_payload(payload)
+            if document_parse is not None:
+                document_id, job_run_id = document_parse
+                logger.info(
+                    "Starting document parse document_id=%s job_run_id=%s",
+                    document_id,
+                    job_run_id,
+                )
+                document = document_pipeline.run(document_id, job_run_id=job_run_id)
+                logger.info(
+                    "Finished document parse document_id=%s job_run_id=%s status=%s",
+                    document_id,
+                    job_run_id,
+                    document.status,
+                )
+                continue
+
+            record = service.process_task(payload)
             logger.info(f"Finished task {record.task_id} with status {record.status}")
         except Exception as e:
-            logger.error(f"Error processing task {task_id}: {e}")
+            logger.exception(f"Error processing task {payload}: {e}")
             
     logger.info("Worker stopped.")
 
