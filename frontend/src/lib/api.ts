@@ -1,4 +1,4 @@
-import { BookProgressRead, BookProgressUpdate, BookRead, BookUploadResponse, DocumentBatchUploadItem, DocumentChunk, DocumentKgResponse, DocumentListResponse, DocumentProcessingMode, DocumentRead, DocumentSearchResponse, DocumentUploadResponse, HealthResponse, LoginRequest, MessageResponse, PasswordForgotRequest, PasswordResetRequest, RegisterRequest, TaskRecord, TaskResultResponse, TokenResponse, UploadResponse, UserRead } from "./types";
+import { BookProgressRead, BookProgressUpdate, BookRead, BookUploadResponse, ChunkSearchHit, ChunkSearchResponse, DocumentBatchUploadItem, DocumentChunk, DocumentKgResponse, DocumentListResponse, DocumentProcessingMode, DocumentRead, DocumentSearchResponse, DocumentUploadResponse, HealthResponse, LoginRequest, MessageResponse, PasswordForgotRequest, PasswordResetRequest, RegisterRequest, TaskRecord, TaskResultResponse, TokenResponse, UploadResponse, UserRead } from "./types";
 
 const DEFAULT_API_BASE_URL = import.meta.env.PROD ? "https://shira.tailfb111b.ts.net" : "http://localhost:8000";
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE_URL).replace(/\/+$/, "");
@@ -178,6 +178,23 @@ export async function getDocumentFileBlob(documentId: number): Promise<Blob> {
   return response.blob();
 }
 
+export async function getDocumentFileText(documentId: number): Promise<string> {
+  const token = getToken();
+  const headers = new Headers();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  const response = await fetch(`${API_BASE_URL}/documents/${documentId}/file`, {
+    headers
+  });
+
+  if (!response.ok) {
+    throw new Error(response.statusText || `Request failed with ${response.status}`);
+  }
+
+  return response.text();
+}
+
 export function searchDocuments(query: string, limit: number = 20, mode: "keyword" | "hybrid" = "keyword", includeUnparsed = false): Promise<DocumentSearchResponse> {
   const params = new URLSearchParams({ q: query, limit: String(limit), mode, include_unparsed: String(includeUnparsed) });
   return request<DocumentSearchResponse>(`/documents/search?${params.toString()}`);
@@ -185,6 +202,24 @@ export function searchDocuments(query: string, limit: number = 20, mode: "keywor
 
 export function getDocumentKg(documentId: number): Promise<DocumentKgResponse> {
   return request<DocumentKgResponse>(`/documents/${documentId}/kg`);
+}
+
+export function searchDocumentChunks(query: string, limit: number = 20, documentId?: number, threshold: number = 0.0): Promise<ChunkSearchResponse> {
+  const params = new URLSearchParams({ q: query, limit: String(limit), threshold: String(threshold) });
+  if (documentId !== undefined) params.set("document_id", String(documentId));
+  return request<ChunkSearchResponse>(`/documents/search/chunks?${params.toString()}`);
+}
+
+export function reEmbedDocument(documentId: number): Promise<{ document_id: number; chunks_embedded: number; message: string }> {
+  return request<{ document_id: number; chunks_embedded: number; message: string }>(`/documents/${documentId}/re-embed`, {
+    method: "POST"
+  });
+}
+
+export function reEmbedAllDocuments(): Promise<{ user_id: number; documents_processed: number; chunks_embedded: number }> {
+  return request<{ user_id: number; documents_processed: number; chunks_embedded: number }>("/documents/re-embed-all", {
+    method: "POST"
+  });
 }
 
 export function getDocumentChunks(documentId: number): Promise<DocumentChunk[]> {

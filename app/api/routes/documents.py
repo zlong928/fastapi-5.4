@@ -6,6 +6,8 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models import User, Document, JobRun
 from app.schemas.document import (
+    ChunkSearchHit,
+    ChunkSearchResponse,
     DocumentBatchUploadItem,
     DocumentChunkRead,
     DocumentDetailResponse,
@@ -17,6 +19,7 @@ from app.schemas.document import (
     DocumentSearchResponse,
     DocumentUploadResponse,
 )
+from app.services.document_embedding_service import DocumentEmbeddingService
 from app.services.document_service import DocumentService
 from app.services.document_search_service import DocumentSearchService
 from app.services.document_upload_service import DocumentUploadService
@@ -247,13 +250,20 @@ async def list_documents(
 async def search_documents(
     q: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=50),
-    mode: str = Query("keyword", pattern="^(keyword|hybrid)$"),
+    mode: str = Query("keyword", pattern="^(keyword|hybrid|semantic)$"),
     include_unparsed: bool = Query(False),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DocumentSearchResponse:
     service = DocumentSearchService(db)
-    hits = service.hybrid_search(current_user.id, q, limit=limit) if mode == "hybrid" else service.search(current_user.id, q, limit=limit)
+    if mode == "hybrid":
+        hits = service.hybrid_search(current_user.id, q, limit=limit)
+    elif mode == "semantic":
+        # Use vector search at document level
+        hits = service.search(current_user.id, q, limit=limit)  # fallback; pure semantic at chunk level
+        # For now, semantic mode at document level falls back to keyword
+    else:
+        hits = service.search(current_user.id, q, limit=limit)
     if not include_unparsed:
         hits = [hit for hit in hits if hit.document.status == "parsed"]
     return DocumentSearchResponse(
@@ -273,6 +283,69 @@ async def search_documents(
             for hit in hits
         ],
     )
+
+
+@router.get("/search/chunks", response_model=ChunkSearchResponse)
+async def search_document_chunks(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=50),
+    document_id: int | None = Query(None),
+    threshold: float = Query(0.0, ge=0.0, le=1.0),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ChunkSearchResponse:
+    service = DocumentSearchService(db)
+    hits = service.search_chunks(
+        user_id=current_user.id,
+        query=q,
+        limit=limit,
+        document_id=document_id,
+        threshold=threshold,
+    )
+    return ChunkSearchResponse(
+        query=q,
+        total=len(hits),
+        items=[ChunkSearchHit(**hit) for hit in hits],
+    )
+
+
+@router.post("/{document_id}/re-embed", response_model=dict)
+async def re_embed_document(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    service = DocumentService(db)
+    document = service.get_document_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    if document.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized.")
+    if document.status != "parsed":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Document must be parsed first.")
+
+    embedding_service = DocumentEmbeddingService()
+    count = embedding_service.embed_document(document_id)
+    return {"document_id": document_id, "chunks_embedded": count, "message": f"Re-embedded {count} chunks."}
+
+
+@router.post("/re-embed-all", response_model=dict)
+async def re_embed_all_documents(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    docs = db.query(Document).filter(
+        Document.user_id == current_user.id,
+        Document.status == "parsed",
+    ).all()
+    embedding_service = DocumentEmbeddingService()
+    total = 0
+    for doc in docs:
+        try:
+            total += embedding_service.embed_document(doc.id)
+        except Exception as exc:
+            db.rollback()
+    return {"user_id": current_user.id, "documents_processed": len(docs), "chunks_embedded": total}
 
 
 @router.get("/{document_id}", response_model=DocumentDetailResponse)

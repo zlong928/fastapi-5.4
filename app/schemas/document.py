@@ -243,3 +243,23 @@ class DocumentKgResponse(BaseModel):
     document_id: int
     entities: list[KgEntityRead]
     relations: list[KgRelationRead]
+
+
+# ── Chunk-level search schemas ──────────────────────────────────────────────
+
+class ChunkSearchHit(BaseModel):
+    chunk_id: int
+    document_id: int
+    document_title: str
+    chunk_index: int
+    chunk_type: str
+    text: str
+    score: float
+    page_start: int | None = None
+    page_end: int | None = None
+
+
+class ChunkSearchResponse(BaseModel):
+    query: str
+    total: int
+    items: list[ChunkSearchHit]

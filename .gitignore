@@ -53,3 +53,5 @@ frontend/*.tsbuildinfo
 !frontend/tsconfig.json
 .opencode
 .gstack/
+
+*.md

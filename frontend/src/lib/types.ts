@@ -292,6 +292,24 @@ export interface DocumentKgResponse {
   relations: KgRelationRead[];
 }
 
+export interface ChunkSearchHit {
+  chunk_id: number;
+  document_id: number;
+  document_title: string;
+  chunk_index: number;
+  chunk_type: string;
+  text: string;
+  score: number;
+  page_start?: number | null;
+  page_end?: number | null;
+}
+
+export interface ChunkSearchResponse {
+  query: string;
+  total: number;
+  items: ChunkSearchHit[];
+}
+
 export interface DocumentChunk {
   id: number;
   document_id: number;

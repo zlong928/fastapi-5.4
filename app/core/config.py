@@ -61,6 +61,12 @@ OBSIDIAN_SYNC_ENABLED = os.getenv("OBSIDIAN_SYNC_ENABLED", "False").lower() in (
 OBSIDIAN_CREATE_REFERENCE_NOTE = os.getenv("OBSIDIAN_CREATE_REFERENCE_NOTE", "True").lower() in ("true", "1", "t", "yes", "on")
 OBSIDIAN_VERIFY_SSL = os.getenv("OBSIDIAN_VERIFY_SSL", "False").lower() in ("true", "1", "t", "yes", "on")
 
+# Embedding / Vector Search
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "ollama")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "768"))
+
 
 def ensure_runtime_dirs() -> None:
     for path in (DATA_DIR, UPLOAD_DIR, RESULT_DIR, LOG_DIR):

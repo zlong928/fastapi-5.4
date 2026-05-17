@@ -17,14 +17,17 @@ import {
   FileText,
   MapPin,
   Maximize2,
-  X
+  X,
+  BrainCircuit
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { deleteDocument, getDocument, getDocumentChunks, getDocumentFileBlob, getDocumentKg, retryDocumentParse } from "@/lib/api";
+import { deleteDocument, getDocument, getDocumentChunks, getDocumentFileBlob, getDocumentFileText, getDocumentKg, reEmbedDocument, retryDocumentParse } from "@/lib/api";
 import { DocumentChunk, DocumentRead, DocumentStatus, processingModeLabel } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -308,6 +311,7 @@ function ParsingQualityPanel({ quality }: { quality: Record<string, unknown> | n
 function PreviewPanel({
   document,
   fileUrl,
+  fileText,
   isFileLoading,
   quality,
   formatBytes,
@@ -315,31 +319,38 @@ function PreviewPanel({
 }: {
   document: DocumentRead;
   fileUrl: string | null;
+  fileText: string | undefined;
   isFileLoading: boolean;
   quality: Record<string, unknown> | null;
   formatBytes: (bytes: number) => string;
   formatDate: (dateString: string) => string;
 }) {
-  const [isPdfFullscreenOpen, setIsPdfFullscreenOpen] = useState(false);
+  const [isFullscreenOpen, setIsFullscreenOpen] = useState(false);
+  const [showFullText, setShowFullText] = useState(false);
   const isPdf = document.source_type === "pdf";
   const isImage = document.source_type === "image";
+  const isTxt = document.source_type === "txt";
+  const isMarkdown = document.source_type === "markdown";
+  const canFullscreen = isPdf || isTxt || isMarkdown;
+  const content = fileText ?? "";
+  const TRUNCATE_LENGTH = 5000;
+  const isLongText = content.length > TRUNCATE_LENGTH;
+  const displayText = showFullText || !isLongText ? content : content.slice(0, TRUNCATE_LENGTH);
   const textLength = (document.cleaned_text || document.parsed_text || "").length;
   const parserEngine = asString(quality?.parser_engine, "Not available");
-  const pdfPreviewUrl = isPdf ? fileUrl : null;
-  const canPreviewPdf = Boolean(pdfPreviewUrl);
 
   useEffect(() => {
-    if (!isPdfFullscreenOpen) return;
+    if (!isFullscreenOpen) return;
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setIsPdfFullscreenOpen(false);
+        setIsFullscreenOpen(false);
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isPdfFullscreenOpen]);
+  }, [isFullscreenOpen]);
 
   const handleOpenOriginal = () => {
     if (fileUrl) {
@@ -389,13 +400,13 @@ function PreviewPanel({
               {isImage ? <ImageIcon className="h-5 w-5 text-blue-600" /> : <FileText className="h-5 w-5 text-blue-600" />}
               <h2 className="font-semibold">Original Preview</h2>
             </div>
-            {canPreviewPdf && (
+            {canFullscreen && (
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 className="gap-2"
-                onClick={() => setIsPdfFullscreenOpen(true)}
+                onClick={() => setIsFullscreenOpen(true)}
               >
                 <Maximize2 className="h-4 w-4" />
                 Fullscreen
@@ -422,6 +433,32 @@ function PreviewPanel({
                 className="max-h-[72vh] w-full object-contain"
               />
             </div>
+          ) : isTxt && fileText !== undefined ? (
+            <div className="max-h-[72vh] min-h-[640px] overflow-y-auto">
+              <pre className="whitespace-pre-wrap p-6 text-sm leading-6 text-slate-700">
+                {displayText}
+              </pre>
+              {isLongText && (
+                <div className="flex justify-center border-t border-slate-200 bg-slate-50 px-6 py-3">
+                  <Button size="sm" variant="outline" onClick={() => setShowFullText((cur) => !cur)}>
+                    {showFullText ? "Collapse" : "Show full text"}
+                  </Button>
+                </div>
+              )}
+            </div>
+          ) : isMarkdown && fileText !== undefined ? (
+            <div className="max-h-[72vh] min-h-[640px] overflow-y-auto">
+              <div className="prose max-w-none p-6">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayText}</ReactMarkdown>
+              </div>
+              {isLongText && (
+                <div className="flex justify-center border-t border-slate-200 bg-slate-50 px-6 py-3">
+                  <Button size="sm" variant="outline" onClick={() => setShowFullText((cur) => !cur)}>
+                    {showFullText ? "Collapse" : "Show full text"}
+                  </Button>
+                </div>
+              )}
+            </div>
           ) : (
             <div className="flex min-h-[420px] flex-col items-center justify-center gap-3 bg-slate-50 p-8 text-center">
               <FileText className="h-10 w-10 text-slate-300" />
@@ -434,7 +471,7 @@ function PreviewPanel({
         </CardContent>
       </Card>
 
-      {isPdfFullscreenOpen && canPreviewPdf && (
+      {isFullscreenOpen && canFullscreen && (
         <div
           className="fixed inset-0 z-50 flex flex-col bg-slate-950"
           role="dialog"
@@ -444,7 +481,7 @@ function PreviewPanel({
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-slate-950 px-4 py-3 text-white shadow-lg">
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold">{document.original_filename}</p>
-              <p className="text-xs text-slate-400">Original PDF preview</p>
+              <p className="text-xs text-slate-400">Original {isPdf ? "PDF" : isTxt ? "text" : "Markdown"} preview</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button
@@ -472,18 +509,28 @@ function PreviewPanel({
                 variant="outline"
                 size="sm"
                 className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white"
-                onClick={() => setIsPdfFullscreenOpen(false)}
+                onClick={() => setIsFullscreenOpen(false)}
               >
                 <X className="h-4 w-4" />
                 Close
               </Button>
             </div>
           </div>
-          <iframe
-            src={pdfPreviewUrl ?? undefined}
-            title={`Fullscreen preview: ${document.original_filename}`}
-            className="min-h-0 flex-1 border-0 bg-slate-100"
-          />
+          {isPdf ? (
+            <iframe
+              src={fileUrl ?? undefined}
+              title={`Fullscreen preview: ${document.original_filename}`}
+              className="min-h-0 flex-1 border-0 bg-slate-100"
+            />
+          ) : isTxt ? (
+            <pre className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap p-6 text-sm leading-6 text-white">
+              {content}
+            </pre>
+          ) : (
+            <div className="prose prose-invert min-h-0 flex-1 max-w-none overflow-y-auto p-6">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -512,7 +559,7 @@ function ChunksPanel({
   expandedChunks: Set<number>;
   onToggleChunk: (chunkId: number) => void;
 }) {
-  const [filter, setFilter] = useState<"all" | "ocr" | "table" | "warnings" | "bbox">("all");
+  const [filter, setFilter] = useState<"all" | "ocr" | "table" | "warnings" | "bbox" | "embedded">("all");
   const chunkDetails = chunks.map((chunk) => {
     const metadata = parseChunkMetadata(chunk);
     const invalidMetadata = Boolean(chunk.metadata_json && !metadata);
@@ -520,13 +567,15 @@ function ChunksPanel({
     const bboxAvailable = hasBBox(metadata);
     const extractor = asString(metadata?.extractor, "Unknown");
     const ocrUsed = metadata?.ocr_used === true;
-    return { chunk, metadata, invalidMetadata, warnings, bboxAvailable, extractor, ocrUsed };
+    const hasEmbedding = Boolean((chunk as Record<string, unknown>).embedding_model);
+    return { chunk, metadata, invalidMetadata, warnings, bboxAvailable, extractor, ocrUsed, hasEmbedding };
   });
-  const filteredChunks = chunkDetails.filter(({ chunk, warnings, bboxAvailable, ocrUsed }) => {
+  const filteredChunks = chunkDetails.filter(({ chunk, warnings, bboxAvailable, ocrUsed, hasEmbedding }) => {
     if (filter === "ocr") return ocrUsed || chunk.chunk_type === "ocr_text" || chunk.chunk_type === "ocr";
     if (filter === "table") return chunk.chunk_type === "table";
     if (filter === "warnings") return warnings.length > 0;
     if (filter === "bbox") return bboxAvailable;
+    if (filter === "embedded") return hasEmbedding;
     return true;
   });
   const filters = [
@@ -534,7 +583,8 @@ function ChunksPanel({
     { id: "ocr" as const, label: "OCR chunks", count: chunkDetails.filter((item) => item.ocrUsed || item.chunk.chunk_type === "ocr_text" || item.chunk.chunk_type === "ocr").length },
     { id: "table" as const, label: "Table chunks", count: chunkDetails.filter((item) => item.chunk.chunk_type === "table").length },
     { id: "warnings" as const, label: "Warning chunks", count: chunkDetails.filter((item) => item.warnings.length > 0).length },
-    { id: "bbox" as const, label: "With bbox", count: chunkDetails.filter((item) => item.bboxAvailable).length }
+    { id: "bbox" as const, label: "With bbox", count: chunkDetails.filter((item) => item.bboxAvailable).length },
+    { id: "embedded" as const, label: "Embedded", count: chunkDetails.filter((item) => item.hasEmbedding).length }
   ];
 
   if (status === "queued" || status === "processing") {
@@ -593,7 +643,7 @@ function ChunksPanel({
             </div>
             {filteredChunks.length === 0 ? (
               <p className="text-sm text-slate-500">No chunks match this filter.</p>
-            ) : filteredChunks.map(({ chunk, metadata, invalidMetadata, warnings, bboxAvailable, extractor, ocrUsed }) => {
+            ) : filteredChunks.map(({ chunk, metadata, invalidMetadata, warnings, bboxAvailable, extractor, ocrUsed, hasEmbedding }) => {
               const heading = chunkHeading(metadata);
               const expanded = expandedChunks.has(chunk.id);
               const text = chunk.cleaned_text || chunk.text;
@@ -613,6 +663,11 @@ function ChunksPanel({
                     <span className={cn("rounded-full px-2 py-1 font-medium", bboxAvailable ? "bg-indigo-50 text-indigo-700" : "bg-slate-50 text-slate-600")}>
                       BBox {bboxAvailable ? "yes" : "no"}
                     </span>
+                    {hasEmbedding && (
+                      <span className="rounded-full bg-purple-50 px-2 py-1 font-medium text-purple-700">
+                        Embedded
+                      </span>
+                    )}
                     <span>{chunk.token_count ?? 0} tokens</span>
                     <span>{pageRangeLabel(chunk)}</span>
                     {heading && <span className="text-slate-700">{heading}</span>}
@@ -699,7 +754,13 @@ export function DocumentDetailPage() {
   const { data: fileBlob, isLoading: isFileLoading } = useQuery({
     queryKey: ["document", documentId, "file"],
     queryFn: () => getDocumentFileBlob(documentId),
-    enabled: documentId > 0 && Boolean(data) && data?.status !== "deleted" && (data?.source_type === "pdf" || data?.source_type === "image")
+    enabled: documentId > 0 && Boolean(data) && data?.status !== "deleted",
+  });
+  const { data: fileText, isLoading: isFileTextLoading } = useQuery({
+    queryKey: ["document", documentId, "file-text"],
+    queryFn: () => getDocumentFileText(documentId),
+    enabled: documentId > 0 && Boolean(data) && data?.status !== "deleted"
+      && (data?.source_type === "txt" || data?.source_type === "markdown"),
   });
   const [fileUrl, setFileUrl] = useState<string | null>(null);
 
@@ -708,6 +769,14 @@ export function DocumentDetailPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["document", documentId] });
       queryClient.invalidateQueries({ queryKey: ["tasks"] });
+    }
+  });
+
+  const reEmbedMutation = useMutation({
+    mutationFn: reEmbedDocument,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["document", documentId] });
+      queryClient.invalidateQueries({ queryKey: ["document", documentId, "chunks"] });
     }
   });
 
@@ -720,6 +789,10 @@ export function DocumentDetailPage() {
 
   const handleRetry = () => {
     retryMutation.mutate(documentId);
+  };
+
+  const handleReEmbed = () => {
+    reEmbedMutation.mutate(documentId);
   };
 
   const handleDelete = () => {
@@ -984,7 +1057,8 @@ export function DocumentDetailPage() {
         <PreviewPanel
           document={document}
           fileUrl={fileUrl}
-          isFileLoading={isFileLoading}
+          fileText={fileText}
+          isFileLoading={isFileLoading || isFileTextLoading}
           quality={quality}
           formatBytes={formatBytes}
           formatDate={formatDate}
@@ -1137,6 +1211,21 @@ export function DocumentDetailPage() {
               <RefreshCw className="h-4 w-4" />
             )}
             Retry Parsing
+          </Button>
+        )}
+        {document.status !== "queued" && document.status !== "processing" && document.status !== "deleted" && (
+          <Button
+            onClick={handleReEmbed}
+            disabled={reEmbedMutation.isPending}
+            className="gap-2"
+            variant="outline"
+          >
+            {reEmbedMutation.isPending ? (
+              <RefreshCw className="h-4 w-4 animate-spin" />
+            ) : (
+              <BrainCircuit className="h-4 w-4" />
+            )}
+            Re-embed
           </Button>
         )}
         {document.status !== "deleted" && (
