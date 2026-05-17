@@ -567,7 +567,7 @@ function ChunksPanel({
     const bboxAvailable = hasBBox(metadata);
     const extractor = asString(metadata?.extractor, "Unknown");
     const ocrUsed = metadata?.ocr_used === true;
-    const hasEmbedding = Boolean((chunk as Record<string, unknown>).embedding_model);
+    const hasEmbedding = Boolean(chunk.embedding_model);
     return { chunk, metadata, invalidMetadata, warnings, bboxAvailable, extractor, ocrUsed, hasEmbedding };
   });
   const filteredChunks = chunkDetails.filter(({ chunk, warnings, bboxAvailable, ocrUsed, hasEmbedding }) => {

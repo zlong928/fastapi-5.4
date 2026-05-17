@@ -325,6 +325,7 @@ export interface DocumentChunk {
   page_end?: number | null;
   metadata_json?: string | null;
   created_at: string;
+  [key: string]: unknown;
 }
 
 export interface DocumentUploadResponse {
