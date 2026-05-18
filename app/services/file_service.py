@@ -36,7 +36,7 @@ class FileService:
     async def save_upload(self, upload: UploadFile, destination: Path) -> tuple[str, int, str]:
         file_name = self.validate_upload(upload)
         raw = await upload.read()
-        if MAX_UPLOAD_SIZE_BYTES is not None and len(raw) > MAX_UPLOAD_SIZE_BYTES:
+        if len(raw) > MAX_UPLOAD_SIZE_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail=f"File exceeds the configured size limit of {MAX_UPLOAD_SIZE_BYTES} bytes.",
@@ -62,4 +62,3 @@ class FileService:
             warn_count=warn_count,
             processing_time_ms=elapsed_ms,
         )
-

@@ -3,11 +3,8 @@ import { Link } from "react-router-dom";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Alert } from "@/components/ui/alert";
 import { Card, CardContent } from "@/components/ui/card";
+import { formatChinaDateTime } from "@/lib/time";
 import { TaskRecord } from "@/lib/types";
-
-function formatDate(value?: string) {
-  return value ? new Date(value).toLocaleString() : "Unknown";
-}
 
 export function TaskCard({ task }: { task: TaskRecord }) {
   return (
@@ -26,7 +23,7 @@ export function TaskCard({ task }: { task: TaskRecord }) {
           </div>
           <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
             <CalendarClock className="h-4 w-4" />
-            {formatDate(task.updated_at ?? task.created_at)}
+            {formatChinaDateTime(task.updated_at ?? task.created_at)}
           </div>
           {task.error ? <Alert variant="destructive" className="mt-3">{task.error}</Alert> : null}
         </CardContent>

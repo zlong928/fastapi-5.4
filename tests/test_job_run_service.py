@@ -39,7 +39,7 @@ def create_document(db, user):
         file_size=123,
         mime_type="application/pdf",
         source_type="pdf",
-        status="uploaded",
+        status="pending",
     )
     db.add(document)
     db.commit()
@@ -126,7 +126,7 @@ def test_retry_parse_creates_document_parse_job_run(monkeypatch):
 
     retried_document, job_run = DocumentService(db).retry_parse(document.id)
 
-    assert retried_document.status == "queued"
+    assert retried_document.status == "pending"
     assert job_run.kind == JOB_KIND_DOCUMENT_PARSE
     assert job_run.document_id == document.id
     assert job_run.status == "queued"

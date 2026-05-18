@@ -4,11 +4,8 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { formatChinaDateTime } from "@/lib/time";
 import { TaskRecord } from "@/lib/types";
-
-function formatDate(value?: string | null) {
-  return value ? new Date(value).toLocaleString() : "-";
-}
 
 function taskTypeLabel(task: TaskRecord) {
   if (task.task_kind === "document_parse") return "Document parse";
@@ -45,8 +42,8 @@ export function TaskTable({ tasks }: { tasks: TaskRecord[] }) {
               <TableCell>{task.file_name ?? task.filename ?? "-"}</TableCell>
               <TableCell><StatusBadge status={task.status} /></TableCell>
               <TableCell>{`${task.progress}%`}</TableCell>
-              <TableCell className="whitespace-nowrap text-muted-foreground">{formatDate(task.created_at)}</TableCell>
-              <TableCell className="whitespace-nowrap text-muted-foreground">{formatDate(task.updated_at)}</TableCell>
+              <TableCell className="whitespace-nowrap text-muted-foreground">{formatChinaDateTime(task.created_at)}</TableCell>
+              <TableCell className="whitespace-nowrap text-muted-foreground">{formatChinaDateTime(task.updated_at)}</TableCell>
               <TableCell className="max-w-[260px] text-red-600">{task.error ?? "-"}</TableCell>
               <TableCell>
                 {task.task_kind === "document_parse" && !task.document_id ? (

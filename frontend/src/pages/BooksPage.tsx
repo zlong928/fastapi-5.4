@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getBooks, uploadBook } from "@/lib/api";
+import { formatChinaDate } from "@/lib/time";
 
 export function BooksPage() {
   const queryClient = useQueryClient();
@@ -74,7 +75,7 @@ export function BooksPage() {
               <CardContent className="space-y-4">
                 <p className="line-clamp-1 text-sm text-slate-500">{book.original_filename}</p>
                 <div className="flex items-center justify-between gap-3 text-xs text-slate-500">
-                  <span>{book.last_opened_at ? `Last opened ${new Date(book.last_opened_at).toLocaleDateString()}` : `Added ${new Date(book.created_at).toLocaleDateString()}`}</span>
+                  <span>{book.last_opened_at ? `Last opened ${formatChinaDate(book.last_opened_at)}` : `Added ${formatChinaDate(book.created_at)}`}</span>
                   <Button asChild size="sm">
                     <Link to={`/books/${book.id}/reader`}>Open</Link>
                   </Button>

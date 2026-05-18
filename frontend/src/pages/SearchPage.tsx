@@ -124,7 +124,7 @@ export function SearchPage() {
             <div>
               <p className="text-lg font-medium text-slate-900">Search document chunks</p>
               <p className="mt-1 text-sm text-slate-500">
-                Enter a query above to search across all your parsed documents using vector similarity.
+                Enter a query above to search across all completed documents using vector similarity.
               </p>
             </div>
           </CardContent>
@@ -162,14 +162,18 @@ export function SearchPage() {
           </p>
           {data.items.map((hit: ChunkSearchHit) => (
             <Card
-              key={hit.chunk_id}
+              key={hit.id}
               className="cursor-pointer transition-shadow hover:shadow-md"
               onClick={() => goToDocument(hit.document_id)}
             >
               <CardContent className="p-5">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
-                    <p className="font-medium text-slate-900">{hit.document_title}</p>
+                    <p className="font-medium text-slate-900">{hit.filename || hit.document_title}</p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Chunk #{hit.chunk_index}
+                      {hit.hash ? ` · ${hit.hash.slice(0, 12)}` : ""}
+                    </p>
                     <p className="mt-1 text-sm text-slate-500 line-clamp-2">{hit.text}</p>
                   </div>
                   <div className="flex flex-col items-end gap-1 text-xs text-slate-500">

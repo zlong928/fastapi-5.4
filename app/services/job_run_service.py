@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
+from sqlalchemy.orm import aliased
 from sqlalchemy.orm import Session
 
+from app.core.time import app_now
 from app.constants.jobs import (
     ACTIVE_JOB_STATUSES,
     JOB_STATUS_CANCELLED,
@@ -15,7 +17,7 @@ from app.constants.jobs import (
     JOB_STATUS_RUNNING,
     JOB_STATUS_SUCCEEDED,
 )
-from app.models import JobRun
+from app.models import Document, JobRun
 from app.utils.json import json_dumps_or_none, merge_json_object
 
 
@@ -113,6 +115,58 @@ class JobRunService:
             .all()
         )
 
+    def search_jobs(
+        self,
+        *,
+        user_id: int,
+        page: int = 1,
+        size: int = 20,
+        query_text: str | None = None,
+        status_filter: str | None = None,
+        kind_filter: str | None = None,
+        document_id: int | None = None,
+        sort_by: str = "updated_at",
+        sort_order: str = "desc",
+        visible_only: bool = True,
+    ) -> tuple[list[JobRun], int]:
+        document_alias = aliased(Document)
+        query = self.db.query(JobRun).outerjoin(document_alias, document_alias.id == JobRun.document_id).filter(JobRun.user_id == user_id)
+        if visible_only:
+            query = query.filter(JobRun.is_visible.is_(True))
+        if status_filter:
+            query = query.filter(JobRun.status == status_filter)
+        if kind_filter:
+            query = query.filter(JobRun.kind == kind_filter)
+        if document_id is not None:
+            query = query.filter(JobRun.document_id == document_id)
+        if query_text:
+            pattern = f"%{query_text.strip()}%"
+            query = query.filter(
+                or_(
+                    JobRun.job_id.ilike(pattern),
+                    JobRun.title.ilike(pattern),
+                    JobRun.file_name.ilike(pattern),
+                    JobRun.error_message.ilike(pattern),
+                    document_alias.title.ilike(pattern),
+                    document_alias.original_filename.ilike(pattern),
+                )
+            )
+
+        total = query.count()
+        sort_columns = {
+            "created_at": JobRun.created_at,
+            "updated_at": JobRun.updated_at,
+            "finished_at": JobRun.finished_at,
+            "file_name": func.coalesce(JobRun.file_name, document_alias.original_filename),
+            "status": JobRun.status,
+            "kind": JobRun.kind,
+            "progress": JobRun.progress,
+        }
+        sort_column = sort_columns.get(sort_by, JobRun.updated_at)
+        ordering = sort_column.asc() if sort_order.lower() == "asc" else sort_column.desc()
+        jobs = query.order_by(ordering, JobRun.created_at.desc()).offset((page - 1) * size).limit(size).all()
+        return jobs, total
+
     def latest_document_job(self, document_id: int, kind: str | None = None) -> JobRun | None:
         query = self.db.query(JobRun).filter(JobRun.document_id == document_id)
         if kind:
@@ -207,4 +261,4 @@ class JobRunService:
 
     @staticmethod
     def _now() -> datetime:
-        return datetime.now(timezone.utc)
+        return app_now()

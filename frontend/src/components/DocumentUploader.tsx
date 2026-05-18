@@ -13,9 +13,27 @@ type UploadItem = {
   name: string;
   title?: string;
   status: "uploading" | "success" | "failed";
+  progress: number;
   document?: DocumentUploadResponse;
   error?: string;
 };
+
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const MAX_UPLOAD_MB = Math.round(MAX_UPLOAD_BYTES / 1024 / 1024);
+const SUPPORTED_EXTENSIONS = [".pdf", ".md", ".markdown", ".txt", ".png", ".jpg", ".jpeg", ".webp"];
+const SUPPORTED_MIME_TYPES = [
+  "application/pdf",
+  "text/markdown",
+  "text/plain",
+  "image/png",
+  "image/jpeg",
+  "image/webp"
+];
+
+function isSupportedFile(file: File) {
+  const lowerName = file.name.toLowerCase();
+  return SUPPORTED_MIME_TYPES.includes(file.type) || SUPPORTED_EXTENSIONS.some((extension) => lowerName.endsWith(extension));
+}
 
 export function DocumentUploader() {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -31,21 +49,25 @@ export function DocumentUploader() {
       const uploaded: UploadItem[] = [];
       for (const file of files) {
         const id = `${Date.now()}-${Math.random()}`;
-        setItems((current) => [...current, { id, name: file.name, status: "uploading" }]);
+        setItems((current) => [...current, { id, name: file.name, status: "uploading", progress: 0 }]);
         try {
-          const document = await uploadDocument(file, customTitle || undefined, processingMode);
-          uploaded.push({ id, name: file.name, status: "success", document });
+          const document = await uploadDocument(file, customTitle || undefined, processingMode, (progress) => {
+            setItems((current) =>
+              current.map((item) => (item.id === id ? { ...item, progress } : item))
+            );
+          });
+          uploaded.push({ id, name: file.name, status: "success", progress: 100, document });
           setItems((current) =>
             current.map((item) =>
-              item.id === id ? { id, name: file.name, status: "success", document } : item
+              item.id === id ? { id, name: file.name, status: "success", progress: 100, document } : item
             )
           );
         } catch (error) {
           const message = error instanceof Error ? error.message : "Upload failed";
-          uploaded.push({ id, name: file.name, status: "failed", error: message });
+          uploaded.push({ id, name: file.name, status: "failed", progress: 0, error: message });
           setItems((current) =>
             current.map((item) =>
-              item.id === id ? { id, name: file.name, status: "failed", error: message } : item
+              item.id === id ? { id, name: file.name, status: "failed", progress: item.progress, error: message } : item
             )
           );
         }
@@ -60,30 +82,45 @@ export function DocumentUploader() {
   });
 
   function uploadFiles(fileList: FileList | File[]) {
-    const supportedTypes = ["application/pdf", "text/markdown", "text/plain", "image/png", "image/jpeg", "image/webp"];
+    const rejected: UploadItem[] = [];
     const files = Array.from(fileList).filter((file) => {
-      const isSupportedType = supportedTypes.includes(file.type);
-      const isSupportedExt =
-        file.name.toLowerCase().endsWith(".pdf") ||
-        file.name.toLowerCase().endsWith(".md") ||
-        file.name.toLowerCase().endsWith(".txt") ||
-        file.name.toLowerCase().endsWith(".png") ||
-        file.name.toLowerCase().endsWith(".jpg") ||
-        file.name.toLowerCase().endsWith(".jpeg") ||
-        file.name.toLowerCase().endsWith(".webp");
-      return isSupportedType || isSupportedExt;
+      if (file.size > MAX_UPLOAD_BYTES) {
+        rejected.push({
+          id: `size-${file.name}-${Date.now()}`,
+          name: file.name,
+          status: "failed",
+          progress: 0,
+          error: `File exceeds the ${MAX_UPLOAD_MB} MB limit.`
+        });
+        return false;
+      }
+      if (!isSupportedFile(file)) {
+        rejected.push({
+          id: `type-${file.name}-${Date.now()}`,
+          name: file.name,
+          status: "failed",
+          progress: 0,
+          error: "Please choose PDF, Markdown, text, PNG, JPG, JPEG, or WebP files."
+        });
+        return false;
+      }
+      return true;
     });
 
     if (!files.length) {
-      setItems([
+      setItems(rejected.length ? rejected : [
         {
           id: `error-${Date.now()}`,
           name: "No supported files selected",
           status: "failed",
-          error: "Please choose PDF, Markdown (.md), text (.txt), or image files."
+          progress: 0,
+          error: "Please choose PDF, Markdown, text, PNG, JPG, JPEG, or WebP files."
         }
       ]);
       return;
+    }
+    if (rejected.length) {
+      setItems((current) => [...current, ...rejected]);
     }
     mutation.mutate(files);
   }
@@ -165,7 +202,7 @@ export function DocumentUploader() {
         <input
           ref={inputRef}
           type="file"
-          accept=".pdf,.md,.txt,.png,.jpg,.jpeg,.webp,application/pdf,text/markdown,text/plain,image/png,image/jpeg,image/webp"
+          accept=".pdf,.md,.markdown,.txt,.png,.jpg,.jpeg,.webp,application/pdf,text/markdown,text/plain,image/png,image/jpeg,image/webp"
           multiple
           disabled={mutation.isPending}
           className="hidden"
@@ -174,7 +211,7 @@ export function DocumentUploader() {
         <FileUp className="mx-auto h-10 w-10 text-slate-500" />
         <h2 className="mt-4 text-lg font-semibold">Drop files here</h2>
         <p className="mt-2 text-sm text-slate-500">
-          Supports PDF, Markdown (.md), text (.txt), and images
+          Supports PDF, Markdown, text, PNG, JPG, JPEG, and WebP up to {MAX_UPLOAD_MB} MB each
         </p>
         <Button
           type="button"
@@ -235,8 +272,27 @@ export function DocumentUploader() {
                           <span className="ml-2">Mode: {selectedMode?.label}</span>
                         </p>
                       )}
+                      {item.status === "success" && (
+                        <div className="mt-2">
+                          <div className="flex items-center justify-between text-xs text-slate-500">
+                            <span>Upload complete</span>
+                            <span>100%</span>
+                          </div>
+                          <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+                            <div className="h-full rounded-full bg-emerald-600" style={{ width: "100%" }} />
+                          </div>
+                        </div>
+                      )}
                       {item.status === "uploading" && (
-                        <p className="text-sm text-slate-500">Uploading...</p>
+                        <div className="mt-2">
+                          <div className="flex items-center justify-between text-sm text-slate-500">
+                            <span>Uploading...</span>
+                            <span>{item.progress}%</span>
+                          </div>
+                          <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+                            <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${item.progress}%` }} />
+                          </div>
+                        </div>
                       )}
                     </div>
                     {item.status === "success" && (

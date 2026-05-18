@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.time import app_now
 from app.core.config import DATA_DIR
 from app.db.session import get_db
 from app.models import Book, BookProgress, User
@@ -74,7 +75,7 @@ async def upload_book(
 ) -> BookUploadResponse:
     title = _validate_epub_filename(file.filename)
     upload_dir = _book_upload_dir()
-    temp_path = upload_dir / f".upload-{datetime.now(timezone.utc).timestamp()}.epub"
+    temp_path = upload_dir / f".upload-{app_now().timestamp()}.epub"
     digest = hashlib.sha256()
     size = 0
 
@@ -180,7 +181,7 @@ def save_book_progress(
     db: Session = Depends(get_db),
 ) -> BookProgress:
     book = _get_book_for_user(db, book_id, current_user)
-    now = datetime.now(timezone.utc)
+    now = app_now()
     progress = _get_progress(db, book_id, current_user.id)
     if progress is None:
         progress = BookProgress(book_id=book_id, user_id=current_user.id)

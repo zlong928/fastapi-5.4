@@ -14,6 +14,7 @@ from app.services.document_parse_pipeline import DocumentParsePipeline
 from app.services import document_parser
 from app.services.document_parser import DocumentParserService, ParsedDocument, ParsedElement, ParsedPage, PdfPageProfile
 from app.services.file_storage import FileStorageService
+from app.core.config import EMBEDDING_DIM
 
 
 class StubFileStorage:
@@ -25,7 +26,7 @@ class StubEmbeddingProvider:
     model_name = "stub"
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        return [[0.0] for _ in texts]
+        return [[0.0] * EMBEDDING_DIM for _ in texts]
 
 
 class StubOcrService:
@@ -243,7 +244,7 @@ def create_pdf_document(db, storage, user, *, filename: str = "paper.pdf") -> Do
         file_size=13,
         mime_type="application/pdf",
         source_type="pdf",
-        status="uploaded",
+        status="pending",
     )
     db.add(document)
     db.commit()
@@ -388,10 +389,9 @@ def test_ocr_failure_records_warning_without_silent_loss(db_session_factory, db,
     document = create_pdf_document(db, storage, user)
     parsed_document = parsed_pdf([ParsedPage(page_number=1, profile=profile(1, "", image_count=1, needs_ocr=True))])
 
-    run_stubbed_pipeline(db_session_factory, storage, document, parsed_document, StubOcrService(failures={1}))
+    result = run_stubbed_pipeline(db_session_factory, storage, document, parsed_document, StubOcrService(failures={1}))
 
     db.refresh(document)
-    quality = json.loads(document.parse_quality_json)
-    assert document.status == "parsed"
-    assert any("ocr_failed" in warning for warning in quality["warnings"])
-    assert quality["pages_ocr_used"] == 0
+    assert result.status == "failed"
+    assert document.status == "failed"
+    assert document.error_message == "文件内容为空"

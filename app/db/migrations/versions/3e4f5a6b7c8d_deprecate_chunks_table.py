@@ -5,10 +5,12 @@ Revises: 2d3e4f5a6b7c
 Create Date: 2026-05-13 00:00:00.000000
 
 """
+from datetime import datetime, timezone
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.orm import Session
 
 
 revision: str = "3e4f5a6b7c8d"
@@ -31,40 +33,35 @@ def upgrade() -> None:
         token_column = "token_count" if "token_count" in chunk_columns else None
 
         if text_column is not None:
-            token_select = f"c.{token_column}" if token_column is not None else "NULL"
-            embedding_select = f"c.{embedding_column}" if embedding_column is not None else "NULL"
-            op.execute(
-                sa.text(
-                    f"""
-                    INSERT INTO document_chunks (
-                        document_id,
-                        chunk_index,
-                        chunk_type,
-                        text,
-                        cleaned_text,
-                        token_count,
-                        embedding_json,
-                        created_at
-                    )
-                    SELECT
-                        c.document_id,
-                        c.chunk_index,
-                        'body',
-                        c.{text_column},
-                        c.{text_column},
-                        {token_select},
-                        {embedding_select},
-                        COALESCE(c.created_at, CURRENT_TIMESTAMP)
-                    FROM chunks c
-                    WHERE NOT EXISTS (
-                        SELECT 1
-                        FROM document_chunks dc
-                        WHERE dc.document_id = c.document_id
-                          AND dc.chunk_index = c.chunk_index
-                    )
-                    """
+            session = Session(bind=bind)
+            chunks = sa.Table("chunks", sa.MetaData(), autoload_with=bind)
+            document_chunks = sa.Table("document_chunks", sa.MetaData(), autoload_with=bind)
+            existing_pairs = {
+                (row.document_id, row.chunk_index)
+                for row in session.query(document_chunks.c.document_id, document_chunks.c.chunk_index).all()
+            }
+            rows_to_insert = []
+            for chunk in session.query(*chunks.c).all():
+                if (chunk.document_id, chunk.chunk_index) in existing_pairs:
+                    continue
+                rows_to_insert.append(
+                    {
+                        "document_id": chunk.document_id,
+                        "chunk_index": chunk.chunk_index,
+                        "chunk_type": "body",
+                        "text": getattr(chunk, text_column),
+                        "cleaned_text": getattr(chunk, text_column),
+                        "token_count": getattr(chunk, token_column) if token_column is not None else None,
+                        "embedding_json": (
+                            getattr(chunk, embedding_column)
+                            if embedding_column is not None and isinstance(getattr(chunk, embedding_column), str)
+                            else None
+                        ),
+                        "created_at": getattr(chunk, "created_at", None) or datetime.now(timezone.utc),
+                    }
                 )
-            )
+            if rows_to_insert:
+                op.bulk_insert(document_chunks, rows_to_insert)
 
     index_names = {index["name"] for index in inspector.get_indexes("chunks")}
     if op.f("ix_chunks_document_id") in index_names:

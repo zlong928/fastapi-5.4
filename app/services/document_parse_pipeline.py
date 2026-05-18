@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+import hashlib
+import time
+from uuid import uuid4
 
-from sqlalchemy import delete
+from app.core.config import DOCUMENT_PARSE_TIMEOUT_SECONDS
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.time import app_now
 from app.db.session import SessionLocal
 from app.constants.jobs import JOB_KIND_DOCUMENT_PARSE, SUBJECT_TYPE_DOCUMENT
 from app.models import Document, DocumentAsset, DocumentChunk, DocumentEvent, JobRun
@@ -14,10 +18,29 @@ from app.services.document_embedding_service import EmbeddingProvider, DocumentE
 from app.services.document_kg_service import DocumentKgService
 from app.services.document_parser import DocumentParserService, ParsedDocument, ParsedElement, ParsedPage
 from app.services.document_processing_modes import ProcessingStrategy, select_parser_strategy
+from app.services.document_input import build_document_input, DocumentInput
 from app.services.job_run_service import JobRunService
 from app.services.file_storage import FileStorageService
 from app.services.ocr_service import OcrService
 from app.services.text_cleaner import TextCleaner
+
+STATUS_PROCESSING = "processing"
+STATUS_DONE = "done"
+STATUS_FAILED = "failed"
+PROCESSING_ERROR_EMPTY_CONTENT = "文件内容为空"
+PROCESSING_ERROR_IMAGE_UNREADABLE = "图片文件无法打开"
+PROCESSING_ERROR_PDF_DAMAGED = "PDF 文件损坏，无法解析"
+PROCESSING_ERROR_TIMEOUT = "文件解析超时"
+PROCESSING_ERROR_UNSUPPORTED = "文件类型不支持"
+PROCESSING_ERROR_SOURCE_FILE_MISSING = "源文件不存在，无法解析"
+PROCESSING_ERROR_SOURCE_PATH_INVALID = "源文件路径无效，无法解析"
+
+
+class DocumentProcessingFailure(RuntimeError):
+    def __init__(self, reason: str, *, error_type: str | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.error_type = error_type or self.__class__.__name__
 
 
 class DocumentParsePipeline:
@@ -93,8 +116,9 @@ class DocumentParsePipeline:
             document.processing_strategy = strategy.name
             job_service.mark_running(job_run, worker_name="document_parse_pipeline")
             job_service.update_progress(job_run, 10, metadata=self._processing_metadata(document, strategy))
-            document.status = "processing"
+            document.status = STATUS_PROCESSING
             document.error_message = None
+            document.fail_reason = None
             self._log_event(
                 db,
                 document,
@@ -106,8 +130,17 @@ class DocumentParsePipeline:
             db.refresh(job_run)
 
         try:
+            deadline = time.monotonic() + DOCUMENT_PARSE_TIMEOUT_SECONDS
             parsed_document, ocr_assets, strategy_metadata = self._extract_document(document_id)
+            self._raise_if_timeout(deadline)
             cleaned = self.cleaner.clean_pages(parsed_document.text_pages)
+            document_input = self._build_document_input(document_id, cleaned.cleaned_text)
+            if not document_input.page_content.strip():
+                raise DocumentProcessingFailure(PROCESSING_ERROR_EMPTY_CONTENT, error_type="empty_content")
+            self._raise_if_timeout(deadline)
+            content_hash = self._content_hash(document_input.page_content)
+            collection_name = self._collection_name(document_id, content_hash)
+            content_summary = self._content_summary(document_input.page_content)
             if parsed_document.source_type == "pdf":
                 chunks = self._chunk_parsed_pdf(parsed_document)
             else:
@@ -116,6 +149,7 @@ class DocumentParsePipeline:
                     captions=cleaned.captions,
                     references_text=cleaned.references_text,
                 )
+            self._raise_if_timeout(deadline)
 
             with self.session_factory() as db:
                 document = db.get(Document, document_id)
@@ -125,18 +159,42 @@ class DocumentParsePipeline:
                 if document.status == "deleted":
                     return document
                 job_service = JobRunService(db)
+                duplicate = db.scalars(
+                    select(Document).where(
+                        Document.user_id == document.user_id,
+                        Document.id != document.id,
+                        Document.content_hash == content_hash,
+                        Document.status != "deleted",
+                    )
+                ).first()
+                if duplicate is not None:
+                    raise ValueError(
+                        f"Duplicate document content: matches document {duplicate.id} ({duplicate.original_filename})."
+                    )
                 job_service.update_progress(job_run, 70, metadata={"stage": "saving_parse_outputs"})
 
-                db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
-                db.execute(delete(DocumentAsset).where(DocumentAsset.document_id == document.id))
+                (
+                    db.query(DocumentChunk)
+                    .filter(DocumentChunk.document_id == document.id)
+                    .delete(synchronize_session=False)
+                )
+                (
+                    db.query(DocumentAsset)
+                    .filter(DocumentAsset.document_id == document.id)
+                    .delete(synchronize_session=False)
+                )
                 document.parsed_text = cleaned.raw_text
                 document.cleaned_text = cleaned.cleaned_text
                 document.references_text = cleaned.references_text
                 quality = {**cleaned.quality, **strategy_metadata, **self._quality_metadata(parsed_document)}
                 document.processing_strategy = str(strategy_metadata["processing_strategy"])
                 document.parse_quality_json = json.dumps(quality, ensure_ascii=False)
-                document.status = "parsed"
-                document.parsed_at = datetime.now(timezone.utc)
+                document.status = STATUS_PROCESSING
+                document.parsed_at = app_now()
+                document.collection_name = collection_name
+                document.content_hash = content_hash
+                document.content_summary = content_summary
+                document.chunk_count = len(chunks)
                 document.error_message = None
                 self._log_event(
                     db,
@@ -147,8 +205,17 @@ class DocumentParsePipeline:
                 )
 
                 for chunk in chunks:
+                    metadata = {
+                        **chunk.metadata,
+                        **document_input.metadata,
+                        "chunk_source": chunk.metadata.get("source"),
+                        "chunk_index": chunk.chunk_index,
+                        "start_index": chunk.char_start,
+                        "hash": content_hash,
+                    }
                     db.add(
                         DocumentChunk(
+                            vector_id=str(uuid4()),
                             document_id=document.id,
                             parse_job_id=job_run.id,
                             chunk_index=chunk.chunk_index,
@@ -160,7 +227,7 @@ class DocumentParsePipeline:
                             char_start=chunk.char_start,
                             char_end=chunk.char_end,
                             token_count=chunk.token_count,
-                            metadata_json=json.dumps(chunk.metadata, ensure_ascii=False) if chunk.metadata else None,
+                            metadata_json=json.dumps(metadata, ensure_ascii=False),
                         )
                     )
                 for asset in ocr_assets:
@@ -176,21 +243,12 @@ class DocumentParsePipeline:
                         )
                     )
 
-                job_service.mark_succeeded(
-                    job_run,
-                    output_data={
-                        "chunk_count": len(chunks),
-                        "asset_count": len(ocr_assets),
-                        "processing_mode": document.processing_mode,
-                        "detected_source_type": document.source_type,
-                        **strategy_metadata,
-                    },
-                )
+                job_service.update_progress(job_run, 85, metadata={"stage": "embedding_chunks"})
                 self._log_event(
                     db,
                     document,
-                    "parsed",
-                    "解析成功",
+                    "chunks_saved",
+                    "切块保存完成，开始 embedding",
                     metadata={
                         "job_run_id": job_run.id,
                         "job_id": job_run.job_id,
@@ -201,41 +259,64 @@ class DocumentParsePipeline:
                 db.commit()
                 db.refresh(document)
                 try:
-                    DocumentEmbeddingService(
+                    embedded_count = DocumentEmbeddingService(
                         session_factory=self.session_factory,
                         embedding_provider=self.embedding_provider,
                     ).embed_document(document.id)
+                    self._raise_if_timeout(deadline)
+                    if embedded_count != len(chunks):
+                        raise RuntimeError(f"Expected {len(chunks)} embedded chunks, got {embedded_count}.")
                 except Exception as exc:
-                    self._record_warning(document.id, "embedding_failed", exc)
+                    self._record_processing_failure(document.id, job_id, "embedding_failed", exc)
+                    return self._get_document(document_id)
+                with self.session_factory() as status_db:
+                    completed_document = status_db.get(Document, document_id)
+                    completed_job = status_db.get(JobRun, job_id) if job_id is not None else None
+                    if completed_document is None:
+                        raise ValueError(f"Document not found: {document_id}")
+                    completed_document.status = STATUS_DONE
+                    completed_document.error_message = None
+                    completed_document.fail_reason = None
+                    if completed_job is not None:
+                        JobRunService(status_db).mark_succeeded(
+                            completed_job,
+                            output_data={
+                                "chunk_count": len(chunks),
+                                "asset_count": len(ocr_assets),
+                                "processing_mode": completed_document.processing_mode,
+                                "detected_source_type": completed_document.source_type,
+                                "collection_name": completed_document.collection_name,
+                                "hash": completed_document.content_hash,
+                                **strategy_metadata,
+                            },
+                        )
+                    self._log_event(
+                        status_db,
+                        completed_document,
+                        "parse_success",
+                        "处理完成",
+                        metadata={
+                            "job_run_id": completed_job.id if completed_job else None,
+                            "job_id": completed_job.job_id if completed_job else None,
+                            "chunk_count": len(chunks),
+                            "collection_name": completed_document.collection_name,
+                            "hash": completed_document.content_hash,
+                        },
+                    )
+                    status_db.commit()
                 try:
                     DocumentKgService(session_factory=self.session_factory).extract_document(document.id)
                 except Exception as exc:
                     self._record_warning(document.id, "kg_failed", exc)
-                db.refresh(document)
-                return document
+                with self.session_factory() as final_db:
+                    final_document = final_db.get(Document, document_id)
+                    if final_document is None:
+                        raise ValueError(f"Document not found: {document_id}")
+                    return final_document
 
         except Exception as exc:
-            with self.session_factory() as db:
-                document = db.get(Document, document_id)
-                job_run = db.get(JobRun, job_id) if job_id is not None else None
-                if document is not None:
-                    document.status = "failed"
-                    document.error_message = str(exc)
-                    self._log_event(
-                        db,
-                        document,
-                        "failed",
-                        "解析失败",
-                        metadata={"error_type": type(exc).__name__, "message": str(exc)[:500]},
-                    )
-                if job_run is not None:
-                    JobRunService(db).mark_failed(
-                        job_run,
-                        str(exc),
-                        metadata={"error_type": type(exc).__name__, "message": str(exc)[:500]},
-                    )
-                db.commit()
-            raise
+            self._record_processing_failure(document_id, job_id, "parse_failed", exc)
+            return self._get_document(document_id)
 
     @staticmethod
     def select_parser_strategy(processing_mode: str, detected_source_type: str) -> ProcessingStrategy:
@@ -246,7 +327,18 @@ class DocumentParsePipeline:
             document = db.get(Document, document_id)
             if document is None:
                 raise ValueError(f"Document not found: {document_id}")
-            file_path = self.file_storage.get_file_path(document.original_file_path)
+            try:
+                file_path = self.file_storage.get_file_path(document.original_file_path)
+            except ValueError as exc:
+                raise DocumentProcessingFailure(
+                    PROCESSING_ERROR_SOURCE_PATH_INVALID,
+                    error_type="invalid_source_path",
+                ) from exc
+            if not file_path.is_file():
+                raise DocumentProcessingFailure(
+                    PROCESSING_ERROR_SOURCE_FILE_MISSING,
+                    error_type="missing_source_file",
+                )
             source_type = document.source_type
             mime_type = document.mime_type
             relative_path = document.original_file_path
@@ -261,7 +353,12 @@ class DocumentParsePipeline:
 
         if source_type == "pdf":
             if strategy.ocr_first:
-                ocr_pages = self.ocr_service.ocr_pdf_pages(file_path)
+                try:
+                    ocr_pages = self.ocr_service.ocr_pdf_pages(file_path)
+                except TimeoutError:
+                    raise
+                except Exception as exc:
+                    raise DocumentProcessingFailure(PROCESSING_ERROR_PDF_DAMAGED, error_type="pdf_parse_failed") from exc
                 metadata["used_ocr"] = True
                 parsed_document = self._parsed_document_from_ocr_pages(ocr_pages, source_type="pdf")
                 return parsed_document, [
@@ -274,7 +371,12 @@ class DocumentParsePipeline:
                     }
                     for index, page_text in enumerate(ocr_pages)
                 ], metadata
-            parsed_document = self.parser.parse_pdf_document(file_path)
+            try:
+                parsed_document = self.parser.parse_pdf_document(file_path)
+            except TimeoutError:
+                raise
+            except Exception as exc:
+                raise DocumentProcessingFailure(PROCESSING_ERROR_PDF_DAMAGED, error_type="pdf_parse_failed") from exc
             ocr_assets: list[dict[str, str | int | None]] = []
             for page in parsed_document.pages:
                 if not page.profile or not page.profile.needs_ocr:
@@ -324,7 +426,12 @@ class DocumentParsePipeline:
                     metadata.setdefault("warnings", []).append(warning)
             return parsed_document, ocr_assets, metadata
         if source_type == "image":
-            text = self.ocr_service.ocr_image(file_path)
+            try:
+                text = self.ocr_service.ocr_image(file_path)
+            except TimeoutError:
+                raise
+            except Exception as exc:
+                raise DocumentProcessingFailure(PROCESSING_ERROR_IMAGE_UNREADABLE, error_type="image_parse_failed") from exc
             metadata["used_ocr"] = True
             parsed_document = ParsedDocument(
                 pages=[
@@ -353,7 +460,17 @@ class DocumentParsePipeline:
                     "ocr_text": text,
                 }
             ], metadata
-        text = self.parser.parse(file_path, source_type)
+        try:
+            text = self.parser.parse(file_path, source_type)
+        except TimeoutError:
+            raise
+        except ValueError as exc:
+            message = str(exc).lower()
+            if source_type not in {"txt", "text", "markdown", "md"} or "unsupported file type" in message:
+                raise DocumentProcessingFailure(PROCESSING_ERROR_UNSUPPORTED, error_type="unsupported_file_type") from exc
+            raise
+        if not text.strip():
+            raise DocumentProcessingFailure(PROCESSING_ERROR_EMPTY_CONTENT, error_type="empty_content")
         return ParsedDocument(
             pages=[
                 ParsedPage(
@@ -422,6 +539,34 @@ class DocumentParsePipeline:
                 )
             )
         return ParsedDocument(pages=parsed_pages, source_type=source_type)
+
+    def _build_document_input(self, document_id: int, page_content: str) -> DocumentInput:
+        with self.session_factory() as db:
+            document = db.get(Document, document_id)
+            if document is None:
+                raise ValueError(f"Document not found: {document_id}")
+            return build_document_input(
+                page_content=page_content,
+                filename=document.original_filename,
+                file_id=document.id,
+                source=document.original_file_path,
+                content_type=document.mime_type,
+                created_by=document.user_id,
+                extra_metadata={
+                    "source_type": document.source_type,
+                    "processing_mode": document.processing_mode,
+                },
+            )
+
+    def _content_hash(self, text: str) -> str:
+        normalized = "\n".join(line.rstrip() for line in text.strip().splitlines())
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    def _collection_name(self, document_id: int, content_hash: str) -> str:
+        return f"document_{document_id}_{content_hash[:12]}"
+
+    def _content_summary(self, text: str, limit: int = 500) -> str:
+        return " ".join(text.split())[:limit]
 
     def _quality_metadata(self, parsed_document: ParsedDocument) -> dict:
         profiles = [page.profile for page in parsed_document.pages if page.profile is not None]
@@ -496,6 +641,30 @@ class DocumentParsePipeline:
             **strategy.metadata(),
         }
 
+    def _get_document(self, document_id: int) -> Document:
+        with self.session_factory() as db:
+            document = db.get(Document, document_id)
+            if document is None:
+                raise ValueError(f"Document not found: {document_id}")
+            return document
+
+    def _raise_if_timeout(self, deadline: float) -> None:
+        if time.monotonic() > deadline:
+            raise TimeoutError(PROCESSING_ERROR_TIMEOUT)
+
+    def _failure_reason(self, exc: Exception) -> tuple[str, str]:
+        if isinstance(exc, DocumentProcessingFailure):
+            return exc.reason, exc.error_type
+        if isinstance(exc, TimeoutError):
+            return PROCESSING_ERROR_TIMEOUT, "parse_timeout"
+        message = str(exc)
+        normalized = message.lower()
+        if "extracted document content is empty" in normalized or "file is empty" in normalized:
+            return PROCESSING_ERROR_EMPTY_CONTENT, type(exc).__name__
+        if "unsupported file type" in normalized:
+            return PROCESSING_ERROR_UNSUPPORTED, type(exc).__name__
+        return message or "文件处理失败", type(exc).__name__
+
     def _log_event(
         self,
         db: Session,
@@ -526,4 +695,46 @@ class DocumentParsePipeline:
                 str(exc)[:500],
                 metadata={"error_type": type(exc).__name__},
             )
+            db.commit()
+
+    def _record_processing_failure(
+        self,
+        document_id: int,
+        job_run_id: int | None,
+        event_type: str,
+        exc: Exception,
+    ) -> None:
+        with self.session_factory() as db:
+            reason, error_type = self._failure_reason(exc)
+            document = db.get(Document, document_id)
+            job_run = db.get(JobRun, job_run_id) if job_run_id is not None else None
+            if document is not None:
+                (
+                    db.query(DocumentChunk)
+                    .filter(DocumentChunk.document_id == document.id)
+                    .delete(synchronize_session=False)
+                )
+                (
+                    db.query(DocumentAsset)
+                    .filter(DocumentAsset.document_id == document.id)
+                    .delete(synchronize_session=False)
+                )
+                document.status = STATUS_FAILED
+                document.error_message = reason
+                document.fail_reason = reason
+                document.parsed_at = None
+                document.chunk_count = 0
+                self._log_event(
+                    db,
+                    document,
+                    event_type,
+                    reason[:500],
+                    metadata={"error_type": error_type},
+                )
+            if job_run is not None:
+                JobRunService(db).mark_failed(
+                    job_run,
+                    reason,
+                    metadata={"error_type": error_type, "stage": event_type},
+                )
             db.commit()

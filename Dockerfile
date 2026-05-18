@@ -3,7 +3,10 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    TZ=Asia/Shanghai \
+    EMBEDDING_DIM=768 \
+    VECTOR_DIMENSION=768
 
 WORKDIR /app
 
@@ -14,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     git \
+    tzdata \
     poppler-utils \
     tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*

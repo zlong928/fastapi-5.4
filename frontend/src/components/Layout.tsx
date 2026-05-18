@@ -1,4 +1,4 @@
-import { Activity, Library, LayoutDashboard, ListChecks, LogOut, BookOpen, Search } from "lucide-react";
+import { Activity, FileUp, LayoutDashboard, ListChecks, LogOut, BookOpen, Search, Settings, Tag } from "lucide-react";
 import { ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
@@ -7,9 +7,11 @@ import { Button } from "@/components/ui/button";
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/documents", label: "Documents", icon: BookOpen },
+  { href: "/upload", label: "Upload", icon: FileUp },
+  { href: "/tags", label: "Tags", icon: Tag },
   { href: "/search", label: "Search", icon: Search },
-  { href: "/books", label: "Books", icon: Library },
-  { href: "/tasks", label: "Task Center", icon: ListChecks }
+  { href: "/tasks", label: "Tasks", icon: ListChecks },
+  { href: "/settings", label: "Settings", icon: Settings }
 ];
 
 export function Layout({ children }: { children: ReactNode }) {
@@ -29,7 +31,7 @@ export function Layout({ children }: { children: ReactNode }) {
             <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900 text-white">
               <Activity className="h-5 w-5" />
             </span>
-            File Processing
+            Second Brain
           </Link>
           <nav className="flex items-center gap-1">
             {user ? navItems.map((item) => (

@@ -1,5 +1,10 @@
 """Fallback embedding provider that falls back to a simple hash‑based embedding."""
+import hashlib
+import math
+
 from typing import List
+
+from app.core.config import EMBEDDING_DIM
 
 
 class HashEmbeddingProvider:
@@ -14,7 +19,7 @@ class HashEmbeddingProvider:
         """Return a list of dense vectors (one per input text)."""
         return [self._embed_one(text) for text in texts]
 
-    def _embed_one(self, text: str, dimensions: int = 32) -> List[float]:
+    def _embed_one(self, text: str, dimensions: int = EMBEDDING_DIM) -> List[float]:
         """
         Very simple embedding: hash each token and spread the hash
         across ``dimensions`` slots, then L2‑normalise.

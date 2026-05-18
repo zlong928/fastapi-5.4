@@ -21,13 +21,22 @@ export interface TaskRecord {
   result?: unknown;
 }
 
-export interface UploadResponse {
-  task_id: string;
-  filename?: string;
-  file_name?: string;
-  status?: TaskStatus;
-  tasks?: TaskRecord[];
-  queue_size?: number;
+export interface TaskListParams {
+  page?: number;
+  size?: number;
+  q?: string;
+  status?: string;
+  kind?: string;
+  document_id?: number;
+  sort_by?: "created_at" | "updated_at" | "finished_at" | "file_name" | "status" | "kind" | "progress";
+  sort_order?: "asc" | "desc";
+}
+
+export interface PaginatedTasksResponse {
+  total: number;
+  page: number;
+  size: number;
+  items: TaskRecord[];
 }
 
 export interface HealthResponse {
@@ -111,7 +120,7 @@ export interface TokenResponse {
   token_type: string;
 }
 
-export type DocumentStatus = "uploaded" | "queued" | "processing" | "parsed" | "failed" | "deleted";
+export type DocumentStatus = "pending" | "processing" | "done" | "completed" | "failed" | "deleted";
 export type ParseJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "skipped";
 export type DocumentSourceType = "pdf" | "markdown" | "txt" | "image";
 export type DocumentProcessingMode =
@@ -187,6 +196,46 @@ export interface DocumentEventRead {
   created_at: string;
 }
 
+export interface PaginatedDocumentEvents {
+  total: number;
+  page: number;
+  size: number;
+  items: DocumentEventRead[];
+}
+
+export interface TagRead {
+  id: number;
+  user_id: number;
+  name: string;
+  color?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TagCreate {
+  name: string;
+  color?: string | null;
+}
+
+export interface TagUpdate {
+  name?: string;
+  color?: string | null;
+}
+
+export interface CollectionRead {
+  id: number;
+  user_id: number;
+  name: string;
+  description?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CollectionCreate {
+  name: string;
+  description?: string | null;
+}
+
 export interface DocumentRead {
   id: number;
   user_id: number;
@@ -204,13 +253,21 @@ export interface DocumentRead {
   parse_quality_json?: string | null;
   references_text?: string | null;
   status: DocumentStatus;
+  processing_status?: DocumentStatus;
   error_message?: string | null;
+  fail_reason?: string | null;
+  processing_error?: string | null;
   created_at: string;
   updated_at: string;
   uploaded_at: string;
   parsed_at?: string | null;
   latest_parse_job?: ParseJobRead | null;
+  collection_name?: string | null;
+  content_hash?: string | null;
+  content_summary?: string | null;
+  chunk_count: number;
   events: DocumentEventRead[];
+  tags: TagRead[];
 }
 
 export interface ParseJobRead {
@@ -237,15 +294,26 @@ export interface DocumentListItem {
   processing_mode: DocumentProcessingMode;
   processing_strategy?: string | null;
   status: DocumentStatus;
+  processing_status?: DocumentStatus;
   error_message?: string | null;
+  fail_reason?: string | null;
+  processing_error?: string | null;
   latest_parse_job_status?: ParseJobStatus | string | null;
+  collection_name?: string | null;
+  content_hash?: string | null;
+  content_summary?: string | null;
+  chunk_count: number;
   created_at: string;
+  updated_at: string;
   uploaded_at: string;
   parsed_at?: string | null;
+  tags: TagRead[];
 }
 
 export interface DocumentListResponse {
   total: number;
+  page: number;
+  size: number;
   items: DocumentListItem[];
 }
 
@@ -294,12 +362,18 @@ export interface DocumentKgResponse {
 
 export interface ChunkSearchHit {
   chunk_id: number;
+  id: string;
   document_id: number;
   document_title: string;
+  filename: string;
   chunk_index: number;
   chunk_type: string;
   text: string;
   score: number;
+  metadata: Record<string, unknown>;
+  source?: string | null;
+  start_index?: number | null;
+  hash?: string | null;
   page_start?: number | null;
   page_end?: number | null;
 }
@@ -324,6 +398,10 @@ export interface DocumentChunk {
   page_start?: number | null;
   page_end?: number | null;
   metadata_json?: string | null;
+  vector_id?: string | null;
+  embedding_model?: string | null;
+  embedding_dim?: number | null;
+  embedded_at?: string | null;
   created_at: string;
   [key: string]: unknown;
 }
@@ -331,6 +409,7 @@ export interface DocumentChunk {
 export interface DocumentUploadResponse {
   document_id: number;
   status: DocumentStatus;
+  processing_status?: DocumentStatus;
   parse_job_id: number;
   processing_mode: DocumentProcessingMode;
   message: string;
@@ -344,4 +423,39 @@ export interface DocumentBatchUploadItem {
   status?: DocumentStatus | null;
   processing_mode?: DocumentProcessingMode | null;
   error?: string | null;
+}
+
+export interface DocumentListParams {
+  page?: number;
+  size?: number;
+  keyword?: string;
+  tag_id?: number;
+  file_type?: "pdf" | "markdown" | "txt" | "";
+  status?: DocumentStatus | "";
+  start_date?: string;
+  end_date?: string;
+  sort_by?: "created_at" | "uploaded_at" | "parsed_at" | "title" | "file_size" | "status" | "source_type";
+  sort_order?: "asc" | "desc";
+}
+
+export interface BatchDeleteResponse {
+  success_ids: number[];
+  failed_ids: number[];
+  errors: Record<string, string>;
+}
+
+export interface BatchTagResponse {
+  document_ids: number[];
+  tag_ids: number[];
+  assigned_count: number;
+}
+
+export interface DashboardStatsResponse {
+  total_documents: number;
+  done_documents: number;
+  failed_documents: number;
+  parse_success_rate: number;
+  recent_7_days_documents: number;
+  file_type_distribution: Array<{ file_type: string; count: number; ratio: number }>;
+  status_distribution: Array<{ status: string; count: number }>;
 }

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.session import SessionLocal
@@ -62,8 +62,16 @@ class DocumentKgService:
                 .where(DocumentChunk.document_id == document_id)
                 .order_by(DocumentChunk.chunk_index)
             ).all()
-            db.execute(delete(KgRelation).where(KgRelation.document_id == document_id))
-            db.execute(delete(KgEntity).where(KgEntity.document_id == document_id))
+            (
+                db.query(KgRelation)
+                .filter(KgRelation.document_id == document_id)
+                .delete(synchronize_session=False)
+            )
+            (
+                db.query(KgEntity)
+                .filter(KgEntity.document_id == document_id)
+                .delete(synchronize_session=False)
+            )
 
             entities_by_name: dict[str, KgEntity] = {}
             relation_count = 0

@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from app.core.config import CHUNK_MIN_SIZE_TARGET, CHUNK_OVERLAP, CHUNK_SIZE, TEXT_SPLITTER
+
 
 @dataclass(slots=True)
 class ChunkInput:
@@ -36,10 +38,15 @@ class ChunkingService:
         cleaned_text: str,
         captions: list[str],
         references_text: str | None,
-        target_tokens: int = 500,
-        max_tokens: int = 800,
-        overlap_tokens: int = 80,
+        target_tokens: int | None = None,
+        max_tokens: int | None = None,
+        overlap_tokens: int | None = None,
+        min_size_target: int | None = None,
     ) -> list[ChunkInput]:
+        target_tokens = target_tokens or CHUNK_SIZE
+        max_tokens = max_tokens or max(target_tokens, int(target_tokens * 1.6))
+        overlap_tokens = CHUNK_OVERLAP if overlap_tokens is None else overlap_tokens
+        min_size_target = CHUNK_MIN_SIZE_TARGET if min_size_target is None else min_size_target
         chunks = self._chunk_body(cleaned_text, target_tokens, max_tokens, overlap_tokens)
         for caption in captions:
             chunks.append(self._build_caption_chunk(caption, len(chunks)))
@@ -53,7 +60,7 @@ class ChunkingService:
                         metadata={"source": "reference", "reference_index": reference_index},
                     )
                 )
-        return chunks
+        return self._merge_small_chunks(chunks, min_size_target, max_tokens)
 
     def build_ocr_chunk(
         self,
@@ -78,10 +85,13 @@ class ChunkingService:
         start_index: int = 0,
         page_number: int | None = None,
         confidence: float | None = None,
-        target_tokens: int = 500,
-        max_tokens: int = 800,
-        overlap_tokens: int = 80,
+        target_tokens: int | None = None,
+        max_tokens: int | None = None,
+        overlap_tokens: int | None = None,
     ) -> list[ChunkInput]:
+        target_tokens = target_tokens or CHUNK_SIZE
+        max_tokens = max_tokens or max(target_tokens, int(target_tokens * 1.6))
+        overlap_tokens = CHUNK_OVERLAP if overlap_tokens is None else overlap_tokens
         chunks = self._split_text_into_chunks(
             text=text,
             chunk_type="ocr",
@@ -102,10 +112,13 @@ class ChunkingService:
         start_index: int,
         page_number: int | None,
         metadata: dict,
-        target_tokens: int = 500,
-        max_tokens: int = 800,
-        overlap_tokens: int = 80,
+        target_tokens: int | None = None,
+        max_tokens: int | None = None,
+        overlap_tokens: int | None = None,
     ) -> list[ChunkInput]:
+        target_tokens = target_tokens or CHUNK_SIZE
+        max_tokens = max_tokens or max(target_tokens, int(target_tokens * 1.6))
+        overlap_tokens = CHUNK_OVERLAP if overlap_tokens is None else overlap_tokens
         if chunk_type == "table":
             return [
                 self._make_chunk(
@@ -139,8 +152,13 @@ class ChunkingService:
         if not text.strip():
             return []
 
-        sections = self._markdown_sections(text)
-        if len(sections) == 1 and not sections[0]["section_path"]:
+        if TEXT_SPLITTER == "character":
+            sections = [{"text": text, "char_start": 0, "heading": None, "section_path": []}]
+        elif TEXT_SPLITTER == "token":
+            sections = self._paragraph_sections(text)
+        else:
+            sections = self._markdown_sections(text)
+        if TEXT_SPLITTER == "markdown_header" and len(sections) == 1 and not sections[0]["section_path"]:
             sections = self._paragraph_sections(text)
 
         chunks: list[ChunkInput] = []
@@ -395,6 +413,8 @@ class ChunkingService:
             full_metadata["section_path"] = section_path
         if flags:
             full_metadata["quality_flags"] = flags
+        full_metadata["start_index"] = char_start
+        full_metadata["text_splitter"] = TEXT_SPLITTER
         return ChunkInput(
             chunk_type=chunk_type,
             text=cleaned_text,
@@ -439,3 +459,56 @@ class ChunkingService:
         if current:
             references.append(" ".join(current).strip())
         return references
+
+    def _merge_small_chunks(
+        self,
+        chunks: list[ChunkInput],
+        min_size_target: int,
+        max_tokens: int,
+    ) -> list[ChunkInput]:
+        if min_size_target <= 0 or len(chunks) < 2:
+            return chunks
+        merged: list[ChunkInput] = []
+        cursor = 0
+        while cursor < len(chunks):
+            current = chunks[cursor]
+            if current.token_count >= min_size_target or cursor + 1 >= len(chunks):
+                merged.append(current)
+                cursor += 1
+                continue
+            nxt = chunks[cursor + 1]
+            mergeable_type = current.chunk_type in {"body", "ocr", "ocr_text"}
+            same_scope = (
+                mergeable_type
+                and current.chunk_type == nxt.chunk_type
+                and current.page_start == nxt.page_start
+                and current.page_end == nxt.page_end
+                and current.section_path == nxt.section_path
+                and current.metadata.get("file_id") == nxt.metadata.get("file_id")
+            )
+            combined_text = f"{current.cleaned_text}\n\n{nxt.cleaned_text}".strip()
+            if same_scope and estimate_tokens(combined_text) <= max_tokens:
+                metadata = {**nxt.metadata, **current.metadata, "merged_small_chunk": True}
+                merged.append(
+                    self._make_chunk(
+                        chunk_type=current.chunk_type,
+                        text=combined_text,
+                        chunk_index=current.chunk_index,
+                        char_start=current.char_start,
+                        char_end=nxt.char_end,
+                        page_start=current.page_start,
+                        page_end=current.page_end,
+                        heading=current.heading or nxt.heading,
+                        section_path=current.section_path or nxt.section_path,
+                        metadata=metadata,
+                        quality_flags=list({*current.quality_flags, *nxt.quality_flags, "merged_small_chunk"}),
+                    )
+                )
+                cursor += 2
+                continue
+            merged.append(current)
+            cursor += 1
+        for index, chunk in enumerate(merged):
+            chunk.chunk_index = index
+            chunk.metadata["chunk_index"] = index
+        return merged

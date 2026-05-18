@@ -18,66 +18,31 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _column_names(table_name: str) -> set[str]:
+    inspector = sa.inspect(op.get_bind())
+    if table_name not in inspector.get_table_names():
+        return set()
+    return {column["name"] for column in inspector.get_columns(table_name)}
+
+
+def _rename_column_if_present(table_name: str, old_name: str, new_name: str) -> None:
+    columns = _column_names(table_name)
+    if old_name not in columns or new_name in columns:
+        return
+    with op.batch_alter_table(table_name) as batch_op:
+        batch_op.alter_column(
+            old_name,
+            new_column_name=new_name,
+            existing_type=sa.Text(),
+            existing_nullable=True,
+        )
+
+
 def upgrade() -> None:
     """Upgrade schema."""
-    # SQLite doesn't support direct ALTER COLUMN RENAME, so we need to recreate the table
-    # This is a safe operation since we're just renaming a column
-    op.execute("""
-    CREATE TABLE document_events_new (
-        id INTEGER NOT NULL,
-        document_id INTEGER NOT NULL,
-        user_id INTEGER NOT NULL,
-        event_type VARCHAR(50) NOT NULL,
-        message VARCHAR(500) NOT NULL,
-        event_metadata TEXT,
-        created_at DATETIME NOT NULL,
-        PRIMARY KEY (id),
-        FOREIGN KEY(document_id) REFERENCES documents (id),
-        FOREIGN KEY(user_id) REFERENCES users (id)
-    )
-    """)
-    op.execute("""
-    INSERT INTO document_events_new 
-    SELECT id, document_id, user_id, event_type, message, metadata, created_at
-    FROM document_events
-    """)
-    op.execute("DROP TABLE document_events")
-    op.execute("ALTER TABLE document_events_new RENAME TO document_events")
-    
-    # Recreate indexes
-    op.create_index('ix_document_events_document_id', 'document_events', ['document_id'], unique=False)
-    op.create_index('ix_document_events_user_id', 'document_events', ['user_id'], unique=False)
-    op.create_index('ix_document_events_event_type', 'document_events', ['event_type'], unique=False)
-    op.create_index('ix_document_events_created_at', 'document_events', ['created_at'], unique=False)
+    _rename_column_if_present("document_events", "metadata", "event_metadata")
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    # Reverse the rename
-    op.execute("""
-    CREATE TABLE document_events_new (
-        id INTEGER NOT NULL,
-        document_id INTEGER NOT NULL,
-        user_id INTEGER NOT NULL,
-        event_type VARCHAR(50) NOT NULL,
-        message VARCHAR(500) NOT NULL,
-        metadata TEXT,
-        created_at DATETIME NOT NULL,
-        PRIMARY KEY (id),
-        FOREIGN KEY(document_id) REFERENCES documents (id),
-        FOREIGN KEY(user_id) REFERENCES users (id)
-    )
-    """)
-    op.execute("""
-    INSERT INTO document_events_new 
-    SELECT id, document_id, user_id, event_type, message, event_metadata, created_at
-    FROM document_events
-    """)
-    op.execute("DROP TABLE document_events")
-    op.execute("ALTER TABLE document_events_new RENAME TO document_events")
-    
-    # Recreate indexes
-    op.create_index('ix_document_events_document_id', 'document_events', ['document_id'], unique=False)
-    op.create_index('ix_document_events_user_id', 'document_events', ['user_id'], unique=False)
-    op.create_index('ix_document_events_event_type', 'document_events', ['event_type'], unique=False)
-    op.create_index('ix_document_events_created_at', 'document_events', ['created_at'], unique=False)
+    _rename_column_if_present("document_events", "event_metadata", "metadata")

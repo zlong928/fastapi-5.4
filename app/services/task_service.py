@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Iterable
@@ -11,6 +11,7 @@ from uuid import uuid4
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import select
 
+from app.core.time import app_now
 from ..core.config import ENABLE_BACKGROUND_WORKER, RESULT_DIR, UPLOAD_DIR
 from ..db.session import SessionLocal
 from ..core.logging_config import get_api_logger, get_task_logger
@@ -111,18 +112,6 @@ class TaskService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Result file not found.")
         result = FileResult(**json.loads(result_file.read_text(encoding="utf-8")))
         return TaskResultResponse(task=record.to_detail(), result=result)
-
-    def list_tasks(self, status_filter: str | None = None, user_id: int | None = None) -> list[TaskRecord]:
-        with SessionLocal() as db:
-            statement = select(JobRun)
-            if user_id is not None:
-                statement = statement.where(JobRun.user_id == user_id)
-            if status_filter:
-                statement = statement.where(JobRun.status == status_filter)
-            statement = statement.where(JobRun.kind == JOB_KIND_BASIC_FILE_PROCESSING).order_by(JobRun.created_at)
-            records = [self._record_from_model(job_run) for job_run in db.scalars(statement).all()]
-        records = [self._refresh_record_from_result(record) for record in records]
-        return sorted(records, key=lambda record: record.created_at)
 
     def clear_tasks(self, user_id: int) -> int:
         with SessionLocal() as db:
@@ -306,7 +295,7 @@ class TaskService:
         return created
 
     def _now(self) -> datetime:
-        return datetime.now(timezone.utc)
+        return app_now()
 
     def _ensure_record(self, task_id: str) -> TaskRecord:
         with self._lock:

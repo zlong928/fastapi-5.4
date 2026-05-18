@@ -398,6 +398,33 @@ class DocumentParserService:
             return 0
 
     @staticmethod
+    def _read_text_file(file_path: str | Path, label: str) -> str:
+        content = Path(file_path).read_bytes()
+        if not content:
+            raise ValueError(f"{label} file is empty.")
+        if b"\x00" in content:
+            raise ValueError(f"{label} file appears to be binary.")
+        try:
+            return content.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            pass
+
+        try:
+            import chardet
+        except ImportError as exc:
+            raise ValueError(f"Failed to decode {label} file: non UTF-8 text requires chardet.") from exc
+
+        detected = chardet.detect(content)
+        encoding = detected.get("encoding")
+        confidence = float(detected.get("confidence") or 0)
+        if not encoding or confidence < 0.5:
+            raise ValueError(f"Failed to decode {label} file: encoding could not be detected.")
+        try:
+            return content.decode(encoding).strip()
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"Failed to decode {label} file with detected encoding {encoding}: {exc}") from exc
+
+    @staticmethod
     def parse_markdown(file_path: str | Path) -> str:
         """解析 Markdown 文件。
 
@@ -411,12 +438,11 @@ class DocumentParserService:
             ValueError: 如果文件格式错误
         """
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                return f.read().strip()
-        except UnicodeDecodeError as e:
-            raise ValueError(f"Failed to decode Markdown file: {e}")
+            return DocumentParserService._read_text_file(file_path, "Markdown")
+        except ValueError:
+            raise
         except Exception as e:
-            raise ValueError(f"Failed to parse Markdown: {e}")
+            raise ValueError(f"Failed to parse Markdown: {e}") from e
 
     @staticmethod
     def parse_txt(file_path: str | Path) -> str:
@@ -432,12 +458,11 @@ class DocumentParserService:
             ValueError: 如果文件格式错误
         """
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                return f.read().strip()
-        except UnicodeDecodeError as e:
-            raise ValueError(f"Failed to decode TXT file: {e}")
+            return DocumentParserService._read_text_file(file_path, "TXT")
+        except ValueError:
+            raise
         except Exception as e:
-            raise ValueError(f"Failed to parse TXT: {e}")
+            raise ValueError(f"Failed to parse TXT: {e}") from e
 
     @staticmethod
     def parse(file_path: str | Path, source_type: str) -> str:

@@ -30,6 +30,52 @@ class DocumentEventRead(BaseModel):
         from_attributes = True
 
 
+class PaginatedDocumentEvents(BaseModel):
+    total: int
+    page: int
+    size: int
+    items: list[DocumentEventRead]
+
+
+class TagRead(BaseModel):
+    id: int
+    user_id: int
+    name: str
+    color: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TagCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    color: Optional[str] = Field(default=None, max_length=32)
+
+
+class TagUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    color: Optional[str] = Field(default=None, max_length=32)
+
+
+class CollectionRead(BaseModel):
+    id: int
+    user_id: int
+    name: str
+    description: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CollectionCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: Optional[str] = None
+
+
 class DocumentRead(BaseModel):
     """文档的完整读取模式，包含事件。"""
     id: int
@@ -47,13 +93,21 @@ class DocumentRead(BaseModel):
     cleaned_text: Optional[str] = None
     parse_quality_json: Optional[str] = None
     references_text: Optional[str] = None
+    collection_name: Optional[str] = None
+    content_hash: Optional[str] = None
+    content_summary: Optional[str] = None
+    chunk_count: int = 0
     status: str
+    processing_status: str
     error_message: Optional[str] = None
+    fail_reason: Optional[str] = None
+    processing_error: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     uploaded_at: datetime
     parsed_at: Optional[datetime] = None
     events: list[DocumentEventRead] = Field(default_factory=list)
+    tags: list[TagRead] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
@@ -67,13 +121,22 @@ class DocumentListItem(BaseModel):
     processing_mode: DocumentProcessingMode = DocumentProcessingMode.AUTO
     processing_strategy: Optional[str] = None
     status: str
+    processing_status: str
     file_size: int
     original_filename: str
     error_message: Optional[str] = None
+    fail_reason: Optional[str] = None
+    processing_error: Optional[str] = None
     latest_parse_job_status: Optional[str] = None
+    collection_name: Optional[str] = None
+    content_hash: Optional[str] = None
+    content_summary: Optional[str] = None
+    chunk_count: int = 0
     created_at: datetime
+    updated_at: datetime
     uploaded_at: datetime
     parsed_at: Optional[datetime] = None
+    tags: list[TagRead] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
@@ -94,6 +157,7 @@ class DocumentCreate(BaseModel):
 class DocumentUpdate(BaseModel):
     """更新文档时的输入模式（当前仅支持修改标题）。"""
     title: Optional[str] = Field(None, min_length=1, max_length=255)
+    collection_name: Optional[str] = Field(None, max_length=255)
 
     class Config:
         from_attributes = True
@@ -103,6 +167,7 @@ class DocumentUploadResponse(BaseModel):
     """上传后的响应模式。"""
     document_id: int
     status: str
+    processing_status: str
     parse_job_id: int
     job_id: Optional[str] = None
     processing_mode: DocumentProcessingMode = DocumentProcessingMode.AUTO
@@ -157,6 +222,10 @@ class DocumentChunkRead(BaseModel):
     page_start: Optional[int] = None
     page_end: Optional[int] = None
     metadata_json: Optional[str] = None
+    vector_id: Optional[str] = None
+    embedding_model: Optional[str] = None
+    embedding_dim: Optional[int] = None
+    embedded_at: Optional[datetime] = None
     created_at: datetime
 
     class Config:
@@ -166,6 +235,8 @@ class DocumentChunkRead(BaseModel):
 class DocumentListResponse(BaseModel):
     """文档列表响应模式。"""
     total: int
+    page: int = 1
+    size: int = 20
     items: list[DocumentListItem]
 
 
@@ -179,18 +250,27 @@ class DocumentDetailResponse(BaseModel):
     processing_mode: DocumentProcessingMode = DocumentProcessingMode.AUTO
     processing_strategy: Optional[str] = None
     status: str
+    processing_status: str
     file_size: int
     mime_type: str
     parsed_text: Optional[str] = None
     cleaned_text: Optional[str] = None
     parse_quality_json: Optional[str] = None
     references_text: Optional[str] = None
+    collection_name: Optional[str] = None
+    content_hash: Optional[str] = None
+    content_summary: Optional[str] = None
+    chunk_count: int = 0
     error_message: Optional[str] = None
+    fail_reason: Optional[str] = None
+    processing_error: Optional[str] = None
     created_at: datetime
+    updated_at: datetime
     uploaded_at: datetime
     parsed_at: Optional[datetime] = None
     latest_parse_job: Optional[ParseJobRead] = None
     events: list[DocumentEventRead] = Field(default_factory=list)
+    tags: list[TagRead] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
@@ -249,17 +329,79 @@ class DocumentKgResponse(BaseModel):
 
 class ChunkSearchHit(BaseModel):
     chunk_id: int
+    id: str
     document_id: int
     document_title: str
+    filename: str
     chunk_index: int
     chunk_type: str
     text: str
     score: float
+    metadata: dict = Field(default_factory=dict)
+    source: Optional[str] = None
+    start_index: Optional[int] = None
+    hash: Optional[str] = None
     page_start: int | None = None
     page_end: int | None = None
+
+
+class DocumentProcessingStatusResponse(BaseModel):
+    document_id: int
+    status: str
+    processing_status: str
+    error: Optional[str] = None
+    processing_error: Optional[str] = None
+    collection_name: Optional[str] = None
+    hash: Optional[str] = None
+    content_summary: Optional[str] = None
+    chunk_count: int = 0
+    created_at: datetime
+    updated_at: datetime
 
 
 class ChunkSearchResponse(BaseModel):
     query: str
     total: int
     items: list[ChunkSearchHit]
+
+
+class BatchDeleteRequest(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=100)
+
+
+class BatchDeleteResponse(BaseModel):
+    success_ids: list[int] = Field(default_factory=list)
+    failed_ids: list[int] = Field(default_factory=list)
+    errors: dict[int, str] = Field(default_factory=dict)
+
+
+class BatchTagRequest(BaseModel):
+    document_ids: list[int] = Field(min_length=1, max_length=100)
+    tag_ids: list[int] = Field(min_length=1, max_length=50)
+
+
+class BatchTagResponse(BaseModel):
+    document_ids: list[int]
+    tag_ids: list[int]
+    assigned_count: int
+
+
+class FileTypeCount(BaseModel):
+    file_type: str
+    count: int
+    ratio: float
+
+
+class StatusCount(BaseModel):
+    status: str
+    count: int
+
+
+class DashboardStatsResponse(BaseModel):
+    total_documents: int
+    done_documents: int
+    failed_documents: int
+    parse_success_rate: float
+    recent_7_days_documents: int
+    file_type_distribution: list[FileTypeCount]
+    status_distribution: list[StatusCount]

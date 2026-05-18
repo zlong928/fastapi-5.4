@@ -1,9 +1,11 @@
-import os
+import re
+import unicodedata
 from datetime import datetime
-from pathlib import Path
-from uuid import uuid4
+from pathlib import Path, PurePosixPath
 
 from app.core import config
+
+ALLOWED_STORED_EXTENSIONS = {"pdf", "md", "markdown", "txt", "png", "jpg", "jpeg", "webp"}
 
 
 class FileStorageService:
@@ -17,6 +19,28 @@ class FileStorageService:
         """
         self.upload_dir = Path(upload_dir or config.UPLOAD_DIR)
         self.upload_dir.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def safe_original_filename(filename: str) -> str:
+        normalized = filename.replace("\\", "/")
+        raw_name = Path(normalized).name.strip()
+        if not raw_name or raw_name in {".", ".."}:
+            raise ValueError("File name is invalid.")
+        if any(unicodedata.category(character).startswith("C") for character in raw_name):
+            raise ValueError("File name contains unsupported control characters.")
+
+        stem, separator, extension = raw_name.rpartition(".")
+        if not separator or not stem or not extension:
+            raise ValueError("File must have an extension.")
+        if not re.fullmatch(r"[A-Za-z0-9]+", extension):
+            raise ValueError("File extension is invalid.")
+
+        safe_stem = re.sub(r"[\x00-\x1f<>:\"|?*]+", "", stem)
+        safe_stem = re.sub(r"\s+", " ", safe_stem).strip(". ")
+        safe_extension = extension.lower()
+        if not safe_stem or not safe_extension:
+            raise ValueError("File name is invalid after sanitization.")
+        return f"{safe_stem[:180]}.{safe_extension}"
 
     def store_file(
         self,
@@ -40,21 +64,27 @@ class FileStorageService:
             ValueError: 如果文件扩展名无效
         """
         # 验证扩展名
-        if file_extension.lower() not in ("pdf", "md", "txt", "png", "jpg", "jpeg", "webp"):
+        normalized_extension = file_extension.lower().lstrip(".")
+        if normalized_extension not in ALLOWED_STORED_EXTENSIONS:
             raise ValueError(
                 f"Unsupported file extension: {file_extension}. "
-                f"Only pdf, md, txt, png, jpg, jpeg, webp are allowed."
+                f"Only pdf, md, markdown, txt, png, jpg, jpeg, and webp are allowed."
             )
 
-        # 生成安全的文件名
-        stored_filename = f"{uuid4()}.{file_extension.lower()}"
+        safe_filename = self.safe_original_filename(original_filename)
+        safe_stem = Path(safe_filename).stem
 
         # 生成按年月分层的目录路径
         now = datetime.now()
         dir_path = self.upload_dir / str(user_id) / f"{now.year:04d}" / f"{now.month:02d}"
         dir_path.mkdir(parents=True, exist_ok=True)
 
-        # 完整的文件路径
+        try:
+            dir_path.resolve().relative_to(self.upload_dir.resolve())
+        except ValueError:
+            raise ValueError("Upload path must stay inside the configured upload directory.")
+
+        stored_filename = self._available_filename(dir_path, safe_stem, normalized_extension)
         file_path = dir_path / stored_filename
 
         # 写入文件
@@ -66,6 +96,14 @@ class FileStorageService:
         # 返回相对路径和存储的文件名
         relative_path = file_path.relative_to(self.upload_dir).as_posix()
         return relative_path, stored_filename
+
+    def _available_filename(self, directory: Path, stem: str, extension: str) -> str:
+        candidate = f"{stem}.{extension}"
+        counter = 1
+        while (directory / candidate).exists():
+            candidate = f"{stem}-{counter}.{extension}"
+            counter += 1
+        return candidate
 
     def get_file_path(self, relative_path: str) -> Path:
         """获取文件的完整路径。
@@ -79,11 +117,17 @@ class FileStorageService:
         Raises:
             ValueError: 如果路径包含危险的遍历符号
         """
-        # 防止路径穿越攻击
-        if ".." in relative_path or relative_path.startswith("/"):
+        normalized_path = PurePosixPath(relative_path)
+        # 防止路径穿越攻击；允许文件名中普通的连续点，例如 foo..bar.txt。
+        if (
+            "\\" in relative_path
+            or normalized_path.is_absolute()
+            or not normalized_path.parts
+            or any(part in {"", ".", ".."} for part in normalized_path.parts)
+        ):
             raise ValueError(f"Invalid path: {relative_path}")
 
-        file_path = self.upload_dir / relative_path
+        file_path = self.upload_dir / normalized_path.as_posix()
 
         # 验证路径在上传目录内
         try:

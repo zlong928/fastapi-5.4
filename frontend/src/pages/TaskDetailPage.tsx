@@ -7,10 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTask } from "@/hooks/useTask";
 import { API_BASE_URL } from "@/lib/api";
-
-function formatDate(value?: string | null) {
-  return value ? new Date(value).toLocaleString() : "-";
-}
+import { formatChinaDateTime } from "@/lib/time";
 
 function renderResult(result: unknown) {
   if (!result) {
@@ -58,8 +55,8 @@ export function TaskDetailPage() {
               <StatusBadge status={task.status} />
             </div>
             <dl className="mt-6 grid gap-4 md:grid-cols-2">
-              <div><dt className="text-sm text-slate-500">Created</dt><dd className="mt-1 font-medium">{formatDate(task.created_at)}</dd></div>
-              <div><dt className="text-sm text-slate-500">Updated</dt><dd className="mt-1 font-medium">{formatDate(task.updated_at)}</dd></div>
+              <div><dt className="text-sm text-slate-500">Created</dt><dd className="mt-1 font-medium">{formatChinaDateTime(task.created_at)}</dd></div>
+              <div><dt className="text-sm text-slate-500">Updated</dt><dd className="mt-1 font-medium">{formatChinaDateTime(task.updated_at)}</dd></div>
               <div><dt className="text-sm text-slate-500">File size</dt><dd className="mt-1 font-medium">{task.file_size ? `${task.file_size} bytes` : "-"}</dd></div>
               <div><dt className="text-sm text-slate-500">File type</dt><dd className="mt-1 font-medium">{task.file_type ?? "-"}</dd></div>
             </dl>

@@ -5,6 +5,8 @@ import subprocess
 from tempfile import TemporaryDirectory
 from pathlib import Path
 
+from app.core.config import OCR_TIMEOUT_SECONDS
+
 
 class OcrUnavailableError(RuntimeError):
     pass
@@ -19,6 +21,7 @@ class OcrService:
             check=True,
             capture_output=True,
             text=True,
+            timeout=OCR_TIMEOUT_SECONDS,
         )
         return result.stdout.strip()
 
@@ -35,6 +38,7 @@ class OcrService:
                 check=True,
                 capture_output=True,
                 text=True,
+                timeout=OCR_TIMEOUT_SECONDS,
             )
             page_images = sorted(Path(tmpdir).glob("page-*.png"))
             return [self.ocr_image(page_image) for page_image in page_images]
@@ -65,6 +69,7 @@ class OcrService:
                 check=True,
                 capture_output=True,
                 text=True,
+                timeout=OCR_TIMEOUT_SECONDS,
             )
             page_images = sorted(Path(tmpdir).glob("page-*.png"))
             if not page_images:

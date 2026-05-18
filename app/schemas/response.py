@@ -59,15 +59,16 @@ class TaskDetail(TaskSummary):
     error: str | None = None
 
 
+class PaginatedTasksResponse(BaseModel):
+    total: int
+    page: int
+    size: int
+    items: list[TaskDetail]
+
+
 class TaskResultResponse(BaseModel):
     task: TaskDetail
     result: FileResult
-
-
-class UploadResponse(BaseModel):
-    tasks: list[TaskSummary]
-    queue_size: int
-    task_id: str | None = None
 
 
 class ProcessResponse(BaseModel):

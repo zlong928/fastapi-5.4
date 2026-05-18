@@ -55,3 +55,6 @@ frontend/*.tsbuildinfo
 .gstack/
 
 *.md
+!README.md
+tests/
+app/db

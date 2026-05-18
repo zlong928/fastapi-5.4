@@ -28,6 +28,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { deleteDocument, getDocument, getDocumentChunks, getDocumentFileBlob, getDocumentFileText, getDocumentKg, reEmbedDocument, retryDocumentParse } from "@/lib/api";
+import { formatChinaDateTime } from "@/lib/time";
 import { DocumentChunk, DocumentRead, DocumentStatus, processingModeLabel } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -35,11 +36,11 @@ type DetailTab = "preview" | "text" | "chunks" | "diagnostics" | "events";
 
 function getStatusIcon(status: DocumentStatus) {
   switch (status) {
-    case "uploaded":
-    case "queued":
+    case "pending":
     case "processing":
       return <Clock className="h-5 w-5 text-yellow-600" />;
-    case "parsed":
+    case "done":
+    case "completed":
       return <CheckCircle2 className="h-5 w-5 text-emerald-600" />;
     case "failed":
       return <AlertCircle className="h-5 w-5 text-red-600" />;
@@ -52,14 +53,14 @@ function getStatusIcon(status: DocumentStatus) {
 
 function getStatusText(status: DocumentStatus) {
   switch (status) {
-    case "uploaded":
-      return "Uploaded";
-    case "queued":
-      return "Queued";
+    case "pending":
+      return "Pending";
     case "processing":
       return "Processing";
-    case "parsed":
-      return "Parsed";
+    case "done":
+      return "Done";
+    case "completed":
+      return "Completed";
     case "failed":
       return "Failed";
     case "deleted":
@@ -71,11 +72,11 @@ function getStatusText(status: DocumentStatus) {
 
 function getStatusColor(status: DocumentStatus) {
   switch (status) {
-    case "uploaded":
-    case "queued":
+    case "pending":
     case "processing":
       return "bg-yellow-50 text-yellow-700 border-yellow-200";
-    case "parsed":
+    case "done":
+    case "completed":
       return "bg-emerald-50 text-emerald-700 border-emerald-200";
     case "failed":
       return "bg-red-50 text-red-700 border-red-200";
@@ -84,6 +85,10 @@ function getStatusColor(status: DocumentStatus) {
     default:
       return "bg-slate-50 text-slate-600 border-slate-200";
   }
+}
+
+function isDoneStatus(status?: DocumentStatus | string | null) {
+  return status === "done" || status === "completed";
 }
 
 function parseChunkMetadata(chunk: DocumentChunk): Record<string, unknown> | null {
@@ -587,7 +592,7 @@ function ChunksPanel({
     { id: "embedded" as const, label: "Embedded", count: chunkDetails.filter((item) => item.hasEmbedding).length }
   ];
 
-  if (status === "queued" || status === "processing") {
+  if (status === "pending" || status === "processing") {
     return (
       <Card>
         <CardContent className="p-6 text-sm text-slate-600">
@@ -738,18 +743,18 @@ export function DocumentDetailPage() {
     enabled: documentId > 0,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "queued" || status === "processing" ? 2000 : false;
+      return status === "pending" || status === "processing" ? 2000 : false;
     }
   });
   const { data: kgData, isLoading: isKgLoading } = useQuery({
     queryKey: ["document", documentId, "kg"],
     queryFn: () => getDocumentKg(documentId),
-    enabled: documentId > 0 && activeTab === "diagnostics" && data?.status === "parsed" && data?.source_type !== "image"
+    enabled: documentId > 0 && activeTab === "diagnostics" && isDoneStatus(data?.status) && data?.source_type !== "image"
   });
   const { data: chunks = [], isLoading: isChunksLoading } = useQuery({
     queryKey: ["document", documentId, "chunks"],
     queryFn: () => getDocumentChunks(documentId),
-    enabled: documentId > 0 && data?.status === "parsed"
+    enabled: documentId > 0 && isDoneStatus(data?.status)
   });
   const { data: fileBlob, isLoading: isFileLoading } = useQuery({
     queryKey: ["document", documentId, "file"],
@@ -842,16 +847,7 @@ export function DocumentDetailPage() {
     return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
   };
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return new Intl.DateTimeFormat("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit"
-    }).format(date);
-  };
+  const formatDate = formatChinaDateTime;
 
   if (!data) {
     return (
@@ -999,11 +995,41 @@ export function DocumentDetailPage() {
               </p>
               <p className="mt-1 font-medium">{document.latest_parse_job?.status ?? "-"}</p>
             </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Collection
+              </p>
+              <p className="mt-1 break-words font-medium">{document.collection_name ?? "-"}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Content Hash
+              </p>
+              <p className="mt-1 break-all font-mono text-xs">{document.content_hash ?? "-"}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Chunks
+              </p>
+              <p className="mt-1 font-medium">{document.chunk_count}</p>
+            </div>
+            <div className="sm:col-span-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Tags
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {document.tags.length ? document.tags.map((tag) => (
+                  <span key={tag.id} className="rounded-full bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700">
+                    {tag.name}
+                  </span>
+                )) : <span className="text-sm text-slate-500">No tags</span>}
+              </div>
+            </div>
           </CardContent>
         </Card>
 
         {/* Status Messages */}
-        {(document.status === "queued" || document.status === "processing") && (
+        {(document.status === "pending" || document.status === "processing") && (
           <Alert className="border-yellow-200 bg-yellow-50 text-yellow-800">
             <Clock className="h-4 w-4" />
             <AlertDescription>
@@ -1013,13 +1039,13 @@ export function DocumentDetailPage() {
           </Alert>
         )}
 
-        {document.status === "failed" && document.error_message && (
+        {document.status === "failed" && (document.fail_reason || document.error_message) && (
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>
               <div>
                 <p className="font-medium">Failed to parse document</p>
-                <p className="mt-1 text-sm">{document.error_message}</p>
+                <p className="mt-1 text-sm">{document.fail_reason || document.error_message}</p>
               </div>
             </AlertDescription>
           </Alert>
@@ -1029,7 +1055,7 @@ export function DocumentDetailPage() {
           <Alert className="border-emerald-200 bg-emerald-50 text-emerald-800">
             <CheckCircle2 className="h-4 w-4" />
             <AlertDescription>
-              Successfully parsed on {formatDate(document.parsed_at)}
+              Processing completed on {formatDate(document.parsed_at)}
             </AlertDescription>
           </Alert>
         )}
@@ -1107,7 +1133,7 @@ export function DocumentDetailPage() {
       {activeTab === "diagnostics" && (
         <div className="space-y-4">
           <ParsingQualityPanel quality={quality} />
-          {document.status === "parsed" && document.source_type !== "image" && (
+          {isDoneStatus(document.status) && document.source_type !== "image" && (
             <Card>
               <CardHeader className="border-b border-slate-200 pb-4">
                 <div className="flex items-center justify-between gap-3">
@@ -1199,7 +1225,7 @@ export function DocumentDetailPage() {
 
       {/* Actions */}
       <div className="flex gap-3 border-t border-slate-200 pt-6">
-        {document.status !== "queued" && document.status !== "processing" && document.status !== "deleted" && (
+        {document.status === "failed" && (
           <Button
             onClick={handleRetry}
             disabled={retryMutation.isPending}
@@ -1213,7 +1239,7 @@ export function DocumentDetailPage() {
             Retry Parsing
           </Button>
         )}
-        {document.status !== "queued" && document.status !== "processing" && document.status !== "deleted" && (
+        {isDoneStatus(document.status) && (
           <Button
             onClick={handleReEmbed}
             disabled={reEmbedMutation.isPending}

@@ -3,16 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import struct
-from datetime import datetime, timezone
 from typing import Protocol
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.time import app_now
 from app.db.session import SessionLocal
 from app.models import DocumentChunk
-from app.core.config import EMBEDDING_PROVIDER
+from app.core.config import EMBEDDING_DIM, EMBEDDING_PROVIDER
 
 from app.services.embedding.resolver import resolve_embedding_provider
 
@@ -30,7 +29,7 @@ class HashEmbeddingProvider:
     def embed(self, texts: list[str]) -> list[list[float]]:
         return [self._embed_one(text) for text in texts]
 
-    def _embed_one(self, text: str, dimensions: int = 32) -> list[float]:
+    def _embed_one(self, text: str, dimensions: int = EMBEDDING_DIM) -> list[float]:
         values = [0.0] * dimensions
         for token in text.lower().split():
             digest = hashlib.sha256(token.encode("utf-8")).digest()
@@ -43,6 +42,8 @@ class HashEmbeddingProvider:
 
 
 class DocumentEmbeddingService:
+    batch_size = 16
+
     def __init__(
         self,
         session_factory: sessionmaker[Session] = SessionLocal,
@@ -61,55 +62,25 @@ class DocumentEmbeddingService:
             if not chunks:
                 return 0
             texts = [chunk.cleaned_text for chunk in chunks]
-            vectors = self.embedding_provider.embed(texts)
-            now = datetime.now(timezone.utc)
+            vectors = self._embed_in_batches(texts)
+            now = app_now()
             for chunk, vector in zip(chunks, vectors):
+                metadata = json.loads(chunk.metadata_json) if chunk.metadata_json else {}
+                metadata["embedding_config"] = {
+                    "engine": EMBEDDING_PROVIDER,
+                    "model": self.embedding_provider.model_name,
+                }
                 chunk.embedding_json = json.dumps(vector)
                 chunk.embedding_model = self.embedding_provider.model_name
                 chunk.embedding_dim = len(vector)
                 chunk.embedded_at = now
+                chunk.metadata_json = json.dumps(metadata, ensure_ascii=False)
             db.commit()
-
-            # Write to sqlite-vec table
-            self._write_vectors_to_vec_table(document_id, chunks, vectors)
 
             return len(chunks)
 
-    def _write_vectors_to_vec_table(
-        self, document_id: int, chunks: list[DocumentChunk], vectors: list[list[float]]
-    ) -> None:
-        with self.session_factory() as db:
-            raw = db.connection().connection
-            raw.enable_load_extension(True)
-            import sqlite_vec  # noqa: F811
-            sqlite_vec.load(raw)
-            raw.enable_load_extension(False)
-
-        # We need a separate raw connection for sqlite-vec writes
-        from sqlalchemy import create_engine
-        from app.core.config import DATABASE_URL
-
-        engine = create_engine(DATABASE_URL)
-        conn = engine.raw_connection()
-        try:
-            conn.enable_load_extension(True)
-            import sqlite_vec  # noqa: F811
-            sqlite_vec.load(conn)
-            conn.enable_load_extension(False)
-
-            # Delete existing vec entries for this document
-            conn.execute(
-                "DELETE FROM vec_document_chunks WHERE chunk_id IN "
-                "(SELECT id FROM document_chunks WHERE document_id = ?)",
-                [document_id],
-            )
-            # Insert new vectors
-            for chunk, vector in zip(chunks, vectors):
-                vector_blob = struct.pack(f"{len(vector)}f", *vector)
-                conn.execute(
-                    "INSERT INTO vec_document_chunks(chunk_id, embedding) VALUES (?, ?)",
-                    [chunk.id, vector_blob],
-                )
-            conn.commit()
-        finally:
-            conn.close()
+    def _embed_in_batches(self, texts: list[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), self.batch_size):
+            vectors.extend(self.embedding_provider.embed(texts[start : start + self.batch_size]))
+        return vectors

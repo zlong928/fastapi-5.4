@@ -1,7 +1,43 @@
-import { BookProgressRead, BookProgressUpdate, BookRead, BookUploadResponse, ChunkSearchHit, ChunkSearchResponse, DocumentBatchUploadItem, DocumentChunk, DocumentKgResponse, DocumentListResponse, DocumentProcessingMode, DocumentRead, DocumentSearchResponse, DocumentUploadResponse, HealthResponse, LoginRequest, MessageResponse, PasswordForgotRequest, PasswordResetRequest, RegisterRequest, TaskRecord, TaskResultResponse, TokenResponse, UploadResponse, UserRead } from "./types";
+import {
+  BatchDeleteResponse,
+  BatchTagResponse,
+  BookProgressRead,
+  BookProgressUpdate,
+  BookRead,
+  BookUploadResponse,
+  ChunkSearchResponse,
+  CollectionCreate,
+  CollectionRead,
+  DashboardStatsResponse,
+  DocumentBatchUploadItem,
+  DocumentChunk,
+  DocumentKgResponse,
+  DocumentListParams,
+  DocumentListResponse,
+  DocumentProcessingMode,
+  DocumentRead,
+  DocumentSearchResponse,
+  DocumentUploadResponse,
+  HealthResponse,
+  LoginRequest,
+  MessageResponse,
+  PaginatedTasksResponse,
+  PaginatedDocumentEvents,
+  PasswordForgotRequest,
+  PasswordResetRequest,
+  RegisterRequest,
+  TagCreate,
+  TagRead,
+  TagUpdate,
+  TaskListParams,
+  TaskRecord,
+  TaskResultResponse,
+  TokenResponse,
+  UserRead
+} from "./types";
 
 const DEFAULT_API_BASE_URL = import.meta.env.PROD ? import.meta.env.VITE_API_BASE_URL : "http://localhost:8000";
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE_URL).replace(/\/+$/, "");
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE_URL).replace(/\/+$/, "");
 const TOKEN_KEY = "file_processing_token";
 
 export function getToken() {
@@ -47,6 +83,63 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+function authHeaders() {
+  const headers = new Headers();
+  const token = getToken();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  return headers;
+}
+
+function messageFromErrorPayload(payload: unknown, fallback: string) {
+  if (typeof payload === "object" && payload !== null && "detail" in payload) {
+    const detail = (payload as { detail?: unknown }).detail;
+    if (typeof detail === "string") return detail;
+  }
+  return fallback;
+}
+
+function handleUnauthorized() {
+  clearToken();
+  if (!window.location.pathname.startsWith("/login") && !window.location.pathname.startsWith("/register") && !window.location.pathname.startsWith("/forgot-password") && !window.location.pathname.startsWith("/reset-password")) {
+    window.location.assign("/login");
+  }
+}
+
+function uploadForm<T>(path: string, formData: FormData, onProgress?: (progress: number) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE_URL}${path}`);
+    authHeaders().forEach((value, key) => xhr.setRequestHeader(key, value));
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && onProgress) {
+        onProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)));
+      }
+    };
+    xhr.onload = () => {
+      let payload: unknown = null;
+      try {
+        payload = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+      } catch {
+        payload = null;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.(100);
+        resolve(payload as T);
+        return;
+      }
+      if (xhr.status === 401) {
+        handleUnauthorized();
+      }
+      reject(new Error(messageFromErrorPayload(payload, xhr.statusText || `Request failed with ${xhr.status}`)));
+    };
+    xhr.onerror = () => reject(new Error("Upload failed. Please check your connection and try again."));
+    xhr.send(formData);
+  });
+}
+
 export function healthCheck() {
   return request<HealthResponse>("/health");
 }
@@ -82,32 +175,22 @@ export function resetPassword(payload: PasswordResetRequest) {
 }
 
 export function getCurrentUser() {
-  return request<UserRead>("/auth/me");
+  return request<UserRead>("/users/me");
 }
 
 export function logout() {
   clearToken();
 }
 
-export async function uploadFile(file: File): Promise<UploadResponse> {
-  const formData = new FormData();
-  formData.append("file", file);
-  const response = await request<UploadResponse>("/upload", {
-    method: "POST",
-    body: formData
+export function searchTasks(params: TaskListParams = {}): Promise<PaginatedTasksResponse> {
+  const searchParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      searchParams.set(key, String(value));
+    }
   });
-  const task = response.tasks?.[0];
-  return {
-    ...response,
-    task_id: response.task_id ?? task?.task_id ?? "",
-    filename: task?.file_name ?? file.name,
-    file_name: task?.file_name ?? file.name,
-    status: task?.status ?? response.status
-  };
-}
-
-export function getTasks() {
-  return request<TaskRecord[]>("/tasks");
+  const query = searchParams.toString();
+  return request<PaginatedTasksResponse>(`/tasks/search${query ? `?${query}` : ""}`);
 }
 
 export function clearTasks() {
@@ -130,17 +213,19 @@ export async function getTask(taskId: string): Promise<TaskRecord> {
 }
 
 // Document API functions
-export async function uploadDocument(file: File, title?: string, processingMode: DocumentProcessingMode = "auto"): Promise<DocumentUploadResponse> {
+export async function uploadDocument(
+  file: File,
+  title?: string,
+  processingMode: DocumentProcessingMode = "auto",
+  onProgress?: (progress: number) => void
+): Promise<DocumentUploadResponse> {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("processing_mode", processingMode);
   if (title) {
     formData.append("title", title);
   }
-  return request<DocumentUploadResponse>("/documents/upload", {
-    method: "POST",
-    body: formData
-  });
+  return uploadForm<DocumentUploadResponse>("/documents/upload", formData, onProgress);
 }
 
 export async function batchUploadDocuments(files: File[], processingMode: DocumentProcessingMode = "auto"): Promise<DocumentBatchUploadItem[]> {
@@ -153,8 +238,15 @@ export async function batchUploadDocuments(files: File[], processingMode: Docume
   });
 }
 
-export function getDocuments(skip: number = 0, limit: number = 20): Promise<DocumentListResponse> {
-  return request<DocumentListResponse>(`/documents?skip=${skip}&limit=${limit}`);
+export function getDocuments(params: DocumentListParams = {}): Promise<DocumentListResponse> {
+  const searchParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      searchParams.set(key, String(value));
+    }
+  });
+  const query = searchParams.toString();
+  return request<DocumentListResponse>(`/documents${query ? `?${query}` : ""}`);
 }
 
 export function getDocument(documentId: number): Promise<DocumentRead> {
@@ -227,7 +319,7 @@ export function getDocumentChunks(documentId: number): Promise<DocumentChunk[]> 
 }
 
 export function retryDocumentParse(documentId: number): Promise<DocumentRead> {
-  return request<DocumentRead>(`/documents/${documentId}/retry-parse`, {
+  return request<DocumentRead>(`/documents/${documentId}/retry`, {
     method: "POST"
   });
 }
@@ -236,6 +328,70 @@ export function deleteDocument(documentId: number): Promise<MessageResponse> {
   return request<MessageResponse>(`/documents/${documentId}`, {
     method: "DELETE"
   });
+}
+
+export function updateDocument(documentId: number, payload: { title?: string; collection_name?: string | null }): Promise<DocumentRead> {
+  return request<DocumentRead>(`/documents/${documentId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function batchDeleteDocuments(ids: number[]): Promise<BatchDeleteResponse> {
+  return request<BatchDeleteResponse>("/documents/batch", {
+    method: "DELETE",
+    body: JSON.stringify({ ids })
+  });
+}
+
+export function batchTagDocuments(documentIds: number[], tagIds: number[]): Promise<BatchTagResponse> {
+  return request<BatchTagResponse>("/documents/batch-tag", {
+    method: "POST",
+    body: JSON.stringify({ document_ids: documentIds, tag_ids: tagIds })
+  });
+}
+
+export function getDocumentEvents(documentId: number, page = 1, size = 20): Promise<PaginatedDocumentEvents> {
+  return request<PaginatedDocumentEvents>(`/documents/${documentId}/events?page=${page}&size=${size}`);
+}
+
+export function getTags(): Promise<TagRead[]> {
+  return request<TagRead[]>("/tags");
+}
+
+export function createTag(payload: TagCreate): Promise<TagRead> {
+  return request<TagRead>("/tags", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateTag(tagId: number, payload: TagUpdate): Promise<TagRead> {
+  return request<TagRead>(`/tags/${tagId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function deleteTag(tagId: number): Promise<MessageResponse> {
+  return request<MessageResponse>(`/tags/${tagId}`, {
+    method: "DELETE"
+  });
+}
+
+export function getCollections(): Promise<CollectionRead[]> {
+  return request<CollectionRead[]>("/collections");
+}
+
+export function createCollection(payload: CollectionCreate): Promise<CollectionRead> {
+  return request<CollectionRead>("/collections", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function getStatistics(): Promise<DashboardStatsResponse> {
+  return request<DashboardStatsResponse>("/statistics");
 }
 
 export async function uploadBook(file: File): Promise<BookUploadResponse> {
@@ -269,5 +425,3 @@ export function saveBookProgress(bookId: number, payload: BookProgressUpdate): P
 export function getBookFileUrl(bookId: number): string {
   return `${API_BASE_URL}/api/books/${bookId}/file`;
 }
-
-export { API_BASE_URL, TOKEN_KEY };
