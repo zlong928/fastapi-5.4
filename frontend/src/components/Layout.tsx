@@ -10,6 +10,7 @@ const navItems = [
   { href: "/upload", label: "Upload", icon: FileUp },
   { href: "/tags", label: "Tags", icon: Tag },
   { href: "/search", label: "Search", icon: Search },
+  { href: "/chat", label: "Ask", icon: Search },
   { href: "/tasks", label: "Tasks", icon: ListChecks },
   { href: "/settings", label: "Settings", icon: Settings }
 ];
