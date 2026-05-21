@@ -8,6 +8,7 @@ import { DocumentDetailPage } from "@/pages/DocumentDetailPage";
 import { DocumentsPage } from "@/pages/DocumentsPage";
 import { BookReaderPage } from "@/pages/BookReaderPage";
 import { BooksPage } from "@/pages/BooksPage";
+import { ChatPage } from "@/pages/ChatPage";
 import { ForgotPasswordPage } from "@/pages/ForgotPasswordPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { OAuthCallbackPage } from "@/pages/OAuthCallbackPage";
@@ -51,6 +52,7 @@ export function App() {
           <Route path="/books" element={<ProtectedRoute><BooksPage /></ProtectedRoute>} />
           <Route path="/books/:bookId/reader" element={<ProtectedRoute><BookReaderPage /></ProtectedRoute>} />
           <Route path="/search" element={<ProtectedRoute><SearchPage /></ProtectedRoute>} />
+          <Route path="/chat" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
           <Route path="/tasks" element={<ProtectedRoute><TasksPage /></ProtectedRoute>} />
           <Route path="/tasks/:id" element={<ProtectedRoute><TaskDetailPage /></ProtectedRoute>} />
         </Routes>
