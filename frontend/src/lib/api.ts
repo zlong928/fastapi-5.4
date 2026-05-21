@@ -5,6 +5,7 @@ import {
   BookProgressUpdate,
   BookRead,
   BookUploadResponse,
+  ChatStreamSource,
   ChunkSearchResponse,
   CollectionCreate,
   CollectionRead,
@@ -15,6 +16,7 @@ import {
   DocumentListParams,
   DocumentListResponse,
   DocumentProcessingMode,
+  DocumentProcessingStatusResponse,
   DocumentRead,
   DocumentSearchResponse,
   DocumentUploadResponse,
@@ -26,6 +28,8 @@ import {
   PasswordForgotRequest,
   PasswordResetRequest,
   RegisterRequest,
+  StreamChatCallbacks,
+  StreamChatOptions,
   TagCreate,
   TagRead,
   TagUpdate,
@@ -138,6 +142,22 @@ function uploadForm<T>(path: string, formData: FormData, onProgress?: (progress:
     xhr.onerror = () => reject(new Error("Upload failed. Please check your connection and try again."));
     xhr.send(formData);
   });
+}
+
+function parseSseMessage(rawEvent: string): { event?: string; data: unknown } | null {
+  if (!rawEvent.trim()) return null;
+  const lines = rawEvent.split("\n");
+  const event = lines.find((line) => line.startsWith("event:"))?.slice("event:".length).trim();
+  const rawData = lines
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trimStart())
+    .join("\n");
+  if (!rawData) return { event, data: "" };
+  try {
+    return { event, data: JSON.parse(rawData) };
+  } catch {
+    return { event, data: rawData };
+  }
 }
 
 export function healthCheck() {
@@ -253,6 +273,10 @@ export function getDocument(documentId: number): Promise<DocumentRead> {
   return request<DocumentRead>(`/documents/${documentId}`);
 }
 
+export function getDocumentProcessingStatus(documentId: number): Promise<DocumentProcessingStatusResponse> {
+  return request<DocumentProcessingStatusResponse>(`/documents/${documentId}/process/status`);
+}
+
 export async function getDocumentFileBlob(documentId: number): Promise<Blob> {
   const token = getToken();
   const headers = new Headers();
@@ -353,6 +377,51 @@ export function batchTagDocuments(documentIds: number[], tagIds: number[]): Prom
 
 export function getDocumentEvents(documentId: number, page = 1, size = 20): Promise<PaginatedDocumentEvents> {
   return request<PaginatedDocumentEvents>(`/documents/${documentId}/events?page=${page}&size=${size}`);
+}
+
+export async function streamChat(question: string, callbacks: StreamChatCallbacks, options: StreamChatOptions = {}) {
+  const token = getToken();
+  const response = await fetch(`${API_BASE_URL}/chat/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body: JSON.stringify({
+      question,
+      top_k: options.topK ?? 5,
+      document_id: options.documentId,
+      threshold: options.threshold ?? 0
+    })
+  });
+
+  if (response.status === 401) {
+    handleUnauthorized();
+  }
+  if (!response.ok || !response.body) {
+    throw new Error(response.statusText || `Request failed with ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const messages = buffer.split("\n\n");
+    buffer = messages.pop() ?? "";
+
+    for (const message of messages) {
+      const parsed = parseSseMessage(message);
+      if (!parsed) continue;
+      if (parsed.event === "sources") callbacks.onSources?.(parsed.data as ChatStreamSource[]);
+      if (parsed.event === "token") callbacks.onToken?.(String(parsed.data));
+      if (parsed.event === "error") callbacks.onError?.(String(parsed.data));
+      if (parsed.event === "done") callbacks.onDone?.();
+    }
+  }
 }
 
 export function getTags(): Promise<TagRead[]> {
