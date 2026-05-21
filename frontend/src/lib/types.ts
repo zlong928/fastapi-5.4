@@ -270,6 +270,20 @@ export interface DocumentRead {
   tags: TagRead[];
 }
 
+export interface DocumentProcessingStatusResponse {
+  document_id: number;
+  status: DocumentStatus;
+  processing_status?: DocumentStatus;
+  error?: string | null;
+  processing_error?: string | null;
+  collection_name?: string | null;
+  hash?: string | null;
+  content_summary?: string | null;
+  chunk_count?: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ParseJobRead {
   id: number;
   job_id?: string | null;
@@ -458,4 +472,31 @@ export interface DashboardStatsResponse {
   recent_7_days_documents: number;
   file_type_distribution: Array<{ file_type: string; count: number; ratio: number }>;
   status_distribution: Array<{ status: string; count: number }>;
+}
+
+export interface ChatStreamSource {
+  chunk_id: number | null;
+  document_id: number | null;
+  document_title: string | null;
+  filename: string | null;
+  chunk_index: number | null;
+  chunk_type: string | null;
+  score: number;
+  text: string;
+  source?: string | null;
+  page_start?: number | null;
+  page_end?: number | null;
+}
+
+export interface StreamChatOptions {
+  topK?: number;
+  documentId?: number;
+  threshold?: number;
+}
+
+export interface StreamChatCallbacks {
+  onSources?: (sources: ChatStreamSource[]) => void;
+  onToken?: (token: string) => void;
+  onDone?: () => void;
+  onError?: (message: string) => void;
 }
