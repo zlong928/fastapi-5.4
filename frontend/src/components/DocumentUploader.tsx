@@ -1,11 +1,11 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle2, FileUp, Loader2, X } from "lucide-react";
 import { DragEvent, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { uploadDocument } from "@/lib/api";
-import { DOCUMENT_PROCESSING_MODE_OPTIONS, DocumentProcessingMode, DocumentUploadResponse } from "@/lib/types";
+import { getDocumentProcessingStatus, uploadDocument } from "@/lib/api";
+import { DOCUMENT_PROCESSING_MODE_OPTIONS, DocumentProcessingMode, DocumentStatus, DocumentUploadResponse } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type UploadItem = {
@@ -33,6 +33,46 @@ const SUPPORTED_MIME_TYPES = [
 function isSupportedFile(file: File) {
   const lowerName = file.name.toLowerCase();
   return SUPPORTED_MIME_TYPES.includes(file.type) || SUPPORTED_EXTENSIONS.some((extension) => lowerName.endsWith(extension));
+}
+
+function isTerminalDocumentStatus(status?: DocumentStatus | string | null) {
+  return status === "done" || status === "completed" || status === "failed" || status === "deleted";
+}
+
+function UploadProcessingStatus({ documentId, initialStatus }: { documentId: number; initialStatus?: DocumentStatus }) {
+  const statusQuery = useQuery({
+    queryKey: ["document-processing-status", documentId],
+    queryFn: () => getDocumentProcessingStatus(documentId),
+    initialData: initialStatus
+      ? {
+          document_id: documentId,
+          status: initialStatus,
+          processing_status: initialStatus,
+          created_at: "",
+          updated_at: ""
+        }
+      : undefined,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return isTerminalDocumentStatus(status) ? false : 2000;
+    }
+  });
+
+  const status = statusQuery.data?.status ?? initialStatus ?? "pending";
+  const processingError = statusQuery.data?.processing_error ?? statusQuery.data?.error;
+  const chunkCount = statusQuery.data?.chunk_count;
+
+  return (
+    <div className="mt-2 rounded-md border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+      <div className="flex flex-wrap items-center gap-2">
+        <span>Processing status:</span>
+        <span className="font-semibold capitalize text-slate-900">{status}</span>
+        {!isTerminalDocumentStatus(status) ? <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" /> : null}
+        {typeof chunkCount === "number" ? <span className="text-slate-500">Chunks: {chunkCount}</span> : null}
+      </div>
+      {processingError ? <p className="mt-1 text-red-600">{processingError}</p> : null}
+    </div>
+  );
 }
 
 export function DocumentUploader() {
@@ -141,7 +181,6 @@ export function DocumentUploader() {
 
   return (
     <div className="space-y-6">
-      {/* Custom Title Input */}
       <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(260px,360px)]">
         <div>
           <label className="block text-sm font-medium text-slate-700">
@@ -186,7 +225,6 @@ export function DocumentUploader() {
         </div>
       </div>
 
-      {/* Drop Zone */}
       <div
         onDragOver={(event) => {
           event.preventDefault();
@@ -223,7 +261,6 @@ export function DocumentUploader() {
         </Button>
       </div>
 
-      {/* Upload Results */}
       {items.length > 0 && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
@@ -268,10 +305,13 @@ export function DocumentUploader() {
                       <p className="font-medium">{item.name}</p>
                       {item.document && (
                         <p className="text-sm text-slate-500">
-                          Status: <span className="capitalize">{item.document.status}</span>
+                          Upload status: <span className="capitalize">{item.document.status}</span>
                           <span className="ml-2">Mode: {selectedMode?.label}</span>
                         </p>
                       )}
+                      {item.document ? (
+                        <UploadProcessingStatus documentId={item.document.document_id} initialStatus={item.document.status} />
+                      ) : null}
                       {item.status === "success" && (
                         <div className="mt-2">
                           <div className="flex items-center justify-between text-xs text-slate-500">
