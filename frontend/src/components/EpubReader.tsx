@@ -10,9 +10,10 @@ type EpubReaderProps = {
   fileUrl: string;
   progressKey: string;
   heightClassName?: string;
+  compact?: boolean;
 };
 
-export function EpubReader({ title, fileUrl, progressKey, heightClassName = "h-[72vh] min-h-[620px]" }: EpubReaderProps) {
+export function EpubReader({ title, fileUrl, progressKey, heightClassName = "h-[72vh] min-h-[620px]", compact = false }: EpubReaderProps) {
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const bookRef = useRef<Book | null>(null);
   const renditionRef = useRef<Rendition | null>(null);
@@ -57,40 +58,20 @@ export function EpubReader({ title, fileUrl, progressKey, heightClassName = "h-[
     };
   }, [fileUrl, progressKey]);
 
-  function goPrevious() {
-    renditionRef.current?.prev();
-  }
-
-  function goNext() {
-    renditionRef.current?.next();
-  }
+  function goPrevious() { renditionRef.current?.prev(); }
+  function goNext() { renditionRef.current?.next(); }
 
   return (
     <div className="flex min-h-0 flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
-        <div className="min-w-0">
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">EPUB Reader</p>
-          <p className="truncate text-sm font-semibold text-slate-900">{title}</p>
-        </div>
+        {compact ? <span className="text-sm font-medium text-slate-500">EPUB 阅读</span> : <div className="min-w-0"><p className="text-xs font-medium uppercase tracking-wide text-slate-500">EPUB Reader</p><p className="truncate text-sm font-semibold text-slate-900">{title}</p></div>}
         <div className="flex gap-2">
-          <Button type="button" variant="outline" size="sm" className="gap-2" onClick={goPrevious}>
-            <ChevronLeft className="h-4 w-4" />
-            上一页
-          </Button>
-          <Button type="button" size="sm" className="gap-2" onClick={goNext}>
-            下一页
-            <ChevronRight className="h-4 w-4" />
-          </Button>
+          <Button type="button" variant="outline" size="sm" className="gap-2" onClick={goPrevious}><ChevronLeft className="h-4 w-4" />上一页</Button>
+          <Button type="button" size="sm" className="gap-2" onClick={goNext}>下一页<ChevronRight className="h-4 w-4" /></Button>
         </div>
       </div>
-      {readerError ? (
-        <Alert variant="destructive" className="mx-4">
-          <AlertDescription>{readerError}</AlertDescription>
-        </Alert>
-      ) : null}
-      <div className="min-h-0 flex-1 overflow-hidden bg-white">
-        <div ref={viewerRef} className={`w-full ${heightClassName}`} />
-      </div>
+      {readerError ? <Alert variant="destructive" className="mx-4"><AlertDescription>{readerError}</AlertDescription></Alert> : null}
+      <div className="min-h-0 flex-1 overflow-hidden bg-white"><div ref={viewerRef} className={`w-full ${heightClassName}`} /></div>
     </div>
   );
 }
