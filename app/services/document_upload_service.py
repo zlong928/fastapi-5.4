@@ -3,13 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import logging
+import zipfile
 
 from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.config import MAX_UPLOAD_SIZE_BYTES
+from app.core.time import app_now
 from app.models import Document, JobRun, User
 from app.schemas.document import DocumentProcessingMode
+from app.services.job_run_service import JobRunService
 from app.services.document_processing_modes import validate_processing_mode_compatibility
 from app.services.document_service import DocumentService
 from app.services.file_storage import FileStorageService
@@ -22,6 +25,8 @@ EXTENSION_SOURCE_TYPE = {
     "markdown": "markdown",
     "txt": "txt",
     "text": "txt",
+    "docx": "docx",
+    "epub": "epub",
     "png": "image",
     "jpg": "image",
     "jpeg": "image",
@@ -43,12 +48,15 @@ DECLARED_CONTENT_TYPES_BY_EXTENSION = {
     "markdown": {"text/markdown", "text/plain"},
     "txt": {"text/plain"},
     "text": {"text/plain"},
+    "docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/zip"},
+    "epub": {"application/epub+zip", "application/zip", "application/x-zip-compressed"},
     "png": {"image/png"},
     "jpg": {"image/jpeg"},
     "jpeg": {"image/jpeg"},
     "webp": {"image/webp"},
 }
 PARSE_ENQUEUE_FAILED_REASON = "解析任务入队失败，请稍后重试"
+PREVIEW_ONLY_SOURCE_TYPES = {"epub", "docx"}
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +155,9 @@ class DocumentUploadService:
             filename=file_info.filename,
             mime_type=file_info.detected_mime_type,
         )
+        if file_info.source_type in PREVIEW_ONLY_SOURCE_TYPES:
+            self.mark_preview_only_document(document, job)
+            return DocumentUploadResult(document=document, parse_job=job)
         try:
             self.document_service.enqueue_existing_parse_job(document, job)
         except Exception as exc:
@@ -172,7 +183,7 @@ class DocumentUploadService:
         ext = ext.lower()
         source_type = EXTENSION_SOURCE_TYPE.get(ext)
         if source_type is None:
-            raise ValueError("Unsupported file type. Only PDF, Markdown, TXT, PNG, JPG, JPEG, and WebP are allowed.")
+            raise ValueError("Unsupported file type. Only PDF, Markdown, TXT, DOCX, EPUB, PNG, JPG, JPEG, and WebP are allowed.")
 
         detected_mime_type = self.detect_allowed_mime_type(
             content=content,
@@ -216,19 +227,73 @@ class DocumentUploadService:
         if source_type == "image":
             return self.detect_image_mime_type(content=content, extension=extension)
 
-        raise ValueError("Unsupported file type. Only PDF, Markdown, TXT, PNG, JPG, JPEG, and WebP are allowed.")
+        if source_type == "epub":
+            self.validate_epub_content(content)
+            return "application/epub+zip"
+
+        if source_type == "docx":
+            self.validate_zip_content(content, label="DOCX")
+            return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+        raise ValueError("Unsupported file type. Only PDF, Markdown, TXT, DOCX, EPUB, PNG, JPG, JPEG, and WebP are allowed.")
 
     def expected_magic_mime_type(self, *, extension: str, source_type: str) -> str | None:
         if source_type == "pdf":
             return "application/pdf"
         if source_type == "image":
             return IMAGE_MIME_BY_EXTENSION[extension]
+        if source_type in {"epub", "docx"}:
+            return "application/zip"
         return None
 
     def detect_known_magic_mime_type(self, content: bytes) -> str | None:
         if content.startswith(b"%PDF-"):
             return "application/pdf"
+        if content.startswith(b"PK\x03\x04"):
+            return "application/zip"
         return self.detect_image_magic_bytes(content)
+
+    def validate_zip_content(self, content: bytes, *, label: str) -> None:
+        if not content.startswith(b"PK\x03\x04"):
+            raise ValueError(f"Invalid {label} file: content does not match ZIP magic bytes.")
+        try:
+            from io import BytesIO
+
+            with zipfile.ZipFile(BytesIO(content)) as archive:
+                archive.testzip()
+        except zipfile.BadZipFile as exc:
+            raise ValueError(f"Invalid {label} file: ZIP container is not readable.") from exc
+
+    def validate_epub_content(self, content: bytes) -> None:
+        self.validate_zip_content(content, label="EPUB")
+        from io import BytesIO
+
+        with zipfile.ZipFile(BytesIO(content)) as archive:
+            names = set(archive.namelist())
+            has_container = "META-INF/container.xml" in names
+            has_mimetype = "mimetype" in names and archive.read("mimetype").strip() == b"application/epub+zip"
+            if not has_container or not has_mimetype:
+                raise ValueError("Invalid EPUB file: required EPUB container metadata is missing.")
+
+    def mark_preview_only_document(self, document: Document, job: JobRun) -> None:
+        document.status = "done"
+        document.content_summary = "文件已保存，可在知识库中预览；当前版本未抽取全文用于检索。"
+        document.parsed_at = app_now()
+        JobRunService(self.document_service.db).mark_succeeded(
+            job,
+            output_data={"preview_only": True, "message": "File stored for preview; text extraction is not enabled."},
+        )
+        self.document_service.log_event(
+            document.id,
+            document.user_id,
+            "preview_ready",
+            "文件已保存为预览模式，未执行全文解析",
+            metadata={"source_type": document.source_type},
+            commit=False,
+        )
+        self.document_service.db.commit()
+        self.document_service.db.refresh(document)
+        self.document_service.db.refresh(job)
 
     def validate_declared_content_type(
         self,

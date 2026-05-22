@@ -20,11 +20,13 @@ type UploadItem = {
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const MAX_UPLOAD_MB = Math.round(MAX_UPLOAD_BYTES / 1024 / 1024);
-const SUPPORTED_EXTENSIONS = [".pdf", ".md", ".markdown", ".txt", ".png", ".jpg", ".jpeg", ".webp"];
+const SUPPORTED_EXTENSIONS = [".pdf", ".md", ".markdown", ".txt", ".docx", ".epub", ".png", ".jpg", ".jpeg", ".webp"];
 const SUPPORTED_MIME_TYPES = [
   "application/pdf",
   "text/markdown",
   "text/plain",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/epub+zip",
   "image/png",
   "image/jpeg",
   "image/webp"
@@ -140,7 +142,7 @@ export function DocumentUploader() {
           name: file.name,
           status: "failed",
           progress: 0,
-          error: "Please choose PDF, Markdown, text, PNG, JPG, JPEG, or WebP files."
+          error: "Please choose PDF, Markdown, TXT, DOCX, EPUB, PNG, JPG, JPEG, or WebP files."
         });
         return false;
       }
@@ -154,7 +156,7 @@ export function DocumentUploader() {
           name: "No supported files selected",
           status: "failed",
           progress: 0,
-          error: "Please choose PDF, Markdown, text, PNG, JPG, JPEG, or WebP files."
+          error: "Please choose PDF, Markdown, TXT, DOCX, EPUB, PNG, JPG, JPEG, or WebP files."
         }
       ]);
       return;
@@ -240,7 +242,7 @@ export function DocumentUploader() {
         <input
           ref={inputRef}
           type="file"
-          accept=".pdf,.md,.markdown,.txt,.png,.jpg,.jpeg,.webp,application/pdf,text/markdown,text/plain,image/png,image/jpeg,image/webp"
+          accept=".pdf,.md,.markdown,.txt,.docx,.epub,.png,.jpg,.jpeg,.webp,application/pdf,text/markdown,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/epub+zip,image/png,image/jpeg,image/webp"
           multiple
           disabled={mutation.isPending}
           className="hidden"
@@ -249,7 +251,7 @@ export function DocumentUploader() {
         <FileUp className="mx-auto h-10 w-10 text-slate-500" />
         <h2 className="mt-4 text-lg font-semibold">Drop files here</h2>
         <p className="mt-2 text-sm text-slate-500">
-          Supports PDF, Markdown, text, PNG, JPG, JPEG, and WebP up to {MAX_UPLOAD_MB} MB each
+          Supports PDF, TXT, Markdown, DOCX, EPUB, PNG, JPG, JPEG, and WebP up to {MAX_UPLOAD_MB} MB each
         </p>
         <Button
           type="button"

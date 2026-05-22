@@ -9,6 +9,7 @@ TEXT_TYPES = {"txt", "text"}
 PDF_TYPES = {"pdf"}
 IMAGE_TYPES = {"image"}
 MARKDOWN_TYPES = {"markdown", "md"}
+PREVIEW_ONLY_TYPES = {"epub", "docx"}
 BASIC_FILE_TYPES = {"pdf", "txt", "text", "markdown", "md"}
 
 
@@ -36,7 +37,7 @@ def validate_processing_mode_compatibility(
 ) -> None:
     source_type = detected_source_type.lower()
     if processing_mode == DocumentProcessingMode.AUTO:
-        if source_type in PDF_TYPES | TEXT_TYPES | IMAGE_TYPES | MARKDOWN_TYPES:
+        if source_type in PDF_TYPES | TEXT_TYPES | IMAGE_TYPES | MARKDOWN_TYPES | PREVIEW_ONLY_TYPES:
             return
     elif processing_mode == DocumentProcessingMode.PLAIN_TEXT:
         if source_type in TEXT_TYPES:
@@ -82,6 +83,10 @@ def select_parser_strategy(processing_mode: str | DocumentProcessingMode, detect
             return ProcessingStrategy(name="image_ocr", used_ocr=True)
         if source_type in {"markdown", "md"}:
             return ProcessingStrategy(name="markdown_structure", preserve_structure=True)
+        if source_type == "epub":
+            return ProcessingStrategy(name="epub_reader_preview")
+        if source_type == "docx":
+            return ProcessingStrategy(name="download_preview_only")
         return ProcessingStrategy(name="plain_text")
     if mode == DocumentProcessingMode.PLAIN_TEXT:
         return ProcessingStrategy(name="plain_text")

@@ -1,12 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
-import { FileText, Filter, Library, Search, UploadCloud } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Filter, Library, Plus, Search, UploadCloud, X } from "lucide-react";
+import { FormEvent } from "react";
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { DocumentCard } from "@/components/DocumentCard";
+import { TagPill, TagSelector } from "@/components/TagSelector";
 import { WorkspaceUploadDialog } from "@/components/WorkspaceUploadDialog";
 import { Button } from "@/components/ui/button";
-import { getCollections, getDocuments, getStatistics, getTags } from "@/lib/api";
-import { DocumentListItem, DocumentListParams } from "@/lib/types";
-import { formatChinaDateTime } from "@/lib/time";
+import { createCollection, getCollections, getDocuments, getStatistics, getTags } from "@/lib/api";
+import { CollectionCreate, DocumentListParams } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type FilterKey = "all" | "documents" | "tags" | "collections" | "failed";
@@ -19,46 +20,37 @@ const filters: Array<{ key: FilterKey; label: string }> = [
   { key: "failed", label: "失败" }
 ];
 
-function KnowledgeCard({ document }: { document: DocumentListItem }) {
-  return (
-    <Link
-      to={`/documents/${document.id}`}
-      className="group block rounded-3xl border border-slate-100 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-200 hover:shadow-md"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-50 text-slate-600 ring-1 ring-slate-100">
-          <FileText className="h-5 w-5" />
-        </span>
-        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-500">{document.status}</span>
-      </div>
-      <h3 className="mt-4 line-clamp-2 font-semibold tracking-tight text-slate-950 group-hover:text-slate-700">{document.title}</h3>
-      <p className="mt-2 line-clamp-2 text-sm text-slate-500">{document.content_summary || document.original_filename}</p>
-      <div className="mt-4 flex items-center justify-between text-xs text-slate-400">
-        <span>{document.source_type}</span>
-        <span>{formatChinaDateTime(document.uploaded_at)}</span>
-      </div>
-    </Link>
-  );
-}
-
 export function KnowledgePage() {
+  const queryClient = useQueryClient();
   const [query, setQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState<FilterKey>("all");
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [collectionOpen, setCollectionOpen] = useState(false);
+  const [collectionForm, setCollectionForm] = useState<CollectionCreate>({ name: "", description: "" });
+  const [tagId, setTagId] = useState("");
 
   const documentParams: DocumentListParams = useMemo(() => ({
     page: 1,
     size: 24,
     keyword: query || undefined,
+    tag_id: tagId ? Number(tagId) : undefined,
     status: activeFilter === "failed" ? "failed" : undefined,
     sort_by: "created_at",
     sort_order: "desc"
-  }), [activeFilter, query]);
+  }), [activeFilter, query, tagId]);
 
   const documentsQuery = useQuery({ queryKey: ["documents", "knowledge", documentParams], queryFn: () => getDocuments(documentParams) });
   const tagsQuery = useQuery({ queryKey: ["tags"], queryFn: getTags });
   const collectionsQuery = useQuery({ queryKey: ["collections"], queryFn: getCollections });
   const statsQuery = useQuery({ queryKey: ["statistics"], queryFn: getStatistics });
+  const createCollectionMutation = useMutation({
+    mutationFn: createCollection,
+    onSuccess: () => {
+      setCollectionOpen(false);
+      setCollectionForm({ name: "", description: "" });
+      queryClient.invalidateQueries({ queryKey: ["collections"] });
+    }
+  });
 
   const documents = documentsQuery.data?.items ?? [];
   const shouldShowDocuments = activeFilter === "all" || activeFilter === "documents" || activeFilter === "failed";
@@ -68,6 +60,15 @@ export function KnowledgePage() {
   const hasVisibleTags = shouldShowTags && (tagsQuery.data?.length ?? 0) > 0;
   const hasVisibleCollections = shouldShowCollections && (collectionsQuery.data?.length ?? 0) > 0;
   const hasAnyKnowledge = hasVisibleDocuments || hasVisibleTags || hasVisibleCollections;
+
+  function submitCollection(event: FormEvent) {
+    event.preventDefault();
+    if (!collectionForm.name.trim()) return;
+    createCollectionMutation.mutate({
+      name: collectionForm.name.trim(),
+      description: collectionForm.description?.trim() || undefined
+    });
+  }
 
   return (
     <div className="space-y-5">
@@ -79,9 +80,16 @@ export function KnowledgePage() {
           </div>
           <p className="mt-2 text-sm text-slate-500">集中管理上传资料、标签和集合，形成你的个人第二大脑。</p>
         </div>
-        <Button type="button" className="rounded-full bg-slate-950 px-5 text-white hover:bg-slate-800" onClick={() => setUploadOpen(true)}>
-          + 创建知识库
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" className="rounded-full px-4" onClick={() => setCollectionOpen(true)}>
+            <Plus className="h-4 w-4" />
+            新建知识库
+          </Button>
+          <Button type="button" className="rounded-full bg-slate-950 px-5 text-white hover:bg-slate-800" onClick={() => setUploadOpen(true)}>
+            <UploadCloud className="h-4 w-4" />
+            上传资料
+          </Button>
+        </div>
       </section>
 
       <section className="min-h-[560px] rounded-[2rem] border border-slate-100 bg-white p-4 shadow-sm">
@@ -111,6 +119,16 @@ export function KnowledgePage() {
               </button>
             ))}
           </div>
+          <select
+            value={tagId}
+            onChange={(event) => setTagId(event.target.value)}
+            className="h-10 rounded-full border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none"
+          >
+            <option value="">按标签筛选：全部标签</option>
+            {(tagsQuery.data ?? []).map((tag) => (
+              <option key={tag.id} value={tag.id}>#{tag.name}</option>
+            ))}
+          </select>
         </div>
 
         {documentsQuery.isLoading ? (
@@ -124,8 +142,13 @@ export function KnowledgePage() {
             {hasVisibleDocuments ? (
               <section>
                 <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-700"><Library className="h-4 w-4" />文档知识</div>
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                  {documents.map((document) => <KnowledgeCard key={document.id} document={document} />)}
+                <div className="grid gap-4">
+                  {documents.map((document) => (
+                    <div key={document.id} className="space-y-2">
+                      <DocumentCard document={document} />
+                      <TagSelector documentIds={[document.id]} compact />
+                    </div>
+                  ))}
                 </div>
               </section>
             ) : null}
@@ -134,7 +157,7 @@ export function KnowledgePage() {
               <section>
                 <div className="mb-3 text-sm font-semibold text-slate-700">标签</div>
                 <div className="flex flex-wrap gap-2">
-                  {tagsQuery.data?.map((tag) => <span key={tag.id} className="rounded-full border border-slate-100 bg-slate-50 px-3 py-1.5 text-sm text-slate-600">#{tag.name}</span>)}
+                  {tagsQuery.data?.map((tag) => <TagPill key={tag.id} tag={tag} />)}
                 </div>
               </section>
             ) : null}
@@ -167,6 +190,48 @@ export function KnowledgePage() {
       </section>
 
       <WorkspaceUploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
+      {collectionOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4" role="dialog" aria-modal="true">
+          <form onSubmit={submitCollection} className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold tracking-tight">新建知识库</h2>
+                <p className="mt-1 text-sm text-slate-500">创建一个集合，用来归档同一主题的文档。</p>
+              </div>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setCollectionOpen(false)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="mt-5 space-y-3">
+              <label className="block">
+                <span className="text-sm font-medium text-slate-700">名称</span>
+                <input
+                  value={collectionForm.name}
+                  onChange={(event) => setCollectionForm((current) => ({ ...current, name: event.target.value }))}
+                  className="mt-1 h-10 w-full rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-slate-500"
+                  placeholder="例如：论文、项目资料、读书笔记"
+                />
+              </label>
+              <label className="block">
+                <span className="text-sm font-medium text-slate-700">描述</span>
+                <textarea
+                  value={collectionForm.description ?? ""}
+                  onChange={(event) => setCollectionForm((current) => ({ ...current, description: event.target.value }))}
+                  className="mt-1 min-h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500"
+                  placeholder="这个知识库用来收纳什么？"
+                />
+              </label>
+              {createCollectionMutation.isError ? (
+                <p className="text-sm text-red-600">{createCollectionMutation.error.message}</p>
+              ) : null}
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setCollectionOpen(false)}>取消</Button>
+              <Button type="submit" disabled={!collectionForm.name.trim() || createCollectionMutation.isPending}>创建</Button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }

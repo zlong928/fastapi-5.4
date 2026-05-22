@@ -11,9 +11,6 @@ import {
   NotebookText,
   Search,
   Settings,
-  Sparkles,
-  Tag,
-  Wrench
 } from "lucide-react";
 import { ComponentType, ReactNode } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
@@ -30,22 +27,20 @@ type NavigationItem = {
 };
 
 const sidebarItems: NavigationItem[] = [
-  { href: "/chat", label: "新对话", icon: MessageSquarePlus },
-  { href: "/search", label: "搜索", icon: Search },
-  { href: "/books", label: "笔记", icon: NotebookText },
-  { href: "/tasks", label: "工作空间", icon: Boxes },
+  { href: "/", label: "首页", icon: LayoutGrid },
   { href: "/knowledge", label: "知识库", icon: Library },
-  { href: "/documents", label: "文档管理", icon: FileText },
-  { href: "/tags", label: "标签管理", icon: Tag },
-  { href: "/statistics", label: "统计面板", icon: LayoutGrid }
+  { href: "/search", label: "搜索", icon: Search },
+  { href: "/notes", label: "笔记", icon: NotebookText },
+  { href: "/tasks", label: "任务中心", icon: Boxes },
+  { href: "/chat", label: "新对话", icon: MessageSquarePlus }
 ];
 
 const moduleTabs: NavigationItem[] = [
-  { href: "/", label: "模型", icon: Bot },
+  { href: "/", label: "首页", icon: Bot },
   { href: "/knowledge", label: "知识库", icon: Library },
-  { href: "/search", label: "提示词", icon: Sparkles },
-  { href: "/tasks", label: "技能", icon: ListChecks },
-  { href: "/settings", label: "工具", icon: Wrench }
+  { href: "/search", label: "搜索", icon: Search },
+  { href: "/notes", label: "笔记", icon: NotebookText },
+  { href: "/tasks", label: "任务中心", icon: ListChecks }
 ];
 
 function WorkspaceLink({ href, label, icon: Icon }: NavigationItem) {
@@ -140,8 +135,8 @@ export function Layout({ children }: { children: ReactNode }) {
                 </NavLink>
               ))}
             </nav>
-            <Button asChild size="sm" className="rounded-full bg-slate-950 px-4 text-white hover:bg-slate-800">
-              <Link to="/knowledge">+ 创建知识库</Link>
+            <Button asChild size="sm" variant="outline" className="rounded-full px-4">
+              <Link to="/knowledge">打开知识库</Link>
             </Button>
           </div>
         </header>

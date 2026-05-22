@@ -21,12 +21,14 @@ import {
   BrainCircuit
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { EpubReader } from "@/components/EpubReader";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { TagPill, TagSelector } from "@/components/TagSelector";
 import { deleteDocument, getDocument, getDocumentChunks, getDocumentFileBlob, getDocumentFileText, getDocumentKg, reEmbedDocument, retryDocumentParse } from "@/lib/api";
 import { formatChinaDateTime } from "@/lib/time";
 import { DocumentChunk, DocumentRead, DocumentStatus, processingModeLabel } from "@/lib/types";
@@ -320,7 +322,8 @@ function PreviewPanel({
   isFileLoading,
   quality,
   formatBytes,
-  formatDate
+  formatDate,
+  initialFullscreen = false
 }: {
   document: DocumentRead;
   fileUrl: string | null;
@@ -329,6 +332,7 @@ function PreviewPanel({
   quality: Record<string, unknown> | null;
   formatBytes: (bytes: number) => string;
   formatDate: (dateString: string) => string;
+  initialFullscreen?: boolean;
 }) {
   const [isFullscreenOpen, setIsFullscreenOpen] = useState(false);
   const [showFullText, setShowFullText] = useState(false);
@@ -336,7 +340,8 @@ function PreviewPanel({
   const isImage = document.source_type === "image";
   const isTxt = document.source_type === "txt";
   const isMarkdown = document.source_type === "markdown";
-  const canFullscreen = isPdf || isTxt || isMarkdown;
+  const isEpub = document.source_type === "epub" || document.mime_type === "application/epub+zip";
+  const canFullscreen = isPdf || isTxt || isMarkdown || isImage || isEpub;
   const content = fileText ?? "";
   const TRUNCATE_LENGTH = 5000;
   const isLongText = content.length > TRUNCATE_LENGTH;
@@ -356,6 +361,12 @@ function PreviewPanel({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isFullscreenOpen]);
+
+  useEffect(() => {
+    if (initialFullscreen && canFullscreen && fileUrl) {
+      setIsFullscreenOpen(true);
+    }
+  }, [canFullscreen, fileUrl, initialFullscreen]);
 
   const handleOpenOriginal = () => {
     if (fileUrl) {
@@ -438,6 +449,8 @@ function PreviewPanel({
                 className="max-h-[72vh] w-full object-contain"
               />
             </div>
+          ) : isEpub && fileUrl ? (
+            <EpubReader title={document.title} fileUrl={fileUrl} progressKey={`document-epub-progress-${document.id}`} />
           ) : isTxt && fileText !== undefined ? (
             <div className="max-h-[72vh] min-h-[640px] overflow-y-auto">
               <pre className="whitespace-pre-wrap p-6 text-sm leading-6 text-slate-700">
@@ -468,8 +481,8 @@ function PreviewPanel({
             <div className="flex min-h-[420px] flex-col items-center justify-center gap-3 bg-slate-50 p-8 text-center">
               <FileText className="h-10 w-10 text-slate-300" />
               <div>
-                <p className="font-medium text-slate-900">Inline preview is not available for this file.</p>
-                <p className="mt-1 text-sm text-slate-500">Use Open original or Download original to inspect the source file.</p>
+                <p className="font-medium text-slate-900">暂不支持此类型的在线预览。</p>
+                <p className="mt-1 text-sm text-slate-500">可以打开原文件、下载，或查看文件信息和任务状态。</p>
               </div>
             </div>
           )}
@@ -486,7 +499,7 @@ function PreviewPanel({
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-slate-950 px-4 py-3 text-white shadow-lg">
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold">{document.original_filename}</p>
-              <p className="text-xs text-slate-400">Original {isPdf ? "PDF" : isTxt ? "text" : "Markdown"} preview</p>
+              <p className="text-xs text-slate-400">Original {isPdf ? "PDF" : isTxt ? "text" : isImage ? "image" : isEpub ? "EPUB" : "Markdown"} preview</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button
@@ -527,6 +540,14 @@ function PreviewPanel({
               title={`Fullscreen preview: ${document.original_filename}`}
               className="min-h-0 flex-1 border-0 bg-slate-100"
             />
+          ) : isImage && fileUrl ? (
+            <div className="min-h-0 flex-1 overflow-auto bg-slate-950 p-6">
+              <img src={fileUrl} alt={document.original_filename} className="mx-auto max-h-full max-w-full object-contain" />
+            </div>
+          ) : isEpub && fileUrl ? (
+            <div className="min-h-0 flex-1 bg-white">
+              <EpubReader title={document.title} fileUrl={fileUrl} progressKey={`document-epub-progress-${document.id}`} heightClassName="h-[calc(100vh-4rem)] min-h-0" />
+            </div>
           ) : isTxt ? (
             <pre className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap p-6 text-sm leading-6 text-white">
               {content}
@@ -730,6 +751,7 @@ function ChunksPanel({
 
 export function DocumentDetailPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { id } = useParams<{ id: string }>();
   const documentId = id ? parseInt(id, 10) : 0;
@@ -856,10 +878,10 @@ export function DocumentDetailPage() {
           variant="ghost"
           size="sm"
           className="gap-2"
-          onClick={() => navigate("/documents")}
+          onClick={() => navigate("/knowledge")}
         >
           <ChevronLeft className="h-4 w-4" />
-          Back to Documents
+          Back to Knowledge
         </Button>
 
         {isLoading && (
@@ -915,10 +937,10 @@ export function DocumentDetailPage() {
         variant="ghost"
         size="sm"
         className="gap-2"
-        onClick={() => navigate("/documents")}
+        onClick={() => navigate("/knowledge")}
       >
         <ChevronLeft className="h-4 w-4" />
-        Back to Documents
+        Back to Knowledge
       </Button>
 
       {/* Header */}
@@ -946,6 +968,14 @@ export function DocumentDetailPage() {
             >
               <Download className="h-4 w-4" />
               Download original
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => navigate(`/notes?documentId=${document.id}`)}
+              className="gap-2"
+            >
+              <BrainCircuit className="h-4 w-4" />
+              写文档笔记
             </Button>
             <div className={cn("flex items-center gap-2 rounded-lg border px-3 py-2", getStatusColor(document.status))}>
               {getStatusIcon(document.status)}
@@ -1018,11 +1048,11 @@ export function DocumentDetailPage() {
                 Tags
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
-                {document.tags.length ? document.tags.map((tag) => (
-                  <span key={tag.id} className="rounded-full bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700">
-                    {tag.name}
-                  </span>
-                )) : <span className="text-sm text-slate-500">No tags</span>}
+                {document.tags.length ? document.tags.map((tag) => <TagPill key={tag.id} tag={tag} />) : <span className="text-sm text-slate-500">No tags</span>}
+              </div>
+              <div className="mt-3">
+                <TagSelector documentIds={[document.id]} compact />
+                <p className="mt-2 text-xs text-slate-500">当前后端支持添加/应用标签；移除单个文档标签需要后端补充最小接口。</p>
               </div>
             </div>
           </CardContent>
@@ -1088,6 +1118,7 @@ export function DocumentDetailPage() {
           quality={quality}
           formatBytes={formatBytes}
           formatDate={formatDate}
+          initialFullscreen={searchParams.get("fullscreen") === "1"}
         />
       )}
 

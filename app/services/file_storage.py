@@ -5,7 +5,7 @@ from pathlib import Path, PurePosixPath
 
 from app.core import config
 
-ALLOWED_STORED_EXTENSIONS = {"pdf", "md", "markdown", "txt", "png", "jpg", "jpeg", "webp"}
+ALLOWED_STORED_EXTENSIONS = {"pdf", "md", "markdown", "txt", "docx", "epub", "png", "jpg", "jpeg", "webp"}
 
 
 class FileStorageService:
@@ -59,6 +59,9 @@ class FileStorageService:
         elif extension in {"txt", "md", "markdown"}:
             if b"\x00" in content:
                 raise ValueError(f"Invalid {extension} file: binary content detected.")
+        elif extension in {"docx", "epub"}:
+            if not content.startswith(b"PK\x03\x04"):
+                raise ValueError(f"Invalid {extension} file: zip container magic bytes mismatch.")
 
     def store_file(
         self,
@@ -86,7 +89,7 @@ class FileStorageService:
         if normalized_extension not in ALLOWED_STORED_EXTENSIONS:
             raise ValueError(
                 f"Unsupported file extension: {file_extension}. "
-                f"Only pdf, md, markdown, txt, png, jpg, jpeg, and webp are allowed."
+                f"Only pdf, md, markdown, txt, docx, epub, png, jpg, jpeg, and webp are allowed."
             )
 
         # 验证文件真实内容魔数

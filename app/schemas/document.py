@@ -147,8 +147,8 @@ class DocumentCreate(BaseModel):
     title: Optional[str] = None
     mime_type: str
     source_type: str = Field(
-        pattern="^(pdf|markdown|txt|image)$",
-        description="File type: pdf, markdown, txt, or image"
+        pattern="^(pdf|markdown|txt|image|docx|epub)$",
+        description="File type: pdf, markdown, txt, image, docx, or epub"
     )
     processing_mode: DocumentProcessingMode = DocumentProcessingMode.AUTO
     file_size: int = Field(gt=0, description="File size in bytes")

@@ -1,206 +1,164 @@
 import { useQuery } from "@tanstack/react-query";
-import {
-  FileText,
-  Search,
-  SlidersHorizontal,
-  X,
-} from "lucide-react";
-import { useState } from "react";
+import { FileText, Search, X } from "lucide-react";
+import { FormEvent, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { TagPill } from "@/components/TagSelector";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { searchDocumentChunks } from "@/lib/api";
-import { ChunkSearchHit } from "@/lib/types";
+import { Card, CardContent } from "@/components/ui/card";
+import { getDocuments, getTags } from "@/lib/api";
+import { TagRead } from "@/lib/types";
+
+function parseSearch(raw: string, tags: TagRead[]) {
+  const requestedNames = Array.from(raw.matchAll(/#([^\s#]+)/g)).map((match) => match[1].toLowerCase());
+  const selectedTags = tags.filter((tag) => requestedNames.includes(tag.name.toLowerCase()));
+  const keyword = raw.replace(/#[^\s#]+/g, " ").replace(/\s+/g, " ").trim();
+  return { keyword, selectedTags };
+}
 
 export function SearchPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialQuery = searchParams.get("q") || "";
-  const [query, setQuery] = useState(initialQuery);
-  const [threshold, setThreshold] = useState(0.0);
-  const [showFilters, setShowFilters] = useState(false);
+  const [query, setQuery] = useState(searchParams.get("q") || "");
+  const tagsQuery = useQuery({ queryKey: ["tags"], queryFn: getTags });
+  const tags = tagsQuery.data ?? [];
+  const parsed = useMemo(() => parseSearch(query, tags), [query, tags]);
+  const activeTag = parsed.selectedTags[0];
+  const showTagSuggestions = /(^|\s)#[^\s#]*$/.test(query);
+  const tagNeedle = query.match(/#([^\s#]*)$/)?.[1]?.toLowerCase() ?? "";
+  const suggestedTags = tags.filter((tag) => tag.name.toLowerCase().includes(tagNeedle)).slice(0, 8);
+  const enabled = Boolean(parsed.keyword || activeTag);
 
-  const trimmed = query.trim();
-  const enabled = trimmed.length > 0;
-
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["chunk-search", trimmed, threshold],
-    queryFn: () => searchDocumentChunks(trimmed, 20, undefined, threshold),
-    enabled,
+  const documentsQuery = useQuery({
+    queryKey: ["document-search-with-tags", parsed.keyword, activeTag?.id],
+    queryFn: () => getDocuments({
+      page: 1,
+      size: 30,
+      keyword: parsed.keyword || undefined,
+      tag_id: activeTag?.id,
+      sort_by: "created_at",
+      sort_order: "desc"
+    }),
+    enabled
   });
 
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (trimmed) {
-      setSearchParams({ q: trimmed });
-    }
-  };
+  function handleSearch(event: FormEvent) {
+    event.preventDefault();
+    if (query.trim()) setSearchParams({ q: query.trim() });
+  }
 
-  const handleClear = () => {
+  function clearSearch() {
     setQuery("");
     setSearchParams({});
-  };
+  }
 
-  const goToDocument = (documentId: number) => {
-    navigate(`/documents/${documentId}`);
-  };
-
-  function formatScore(score: number) {
-    return (score * 100).toFixed(1) + "%";
+  function chooseTag(tag: TagRead) {
+    const next = query.replace(/#([^\s#]*)$/, "").trimEnd();
+    setQuery(`${next}${next ? " " : ""}#${tag.name} `);
   }
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-semibold tracking-tight">Semantic Search</h1>
-        <p className="mt-2 text-sm text-slate-500">
-          Search across document chunks using vector embeddings.
-        </p>
+        <h1 className="text-3xl font-semibold tracking-tight">搜索</h1>
+        <p className="mt-2 text-sm text-slate-500">输入关键词检索文档；输入 # 可选择标签，支持“扩散模型 #论文 #重要”这样的组合。</p>
       </div>
 
-      <form onSubmit={handleSearch} className="flex gap-3">
+      <form onSubmit={handleSearch} className="relative flex gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search document chunks..."
-            className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-10 pr-10 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索关键词，或输入 # 选择标签"
+            className="w-full rounded-full border border-slate-200 bg-white py-3 pl-10 pr-10 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-100"
           />
-          {query && (
-            <button
-              type="button"
-              onClick={handleClear}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-            >
+          {query ? (
+            <button type="button" onClick={clearSearch} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
               <X className="h-4 w-4" />
             </button>
-          )}
+          ) : null}
+          {showTagSuggestions && suggestedTags.length > 0 ? (
+            <div className="absolute left-0 right-0 top-14 z-10 rounded-2xl border border-slate-100 bg-white p-2 shadow-lg">
+              {suggestedTags.map((tag) => (
+                <button
+                  key={tag.id}
+                  type="button"
+                  onClick={() => chooseTag(tag)}
+                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm hover:bg-slate-50"
+                >
+                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: tag.color ?? "#2563eb" }} />
+                  #{tag.name}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
-        <Button type="submit" disabled={!trimmed || isLoading} className="gap-2">
+        <Button type="submit" disabled={!query.trim() || documentsQuery.isLoading} className="rounded-full px-5">
           <Search className="h-4 w-4" />
-          Search
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => setShowFilters(!showFilters)}
-          className="gap-2"
-        >
-          <SlidersHorizontal className="h-4 w-4" />
-          Filters
+          搜索
         </Button>
       </form>
 
-      {showFilters && (
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-4">
-              <label className="text-sm font-medium text-slate-700">
-                Similarity threshold: {(threshold * 100).toFixed(0)}%
-              </label>
-              <input
-                type="range"
-                min="0"
-                max="0.9"
-                step="0.05"
-                value={threshold}
-                onChange={(e) => setThreshold(parseFloat(e.target.value))}
-                className="w-48"
-              />
-              <span className="text-xs text-slate-500">
-                Higher = fewer but more relevant results
-              </span>
-            </div>
-          </CardContent>
-        </Card>
+      {(parsed.keyword || parsed.selectedTags.length > 0) && (
+        <div className="flex flex-wrap items-center gap-2 text-sm text-slate-500">
+          {parsed.keyword ? <span className="rounded-full bg-slate-100 px-3 py-1">关键词：{parsed.keyword}</span> : null}
+          {parsed.selectedTags.map((tag) => <TagPill key={tag.id} tag={tag} />)}
+          {parsed.selectedTags.length > 1 ? <span>当前后端按第一个标签过滤，其余标签用于提示。</span> : null}
+        </div>
       )}
 
-      {!enabled && (
+      {!enabled ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-4 p-12 text-center">
             <FileText className="h-12 w-12 text-slate-300" />
             <div>
-              <p className="text-lg font-medium text-slate-900">Search document chunks</p>
-              <p className="mt-1 text-sm text-slate-500">
-                Enter a query above to search across all completed documents using vector similarity.
-              </p>
+              <p className="text-lg font-medium text-slate-900">从关键词或 #标签 开始</p>
+              <p className="mt-1 text-sm text-slate-500">标签过滤会先缩小文档范围，再叠加关键词筛选。</p>
             </div>
           </CardContent>
         </Card>
-      )}
+      ) : null}
 
-      {isLoading && (
+      {documentsQuery.isLoading ? (
         <div className="space-y-3">
-          {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-24 animate-pulse rounded-lg bg-slate-100" />
-          ))}
+          {[...Array(5)].map((_, index) => <div key={index} className="h-24 animate-pulse rounded-lg bg-slate-100" />)}
         </div>
-      )}
+      ) : null}
 
-      {error && (
-        <Card>
-          <CardContent className="p-6 text-sm text-red-600">
-            {(error instanceof Error ? error.message : "An error occurred") as string}
-          </CardContent>
-        </Card>
-      )}
+      {documentsQuery.isError ? (
+        <Card><CardContent className="p-6 text-sm text-red-600">{documentsQuery.error.message}</CardContent></Card>
+      ) : null}
 
-      {data && data.items.length === 0 && (
-        <Card>
-          <CardContent className="p-6 text-sm text-slate-500">
-            No matching chunks found. Try a different query or lower the similarity threshold.
-          </CardContent>
-        </Card>
-      )}
+      {documentsQuery.data && documentsQuery.data.items.length === 0 ? (
+        <Card><CardContent className="p-6 text-sm text-slate-500">没有找到匹配的文档。可以减少关键词，或换一个标签。</CardContent></Card>
+      ) : null}
 
-      {data && data.items.length > 0 && (
+      {documentsQuery.data && documentsQuery.data.items.length > 0 ? (
         <div className="space-y-3">
-          <p className="text-sm text-slate-500">
-            Found {data.total} result{data.total !== 1 ? "s" : ""}
-          </p>
-          {data.items.map((hit: ChunkSearchHit) => (
-            <Card
-              key={hit.id}
-              className="cursor-pointer transition-shadow hover:shadow-md"
-              onClick={() => goToDocument(hit.document_id)}
+          <p className="text-sm text-slate-500">找到 {documentsQuery.data.total} 个文档结果</p>
+          {documentsQuery.data.items.map((document) => (
+            <button
+              key={document.id}
+              type="button"
+              onClick={() => navigate(`/documents/${document.id}`)}
+              className="w-full rounded-2xl border border-slate-100 bg-white p-4 text-left shadow-sm transition hover:border-slate-200 hover:shadow-md"
             >
-              <CardContent className="p-5">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium text-slate-900">{hit.filename || hit.document_title}</p>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      Chunk #{hit.chunk_index}
-                      {hit.hash ? ` · ${hit.hash.slice(0, 12)}` : ""}
-                    </p>
-                    <p className="mt-1 text-sm text-slate-500 line-clamp-2">{hit.text}</p>
-                  </div>
-                  <div className="flex flex-col items-end gap-1 text-xs text-slate-500">
-                    <span
-                      className={`rounded-full px-2 py-0.5 font-medium ${
-                        hit.score >= 0.7
-                          ? "bg-emerald-50 text-emerald-700"
-                          : hit.score >= 0.5
-                          ? "bg-amber-50 text-amber-700"
-                          : "bg-slate-50 text-slate-600"
-                      }`}
-                    >
-                      {formatScore(hit.score)}
-                    </span>
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5">
-                      {hit.chunk_type}
-                    </span>
-                    {hit.page_start && (
-                      <span>p. {hit.page_start}{hit.page_end && hit.page_end !== hit.page_start ? `-${hit.page_end}` : ""}</span>
-                    )}
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="font-semibold text-slate-950">{document.title}</p>
+                  <p className="mt-1 line-clamp-2 text-sm text-slate-500">{document.content_summary || document.original_filename}</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {document.tags.map((tag) => <TagPill key={tag.id} tag={tag} />)}
+                    {!document.tags.length ? <span className="text-xs text-slate-400">无标签</span> : null}
                   </div>
                 </div>
-              </CardContent>
-            </Card>
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600">{document.status}</span>
+              </div>
+            </button>
           ))}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

@@ -191,6 +191,8 @@ async def upload_document(
         document = result.document
         job = result.parse_job
         message = "Document uploaded and queued for parsing."
+        if document.source_type in {"epub", "docx"}:
+            message = "Document uploaded for preview. Text extraction is not enabled for this file type."
         if document.status == "failed" and job.status == "failed":
             message = "Document uploaded, but parsing could not be queued."
         return DocumentUploadResponse(

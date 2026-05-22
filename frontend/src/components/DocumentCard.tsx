@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, Clock, HardDrive, Trash2, RefreshCw } from "lucide-react";
+import { AlertCircle, BrainCircuit, CheckCircle2, Clock, Eye, HardDrive, Maximize2, Trash2, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -161,6 +161,30 @@ export function DocumentCard({
             )}
           </div>
           <div className="flex flex-shrink-0 gap-2" onClick={(e) => e.stopPropagation()}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => navigate(`/documents/${document.id}`)}
+              title="预览"
+            >
+              <Eye className="h-4 w-4" />
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => navigate(`/documents/${document.id}?fullscreen=1`)}
+              title="全屏预览"
+            >
+              <Maximize2 className="h-4 w-4" />
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => navigate(`/notes?documentId=${document.id}`)}
+              title="关联笔记"
+            >
+              <BrainCircuit className="h-4 w-4" />
+            </Button>
             {processingStatus === "failed" && (
               <Button
                 size="sm"

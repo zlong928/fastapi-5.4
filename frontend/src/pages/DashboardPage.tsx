@@ -25,10 +25,10 @@ export function DashboardPage() {
         </div>
         <div className="flex gap-3">
           <Button asChild>
-            <Link to="/upload">Upload</Link>
+            <Link to="/knowledge">上传资料</Link>
           </Button>
           <Button asChild variant="outline">
-            <Link to="/documents">Documents</Link>
+            <Link to="/tasks">任务中心</Link>
           </Button>
         </div>
       </section>

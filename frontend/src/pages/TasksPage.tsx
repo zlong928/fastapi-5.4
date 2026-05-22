@@ -53,7 +53,8 @@ export function TasksPage() {
       <div className="flex items-end justify-between gap-4">
         <div>
           <p className="text-sm font-medium uppercase tracking-wide text-slate-500">Task Center</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight">Background jobs</h1>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight">任务中心</h1>
+          <p className="mt-2 text-sm text-slate-500">查看上传、解析、向量化等后台处理状态；知识库负责资料管理，工具页只放功能入口。</p>
         </div>
         <div className="flex gap-2">
           <Button
