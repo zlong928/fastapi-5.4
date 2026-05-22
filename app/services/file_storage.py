@@ -42,6 +42,24 @@ class FileStorageService:
             raise ValueError("File name is invalid after sanitization.")
         return f"{safe_stem[:180]}.{safe_extension}"
 
+    def _validate_magic_bytes(self, content: bytes, extension: str) -> None:
+        """验证文件内容的真实魔数是否与扩展名匹配"""
+        if extension == "pdf":
+            if not content.startswith(b"%PDF-"):
+                raise ValueError("Invalid PDF file: magic bytes mismatch.")
+        elif extension == "png":
+            if not content.startswith(b"\x89PNG\r\n\x1a\n"):
+                raise ValueError("Invalid PNG file: magic bytes mismatch.")
+        elif extension in {"jpg", "jpeg"}:
+            if not content.startswith(b"\xff\xd8\xff"):
+                raise ValueError("Invalid JPEG file: magic bytes mismatch.")
+        elif extension == "webp":
+            if len(content) < 12 or content[:4] != b"RIFF" or content[8:12] != b"WEBP":
+                raise ValueError("Invalid WebP file: magic bytes mismatch.")
+        elif extension in {"txt", "md", "markdown"}:
+            if b"\x00" in content:
+                raise ValueError(f"Invalid {extension} file: binary content detected.")
+
     def store_file(
         self,
         user_id: int,
@@ -70,6 +88,9 @@ class FileStorageService:
                 f"Unsupported file extension: {file_extension}. "
                 f"Only pdf, md, markdown, txt, png, jpg, jpeg, and webp are allowed."
             )
+
+        # 验证文件真实内容魔数
+        self._validate_magic_bytes(file_content, normalized_extension)
 
         safe_filename = self.safe_original_filename(original_filename)
         safe_stem = Path(safe_filename).stem

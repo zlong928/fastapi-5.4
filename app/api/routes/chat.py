@@ -19,7 +19,7 @@ from app.services.document_search_service import DocumentSearchService
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-CHAT_MODEL = os.getenv("CHAT_MODEL", os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:7b"))
+CHAT_MODEL = os.getenv("CHAT_MODEL", os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:1.5b"))
 CHAT_TIMEOUT_SECONDS = float(os.getenv("CHAT_TIMEOUT_SECONDS", "120"))
 
 
