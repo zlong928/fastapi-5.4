@@ -1,19 +1,69 @@
-import { Activity, FileUp, LayoutDashboard, ListChecks, LogOut, BookOpen, Search, Settings, Tag } from "lucide-react";
-import { ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import {
+  BookOpen,
+  Bot,
+  Boxes,
+  FileText,
+  LayoutGrid,
+  Library,
+  ListChecks,
+  LogOut,
+  MessageSquarePlus,
+  NotebookText,
+  Search,
+  Settings,
+  Sparkles,
+  Tag,
+  Wrench
+} from "lucide-react";
+import { ComponentType, ReactNode } from "react";
+import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
-const navItems = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/documents", label: "Documents", icon: BookOpen },
-  { href: "/upload", label: "Upload", icon: FileUp },
-  { href: "/tags", label: "Tags", icon: Tag },
-  { href: "/search", label: "Search", icon: Search },
-  { href: "/chat", label: "Ask", icon: Search },
-  { href: "/tasks", label: "Tasks", icon: ListChecks },
-  { href: "/settings", label: "Settings", icon: Settings }
+type IconType = ComponentType<{ className?: string }>;
+
+type NavigationItem = {
+  href: string;
+  label: string;
+  icon: IconType;
+};
+
+const sidebarItems: NavigationItem[] = [
+  { href: "/chat", label: "新对话", icon: MessageSquarePlus },
+  { href: "/search", label: "搜索", icon: Search },
+  { href: "/books", label: "笔记", icon: NotebookText },
+  { href: "/tasks", label: "工作空间", icon: Boxes },
+  { href: "/knowledge", label: "知识库", icon: Library },
+  { href: "/documents", label: "文档管理", icon: FileText },
+  { href: "/tags", label: "标签管理", icon: Tag },
+  { href: "/statistics", label: "统计面板", icon: LayoutGrid }
 ];
+
+const moduleTabs: NavigationItem[] = [
+  { href: "/", label: "模型", icon: Bot },
+  { href: "/knowledge", label: "知识库", icon: Library },
+  { href: "/search", label: "提示词", icon: Sparkles },
+  { href: "/tasks", label: "技能", icon: ListChecks },
+  { href: "/settings", label: "工具", icon: Wrench }
+];
+
+function WorkspaceLink({ href, label, icon: Icon }: NavigationItem) {
+  return (
+    <NavLink
+      to={href}
+      className={({ isActive }) =>
+        cn(
+          "flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-950",
+          isActive && "bg-white text-slate-950 shadow-sm ring-1 ring-slate-100"
+        )
+      }
+    >
+      <Icon className="h-4 w-4" />
+      <span>{label}</span>
+    </NavLink>
+  );
+}
 
 export function Layout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
@@ -24,48 +74,82 @@ export function Layout({ children }: { children: ReactNode }) {
     navigate("/login");
   }
 
+  if (!user) {
+    return <main className="min-h-screen bg-white">{children}</main>;
+  }
+
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-border bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-4">
-          <Link to="/" className="flex items-center gap-2 font-semibold">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900 text-white">
-              <Activity className="h-5 w-5" />
+    <div className="min-h-screen bg-white text-slate-950">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[264px] border-r border-slate-100 bg-slate-50/70 px-3 py-4 lg:flex lg:flex-col">
+        <Link to="/knowledge" className="mb-5 flex items-center gap-3 rounded-2xl px-2 py-1.5">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-xs font-bold shadow-sm ring-1 ring-slate-200">
+            KB
+          </span>
+          <div>
+            <p className="text-sm font-semibold leading-tight tracking-tight">Second Brain</p>
+            <p className="text-xs text-slate-400">Knowledge Workspace</p>
+          </div>
+        </Link>
+
+        <nav className="space-y-1">
+          {sidebarItems.map((item) => <WorkspaceLink key={item.href} {...item} />)}
+        </nav>
+
+        <div className="mt-auto rounded-3xl border border-slate-100 bg-white p-3 shadow-sm">
+          <div className="flex items-center gap-3">
+            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-amber-400 font-semibold text-white">
+              {user.username?.slice(0, 1).toUpperCase() || "U"}
             </span>
-            Second Brain
-          </Link>
-          <nav className="flex items-center gap-1">
-            {user ? navItems.map((item) => (
-              <Button
-                asChild
-                key={item.href}
-                variant="ghost"
-                className="gap-2 text-slate-600 hover:text-slate-950"
-              >
-              <Link to={item.href}>
-                <item.icon className="h-4 w-4" />
-                <span className="hidden sm:inline">{item.label}</span>
-              </Link>
-              </Button>
-            )) : null}
-            {user ? (
-              <div className="ml-2 flex items-center gap-2 border-l border-border pl-3">
-                <span className="hidden text-sm text-slate-500 md:inline">{user.username}</span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={onLogout}
-                  className="gap-2 text-slate-600 hover:text-slate-950"
-                >
-                  <LogOut className="h-4 w-4" />
-                  <span className="hidden sm:inline">Logout</span>
-                </Button>
-              </div>
-            ) : null}
-          </nav>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold">{user.username}</p>
+              <p className="flex items-center gap-1 text-xs text-slate-500"><span className="h-2 w-2 rounded-full bg-emerald-500" /> 在线</p>
+            </div>
+          </div>
+          <div className="mt-3 space-y-1 border-t border-slate-100 pt-3">
+            <Button asChild variant="ghost" className="h-9 w-full justify-start rounded-xl text-slate-700">
+              <Link to="/settings"><Settings className="h-4 w-4" />设置</Link>
+            </Button>
+            <Button type="button" variant="ghost" onClick={onLogout} className="h-9 w-full justify-start rounded-xl text-slate-700">
+              <LogOut className="h-4 w-4" />登出
+            </Button>
+          </div>
         </div>
-      </header>
-      <main className="mx-auto max-w-6xl px-5 py-8">{children}</main>
+      </aside>
+
+      <div className="lg:pl-[264px]">
+        <header className="sticky top-0 z-20 border-b border-transparent bg-white/90 backdrop-blur">
+          <div className="flex h-16 items-center justify-between gap-3 px-5 lg:px-7">
+            <Link to="/knowledge" className="flex items-center gap-2 font-semibold lg:hidden">
+              <BookOpen className="h-5 w-5" />
+              Second Brain
+            </Link>
+            <nav className="hidden items-center gap-1 overflow-x-auto lg:flex">
+              {moduleTabs.map((tab) => (
+                <NavLink
+                  key={tab.href}
+                  to={tab.href}
+                  end={tab.href === "/"}
+                  className={({ isActive }) =>
+                    cn(
+                      "inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm font-medium text-slate-400 transition hover:text-slate-900",
+                      isActive && "bg-slate-100 text-slate-950"
+                    )
+                  }
+                >
+                  {tab.label}
+                </NavLink>
+              ))}
+            </nav>
+            <Button asChild size="sm" className="rounded-full bg-slate-950 px-4 text-white hover:bg-slate-800">
+              <Link to="/knowledge">+ 创建知识库</Link>
+            </Button>
+          </div>
+        </header>
+
+        <main className="mx-auto min-h-[calc(100vh-4rem)] max-w-7xl px-5 py-6 lg:px-7">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }
