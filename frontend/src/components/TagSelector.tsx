@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Tag as TagIcon } from "lucide-react";
+import { Tag as TagIcon } from "lucide-react";
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { batchTagDocuments, createTag, getTags } from "@/lib/api";
+import { TagInput } from "@/components/TagInput";
+import { batchTagDocuments, getTags } from "@/lib/api";
 import { TagRead } from "@/lib/types";
 
 export function TagPill({ tag }: { tag: TagRead }) {
@@ -17,77 +17,36 @@ export function TagPill({ tag }: { tag: TagRead }) {
 export function TagSelector({ documentIds, compact = false }: { documentIds: number[]; compact?: boolean }) {
   const queryClient = useQueryClient();
   const tagsQuery = useQuery({ queryKey: ["tags"], queryFn: getTags });
-  const [tagId, setTagId] = useState("");
-  const [newTagName, setNewTagName] = useState("");
-
-  const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["tags"] });
-    queryClient.invalidateQueries({ queryKey: ["documents"] });
-  };
-
+  const [draftTags, setDraftTags] = useState<string[]>([]);
+  const [message, setMessage] = useState("");
   const applyMutation = useMutation({
-    mutationFn: (nextTagId: number) => batchTagDocuments(documentIds, [nextTagId]),
+    mutationFn: async (names: string[]) => {
+      const knownTags = tagsQuery.data ?? [];
+      const tagIds = names.map((name) => knownTags.find((tag) => tag.name.toLowerCase() === name.toLowerCase())?.id).filter((id): id is number => Boolean(id));
+      if (!tagIds.length || !documentIds.length) return null;
+      return batchTagDocuments(documentIds, tagIds);
+    },
     onSuccess: () => {
-      setTagId("");
-      invalidate();
+      setMessage("标签已应用");
+      setDraftTags([]);
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
     }
   });
 
-  const createMutation = useMutation({
-    mutationFn: () => createTag({ name: newTagName.trim(), color: "#2563eb" }),
-    onSuccess: (tag) => {
-      setNewTagName("");
-      applyMutation.mutate(tag.id);
-      invalidate();
-    }
-  });
-
-  function applySelectedTag() {
-    const selected = Number(tagId);
-    if (!selected || !documentIds.length) return;
-    applyMutation.mutate(selected);
-  }
-
-  function createAndApplyTag() {
-    if (!newTagName.trim() || !documentIds.length) return;
-    createMutation.mutate();
+  function onTagsChange(tags: string[]) {
+    setDraftTags(tags);
+    if (tags.length) applyMutation.mutate(tags);
   }
 
   return (
-    <div className={compact ? "flex flex-wrap items-center gap-2" : "space-y-3 rounded-lg border border-slate-200 bg-white p-3"}>
-      {!compact ? (
-        <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-          <TagIcon className="h-4 w-4" />
-          文档标签
-        </div>
-      ) : null}
-      <div className="flex flex-wrap items-center gap-2">
-        <select
-          value={tagId}
-          onChange={(event) => setTagId(event.target.value)}
-          className="h-9 rounded-md border border-slate-300 bg-white px-3 text-sm"
-        >
-          <option value="">选择已有标签</option>
-          {(tagsQuery.data ?? []).map((tag) => (
-            <option key={tag.id} value={tag.id}>{tag.name}</option>
-          ))}
-        </select>
-        <Button type="button" size="sm" variant="outline" disabled={!tagId || !documentIds.length || applyMutation.isPending} onClick={applySelectedTag}>
-          应用
-        </Button>
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          value={newTagName}
-          onChange={(event) => setNewTagName(event.target.value)}
-          placeholder="新建标签并应用"
-          className="h-9 rounded-md border border-slate-300 px-3 text-sm"
-        />
-        <Button type="button" size="sm" disabled={!newTagName.trim() || !documentIds.length || createMutation.isPending} onClick={createAndApplyTag}>
-          <Plus className="h-4 w-4" />
-          新建
-        </Button>
-      </div>
+    <div className={compact ? "space-y-2" : "space-y-3 rounded-lg border border-slate-200 bg-white p-3"}>
+      {!compact ? <div className="flex items-center gap-2 text-sm font-semibold text-slate-700"><TagIcon className="h-4 w-4" />文档标签</div> : null}
+      <TagInput value={draftTags} onChange={onTagsChange} />
+      <p className="text-xs text-slate-500">手动输入 # 后选择或创建标签。移除已有文档标签需要后端补充删除接口。</p>
+      {message ? <p className="text-xs text-emerald-600">{message}</p> : null}
     </div>
   );
 }
+
+export const DocumentTagEditor = TagSelector;
