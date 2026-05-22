@@ -10,6 +10,17 @@ interface WorkspaceUploadDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+const ACCEPTED_KNOWLEDGE_FILES = ".pdf,.md,.markdown,.txt,.png,.jpg,.jpeg,.webp,.epub,.docx";
+
+function resultStatus(item: DocumentBatchUploadItem) {
+  if (!item.ok) return item.error ?? "失败";
+  if (item.status === "pending") return "等待解析";
+  if (item.status === "processing") return "解析中";
+  if (item.status === "failed") return "解析失败";
+  if (item.status === "done" || item.status === "completed") return "可预览";
+  return "已入队";
+}
+
 export function WorkspaceUploadDialog({ open, onOpenChange }: WorkspaceUploadDialogProps) {
   const queryClient = useQueryClient();
   const [files, setFiles] = useState<File[]>([]);
@@ -37,6 +48,7 @@ export function WorkspaceUploadDialog({ open, onOpenChange }: WorkspaceUploadDia
       queryClient.invalidateQueries({ queryKey: ["documents"] });
       queryClient.invalidateQueries({ queryKey: ["statistics"] });
       queryClient.invalidateQueries({ queryKey: ["collections"] });
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
     }
   });
 
@@ -62,8 +74,8 @@ export function WorkspaceUploadDialog({ open, onOpenChange }: WorkspaceUploadDia
       <div className="w-full max-w-2xl rounded-3xl border border-slate-200 bg-white p-5 shadow-2xl">
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
           <div>
-            <h2 className="text-lg font-semibold tracking-tight">上传知识文档</h2>
-            <p className="mt-1 text-sm text-slate-500">支持单文件和批量上传，上传后会自动进入解析队列。</p>
+            <h2 className="text-lg font-semibold tracking-tight">上传知识资料</h2>
+            <p className="mt-1 text-sm text-slate-500">支持单文件和批量上传，上传后会进入解析队列并出现在知识库中。</p>
           </div>
           <Button type="button" variant="ghost" size="icon" className="rounded-full" onClick={closeDialog}>
             <X className="h-4 w-4" />
@@ -74,8 +86,8 @@ export function WorkspaceUploadDialog({ open, onOpenChange }: WorkspaceUploadDia
           <label className="flex cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-slate-300 bg-slate-50/70 px-6 py-8 text-center transition hover:bg-slate-100">
             <UploadCloud className="h-10 w-10 text-slate-400" />
             <span className="mt-3 text-sm font-medium text-slate-800">点击选择文件</span>
-            <span className="mt-1 text-xs text-slate-500">PDF、Markdown、TXT、图片等知识资料</span>
-            <input type="file" multiple className="sr-only" onChange={onFilesChanged} />
+            <span className="mt-1 text-xs text-slate-500">PDF、Markdown、TXT、图片、EPUB、DOCX 等资料文件</span>
+            <input type="file" multiple accept={ACCEPTED_KNOWLEDGE_FILES} className="sr-only" onChange={onFilesChanged} />
           </label>
 
           <div className="rounded-2xl border border-slate-100 bg-white px-4 py-3 text-sm text-slate-600">
@@ -128,10 +140,13 @@ export function WorkspaceUploadDialog({ open, onOpenChange }: WorkspaceUploadDia
                   <span className="truncate text-slate-700">{item.filename}</span>
                   <span className={item.ok ? "inline-flex items-center gap-1 text-emerald-600" : "inline-flex items-center gap-1 text-red-600"}>
                     {item.ok ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
-                    {item.ok ? "已入队" : item.error ?? "失败"}
+                    {resultStatus(item)}
                   </span>
                 </div>
               ))}
+              {results.some((item) => item.filename.toLowerCase().endsWith(".epub")) ? (
+                <p className="rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">EPUB 已进入知识库。若后端尚未开启全文解析，它仍可作为阅读资料预览。</p>
+              ) : null}
             </div>
           ) : null}
         </div>
