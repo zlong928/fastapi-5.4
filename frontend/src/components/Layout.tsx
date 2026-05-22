@@ -2,18 +2,20 @@ import {
   BookOpen,
   Bot,
   Boxes,
-  FileText,
   LayoutGrid,
   Library,
   ListChecks,
   LogOut,
-  MessageSquarePlus,
+  MessageSquare,
   NotebookText,
+  Plus,
+  RefreshCw,
   Search,
   Settings,
+  UploadCloud,
 } from "lucide-react";
 import { ComponentType, ReactNode } from "react";
-import { Link, NavLink, useNavigate } from "react-router-dom";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -32,7 +34,7 @@ const sidebarItems: NavigationItem[] = [
   { href: "/search", label: "搜索", icon: Search },
   { href: "/notes", label: "笔记", icon: NotebookText },
   { href: "/tasks", label: "任务中心", icon: Boxes },
-  { href: "/chat", label: "新对话", icon: MessageSquarePlus }
+  { href: "/chat", label: "AI 问答", icon: MessageSquare }
 ];
 
 const moduleTabs: NavigationItem[] = [
@@ -40,13 +42,15 @@ const moduleTabs: NavigationItem[] = [
   { href: "/knowledge", label: "知识库", icon: Library },
   { href: "/search", label: "搜索", icon: Search },
   { href: "/notes", label: "笔记", icon: NotebookText },
-  { href: "/tasks", label: "任务中心", icon: ListChecks }
+  { href: "/tasks", label: "任务中心", icon: ListChecks },
+  { href: "/chat", label: "AI 问答", icon: MessageSquare }
 ];
 
 function WorkspaceLink({ href, label, icon: Icon }: NavigationItem) {
   return (
     <NavLink
       to={href}
+      end={href === "/"}
       className={({ isActive }) =>
         cn(
           "flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-950",
@@ -60,9 +64,28 @@ function WorkspaceLink({ href, label, icon: Icon }: NavigationItem) {
   );
 }
 
+function actionForPath(pathname: string) {
+  if (pathname.startsWith("/knowledge")) {
+    return { href: "/knowledge?upload=1", label: "上传资料", icon: UploadCloud };
+  }
+  if (pathname.startsWith("/notes")) {
+    return { href: "/notes?new=1", label: "新建笔记", icon: Plus };
+  }
+  if (pathname.startsWith("/tasks")) {
+    return { href: "/tasks", label: "刷新任务", icon: RefreshCw };
+  }
+  if (pathname.startsWith("/chat")) {
+    return { href: "/chat?new=1", label: "新对话", icon: Plus };
+  }
+  return { href: "/knowledge", label: "进入知识库", icon: Library };
+}
+
 export function Layout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const pageAction = actionForPath(location.pathname);
+  const ActionIcon = pageAction.icon;
 
   function onLogout() {
     logout();
@@ -136,7 +159,10 @@ export function Layout({ children }: { children: ReactNode }) {
               ))}
             </nav>
             <Button asChild size="sm" variant="outline" className="rounded-full px-4">
-              <Link to="/knowledge">打开知识库</Link>
+              <Link to={pageAction.href}>
+                <ActionIcon className="h-4 w-4" />
+                {pageAction.label}
+              </Link>
             </Button>
           </div>
         </header>
