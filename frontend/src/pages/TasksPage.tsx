@@ -1,15 +1,24 @@
 import { RefreshCw, Search, Trash2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { TaskTable } from "@/components/TaskTable";
+import { Link } from "react-router-dom";
+import { StatusBadge } from "@/components/StatusBadge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTasks } from "@/hooks/useTasks";
 import { clearTasks } from "@/lib/api";
-import { TaskListParams } from "@/lib/types";
+import { formatChinaDateTime } from "@/lib/time";
+import { TaskListParams, TaskRecord } from "@/lib/types";
 
-const ITEMS_PER_PAGE = 10;
+const ITEMS_PER_PAGE = 12;
+
+function taskTypeLabel(task: TaskRecord) {
+  if (task.task_kind === "document_parse") return "解析";
+  if (task.task_kind === "basic_file_processing") return "处理";
+  if (task.task_kind === "document_embedding") return "Embedding";
+  return task.task_kind;
+}
 
 export function TasksPage() {
   const [page, setPage] = useState(1);
@@ -19,12 +28,14 @@ export function TasksPage() {
     sort_by: "updated_at",
     sort_order: "desc"
   });
+
   const queryParams = useMemo(() => ({ ...filters, page, size: ITEMS_PER_PAGE }), [filters, page]);
   const { data, error, isError, isLoading, isFetching, refetch } = useTasks(queryParams);
   const tasks = data?.items ?? [];
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / ITEMS_PER_PAGE));
   const queryClient = useQueryClient();
+
   const clearMutation = useMutation({
     mutationFn: clearTasks,
     onSuccess: () => {
@@ -37,139 +48,117 @@ export function TasksPage() {
     setFilters((current) => ({ ...current, [key]: value }));
   }
 
-  function clearFilters() {
-    setPage(1);
-    setFilters({ page: 1, size: ITEMS_PER_PAGE, sort_by: "updated_at", sort_order: "desc" });
-  }
-
   const handleClear = () => {
-    if (confirm("Clear task records from your task list? Document history remains attached to documents.")) {
-      clearMutation.mutate();
-    }
+    if (confirm("清空任务记录？")) clearMutation.mutate();
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-end justify-between gap-4">
+    <div className="mx-auto max-w-5xl space-y-4">
+      <section className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-sm font-medium uppercase tracking-wide text-slate-500">Task Center</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight">任务中心</h1>
-          <p className="mt-2 text-sm text-slate-500">查看上传、解析、向量化等后台处理状态；知识库负责资料管理，工具页只放功能入口。</p>
+          <h1 className="text-2xl font-semibold tracking-tight">任务</h1>
+          <p className="mt-1 text-sm text-slate-400">{total} 条</p>
         </div>
-        <div className="flex gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => refetch()}
-            className="gap-2"
-          >
-            <RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} /> Refresh
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={handleClear}
-            className="gap-2"
-            disabled={tasks.length === 0 || clearMutation.isPending}
-          >
-            <Trash2 className="h-4 w-4" /> Clear
-          </Button>
-        </div>
-      </div>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-4">
-        <div className="grid gap-3 md:grid-cols-4">
-          <label className="md:col-span-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Search</span>
-            <div className="relative mt-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input
-                value={filters.q ?? ""}
-                onChange={(event) => updateFilter("q", event.target.value)}
-                placeholder="Task ID, file name, title, or error"
-                className="h-10 w-full rounded-md border border-slate-300 pl-9 pr-3 text-sm focus:border-blue-500 focus:outline-none"
-              />
-            </div>
-          </label>
-          <label>
-            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</span>
-            <select
-              value={filters.status ?? ""}
-              onChange={(event) => updateFilter("status", event.target.value || undefined)}
-              className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
-            >
-              <option value="">All statuses</option>
-              <option value="queued">Queued</option>
-              <option value="running">Running</option>
-              <option value="succeeded">Succeeded</option>
-              <option value="failed">Failed</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
-          </label>
-          <label>
-            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Type</span>
-            <select
-              value={filters.kind ?? ""}
-              onChange={(event) => updateFilter("kind", event.target.value || undefined)}
-              className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
-            >
-              <option value="">All types</option>
-              <option value="document_parse">Document parse</option>
-              <option value="basic_file_processing">File task</option>
-              <option value="document_embedding">Document embedding</option>
-              <option value="document_summary">Document summary</option>
-            </select>
-          </label>
-          <label className="md:col-span-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sort</span>
-            <select
-              value={`${filters.sort_by}:${filters.sort_order}`}
-              onChange={(event) => {
-                const [sortBy, sortOrder] = event.target.value.split(":");
-                setPage(1);
-                setFilters((current) => ({
-                  ...current,
-                  sort_by: sortBy as TaskListParams["sort_by"],
-                  sort_order: sortOrder as "asc" | "desc"
-                }));
-              }}
-              className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
-            >
-              <option value="updated_at:desc">Recently updated</option>
-              <option value="created_at:desc">Newest first</option>
-              <option value="file_name:asc">File name A-Z</option>
-              <option value="status:asc">Status</option>
-              <option value="kind:asc">Type</option>
-              <option value="progress:desc">Progress high-low</option>
-            </select>
-          </label>
-          <div className="flex items-end justify-between gap-3 md:col-span-2">
-            <p className="pb-2 text-sm text-slate-500">{total} task(s)</p>
-            <Button type="button" variant="outline" size="sm" onClick={clearFilters}>Clear filters</Button>
-          </div>
+        <div className="flex gap-2">
+          <Button type="button" variant="outline" size="sm" className="rounded-xl border-slate-100 shadow-none" onClick={() => refetch()}>
+            <RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
+          </Button>
+          <Button type="button" variant="outline" size="sm" className="rounded-xl border-slate-100 shadow-none" onClick={handleClear} disabled={tasks.length === 0 || clearMutation.isPending}>
+            <Trash2 className="h-4 w-4" />
+          </Button>
         </div>
       </section>
 
-      {isLoading ? <Skeleton className="h-64 w-full" /> : null}
+      <section className="flex flex-wrap gap-2 rounded-3xl border border-slate-100 bg-white p-2">
+        <label className="relative min-w-[240px] flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            value={filters.q ?? ""}
+            onChange={(event) => updateFilter("q", event.target.value)}
+            placeholder="搜索"
+            className="h-10 w-full rounded-2xl border border-transparent bg-slate-50 pl-9 pr-3 text-sm outline-none focus:border-slate-200 focus:bg-white"
+          />
+        </label>
+
+        <select value={filters.status ?? ""} onChange={(event) => updateFilter("status", event.target.value || undefined)} className="h-10 rounded-2xl border border-slate-100 bg-white px-3 text-sm text-slate-600 outline-none">
+          <option value="">状态</option>
+          <option value="queued">Queued</option>
+          <option value="running">Running</option>
+          <option value="succeeded">Succeeded</option>
+          <option value="failed">Failed</option>
+        </select>
+
+        <select value={filters.kind ?? ""} onChange={(event) => updateFilter("kind", event.target.value || undefined)} className="h-10 rounded-2xl border border-slate-100 bg-white px-3 text-sm text-slate-600 outline-none">
+          <option value="">类型</option>
+          <option value="document_parse">解析</option>
+          <option value="basic_file_processing">处理</option>
+          <option value="document_embedding">Embedding</option>
+        </select>
+      </section>
+
+      {isLoading ? <Skeleton className="h-40 w-full rounded-3xl" /> : null}
+
       {isError ? (
         <Alert variant="destructive">
           <AlertDescription>{error.message}</AlertDescription>
         </Alert>
       ) : null}
+
       {clearMutation.isError ? (
         <Alert variant="destructive">
           <AlertDescription>{clearMutation.error.message}</AlertDescription>
         </Alert>
       ) : null}
-      {!isLoading && !isError ? <TaskTable tasks={tasks} /> : null}
 
-      <div className="flex items-center justify-between border-t border-slate-200 pt-4">
-        <p className="text-sm text-slate-600">Page {page} of {totalPages}</p>
+      {!isLoading && !isError ? (
+        tasks.length ? (
+          <div className="space-y-2">
+            {tasks.map((task) => (
+              <TaskFlowItem key={task.task_id} task={task} />
+            ))}
+          </div>
+        ) : (
+          <div className="flex min-h-[320px] items-center justify-center rounded-3xl border border-dashed border-slate-100 text-sm text-slate-400">
+            无任务
+          </div>
+        )
+      ) : null}
+
+      <div className="flex items-center justify-between pt-2 text-sm text-slate-400">
+        <span>{page} / {totalPages}</span>
         <div className="flex gap-2">
-          <Button variant="outline" disabled={page === 1} onClick={() => setPage((current) => current - 1)}>Previous</Button>
-          <Button variant="outline" disabled={page >= totalPages} onClick={() => setPage((current) => current + 1)}>Next</Button>
+          <Button variant="outline" size="sm" className="rounded-xl border-slate-100 shadow-none" disabled={page === 1} onClick={() => setPage((current) => current - 1)}>上一页</Button>
+          <Button variant="outline" size="sm" className="rounded-xl border-slate-100 shadow-none" disabled={page >= totalPages} onClick={() => setPage((current) => current + 1)}>下一页</Button>
         </div>
       </div>
     </div>
+  );
+}
+
+function TaskFlowItem({ task }: { task: TaskRecord }) {
+  const href = task.task_kind === "document_parse" && task.document_id ? `/documents/${task.document_id}` : `/tasks/${task.task_id}`;
+
+  return (
+    <Link to={href} className="block rounded-2xl border border-slate-100 bg-white px-4 py-3 transition hover:bg-slate-50">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="truncate text-sm font-medium text-slate-950">{task.file_name ?? task.filename ?? task.task_id}</p>
+            <StatusBadge status={task.status} />
+          </div>
+
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
+            <span>{taskTypeLabel(task)}</span>
+            <span>{task.progress}%</span>
+            <span>{formatChinaDateTime(task.updated_at)}</span>
+          </div>
+
+          {task.error ? (
+            <p className="mt-2 line-clamp-2 rounded-xl bg-red-50 px-3 py-2 text-xs text-red-600">{task.error}</p>
+          ) : null}
+        </div>
+      </div>
+    </Link>
   );
 }
