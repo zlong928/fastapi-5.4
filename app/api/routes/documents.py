@@ -41,14 +41,11 @@ from app.services.job_run_service import JobRunService
 from app.utils.json import json_loads_object_or_none
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+SOURCE_TYPE_PATTERN = "^(pdf|markdown|txt|image|docx|epub|bookmark|note|diary)$"
 
 
 def explain_interface(*, responsibility: str, database: str, files: str, future: str | None = None) -> str:
-    parts = [
-        f"Responsibility: {responsibility}",
-        f"Database: {database}",
-        f"Files: {files}",
-    ]
+    parts = [f"Responsibility: {responsibility}", f"Database: {database}", f"Files: {files}"]
     if future:
         parts.append(f"Future simplification: {future}")
     return "\n\n".join(parts)
@@ -63,120 +60,30 @@ def serialize_latest_parse_job(job_run: JobRun | None) -> ParseJobRead | None:
     if job_run is None:
         return None
     metadata = json_loads_object_or_none(job_run.metadata_json) or {}
-    return ParseJobRead(
-        id=job_run.id,
-        job_id=job_run.job_id,
-        document_id=job_run.document_id or 0,
-        user_id=job_run.user_id,
-        status=job_run.status,
-        job_type=str(metadata.get("job_type") or job_run.kind),
-        metadata_json=job_run.metadata_json,
-        error_message=job_run.error_message,
-        started_at=job_run.started_at,
-        finished_at=job_run.finished_at,
-        created_at=job_run.created_at,
-        updated_at=job_run.updated_at,
-    )
+    return ParseJobRead(id=job_run.id, job_id=job_run.job_id, document_id=job_run.document_id or 0, user_id=job_run.user_id, status=job_run.status, job_type=str(metadata.get("job_type") or job_run.kind), metadata_json=job_run.metadata_json, error_message=job_run.error_message, started_at=job_run.started_at, finished_at=job_run.finished_at, created_at=job_run.created_at, updated_at=job_run.updated_at)
 
 
 def serialize_document_detail(document: Document, latest_parse_job=None) -> DocumentDetailResponse:
     events = sorted(document.events, key=lambda event: event.created_at)
     tags = [TagRead.model_validate(link.tag) for link in document.tag_links]
-    return DocumentDetailResponse(
-        id=document.id,
-        user_id=document.user_id,
-        title=document.title,
-        original_filename=document.original_filename,
-        source_type=document.source_type,
-        source_url=document.source_url,
-        site_name=document.site_name,
-        processing_mode=document.processing_mode,
-        processing_strategy=document.processing_strategy,
-        status=document.status,
-        processing_status=document.status,
-        file_size=document.file_size,
-        mime_type=document.mime_type,
-        parsed_text=document.parsed_text,
-        cleaned_text=document.cleaned_text,
-        parse_quality_json=document.parse_quality_json,
-        references_text=document.references_text,
-        collection_name=document.collection_name,
-        content_hash=document.content_hash,
-        content_summary=document.content_summary,
-        chunk_count=document.chunk_count,
-        error_message=document.error_message,
-        fail_reason=document.fail_reason,
-        processing_error=document.fail_reason or document.error_message,
-        created_at=document.created_at,
-        updated_at=document.updated_at,
-        uploaded_at=document.uploaded_at,
-        parsed_at=document.parsed_at,
-        latest_parse_job=serialize_latest_parse_job(latest_parse_job),
-        events=[DocumentEventRead.model_validate(event) for event in events],
-        tags=tags,
-    )
+    return DocumentDetailResponse(id=document.id, user_id=document.user_id, title=document.title, original_filename=document.original_filename, source_type=document.source_type, source_url=document.source_url, site_name=document.site_name, processing_mode=document.processing_mode, processing_strategy=document.processing_strategy, status=document.status, processing_status=document.status, file_size=document.file_size, mime_type=document.mime_type, parsed_text=document.parsed_text, cleaned_text=document.cleaned_text, parse_quality_json=document.parse_quality_json, references_text=document.references_text, collection_name=document.collection_name, content_hash=document.content_hash, content_summary=document.content_summary, chunk_count=document.chunk_count, error_message=document.error_message, fail_reason=document.fail_reason, processing_error=document.fail_reason or document.error_message, created_at=document.created_at, updated_at=document.updated_at, uploaded_at=document.uploaded_at, parsed_at=document.parsed_at, latest_parse_job=serialize_latest_parse_job(latest_parse_job), events=[DocumentEventRead.model_validate(event) for event in events], tags=tags)
 
 
 def serialize_document_list_item(document: Document, latest_job=None) -> dict:
-    return {
-        "id": document.id,
-        "title": document.title,
-        "original_filename": document.original_filename,
-        "source_type": document.source_type,
-        "source_url": document.source_url,
-        "site_name": document.site_name,
-        "processing_mode": document.processing_mode,
-        "processing_strategy": document.processing_strategy,
-        "status": document.status,
-        "processing_status": document.status,
-        "file_size": document.file_size,
-        "error_message": document.error_message,
-        "fail_reason": document.fail_reason,
-        "processing_error": document.fail_reason or document.error_message,
-        "latest_parse_job_status": latest_job.status if latest_job else None,
-        "collection_name": document.collection_name,
-        "content_hash": document.content_hash,
-        "content_summary": document.content_summary,
-        "chunk_count": document.chunk_count,
-        "created_at": document.created_at,
-        "updated_at": document.updated_at,
-        "uploaded_at": document.uploaded_at,
-        "parsed_at": document.parsed_at,
-        "tags": [TagRead.model_validate(link.tag) for link in document.tag_links],
-    }
+    return {"id": document.id, "title": document.title, "original_filename": document.original_filename, "source_type": document.source_type, "source_url": document.source_url, "site_name": document.site_name, "processing_mode": document.processing_mode, "processing_strategy": document.processing_strategy, "status": document.status, "processing_status": document.status, "file_size": document.file_size, "error_message": document.error_message, "fail_reason": document.fail_reason, "processing_error": document.fail_reason or document.error_message, "latest_parse_job_status": latest_job.status if latest_job else None, "collection_name": document.collection_name, "content_hash": document.content_hash, "content_summary": document.content_summary, "chunk_count": document.chunk_count, "created_at": document.created_at, "updated_at": document.updated_at, "uploaded_at": document.uploaded_at, "parsed_at": document.parsed_at, "tags": [TagRead.model_validate(link.tag) for link in document.tag_links]}
 
 
 @router.post("/bookmarks", response_model=BookmarkCreateResponse, status_code=status.HTTP_201_CREATED)
 async def create_bookmark_document(payload: BookmarkCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> BookmarkCreateResponse:
     try:
-        document = await BookmarkService(db).create_bookmark(
-            user_id=current_user.id,
-            url=payload.url,
-            title=payload.title,
-            collection_name=payload.collection_name,
-            tag_ids=payload.tag_ids,
-            processing_mode=payload.processing_mode.value,
-        )
+        document = await BookmarkService(db).create_bookmark(user_id=current_user.id, url=payload.url, title=payload.title, collection_name=payload.collection_name, tag_ids=payload.tag_ids, processing_mode=payload.processing_mode.value)
     except BookmarkError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return BookmarkCreateResponse(
-        document_id=document.id,
-        status=document.status,
-        processing_status=document.status,
-        source_type=document.source_type,
-        source_url=document.source_url,
-        message="已保存" if document.status in DONE_STATUSES else (document.fail_reason or "保存失败"),
-    )
+    return BookmarkCreateResponse(document_id=document.id, status=document.status, processing_status=document.status, source_type=document.source_type, source_url=document.source_url, message="已保存" if document.status in DONE_STATUSES else (document.fail_reason or "保存失败"))
 
 
 @router.post("/upload", response_model=DocumentUploadResponse, status_code=status.HTTP_202_ACCEPTED)
-async def upload_document(
-    file: UploadFile = File(...),
-    title: str | None = Form(None),
-    processing_mode: DocumentProcessingMode = Form(DocumentProcessingMode.AUTO),
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> DocumentUploadResponse:
+async def upload_document(file: UploadFile = File(...), title: str | None = Form(None), processing_mode: DocumentProcessingMode = Form(DocumentProcessingMode.AUTO), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DocumentUploadResponse:
     try:
         result = await DocumentUploadService(db).upload_one(file=file, user=current_user, title=title, processing_mode=processing_mode)
         document = result.document
@@ -186,15 +93,7 @@ async def upload_document(
             message = "Document uploaded for preview. Text extraction is not enabled for this file type."
         if document.status == "failed" and job.status == "failed":
             message = "Document uploaded, but parsing could not be queued."
-        return DocumentUploadResponse(
-            document_id=document.id,
-            status=document.status,
-            processing_status=document.status,
-            parse_job_id=job.id,
-            job_id=job.job_id,
-            processing_mode=document.processing_mode,
-            message=message,
-        )
+        return DocumentUploadResponse(document_id=document.id, status=document.status, processing_status=document.status, parse_job_id=job.id, job_id=job.job_id, processing_mode=document.processing_mode, message=message)
     except DuplicateUploadError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
@@ -205,12 +104,7 @@ async def upload_document(
 
 
 @router.post("/batch-upload", response_model=list[DocumentBatchUploadItem], status_code=status.HTTP_202_ACCEPTED)
-async def upload_batch(
-    files: list[UploadFile] = File(...),
-    processing_mode: DocumentProcessingMode = Form(DocumentProcessingMode.AUTO),
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> list[DocumentBatchUploadItem]:
+async def upload_batch(files: list[UploadFile] = File(...), processing_mode: DocumentProcessingMode = Form(DocumentProcessingMode.AUTO), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[DocumentBatchUploadItem]:
     results: list[DocumentBatchUploadItem] = []
     upload_service = DocumentUploadService(db)
     for file in files:
@@ -230,40 +124,12 @@ async def upload_batch(
 
 
 @router.get("", response_model=DocumentListResponse)
-async def list_documents(
-    page: int = Query(1, ge=1),
-    size: int = Query(20, ge=1, le=100),
-    skip: int | None = Query(None, ge=0),
-    limit: int | None = Query(None, ge=1, le=100),
-    keyword: str | None = Query(None),
-    tag_id: int | None = Query(None, ge=1),
-    file_type: str | None = Query(None, pattern="^(pdf|markdown|txt|image|docx|epub|bookmark)$"),
-    status: str | None = Query(None, pattern="^(pending|processing|done|completed|failed|deleted)$"),
-    start_date: datetime | None = Query(None),
-    end_date: datetime | None = Query(None),
-    sort_by: str = Query("created_at"),
-    sort_order: str = Query("desc", pattern="^(asc|desc)$"),
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> DocumentListResponse:
+async def list_documents(page: int = Query(1, ge=1), size: int = Query(20, ge=1, le=100), skip: int | None = Query(None, ge=0), limit: int | None = Query(None, ge=1, le=100), keyword: str | None = Query(None), tag_id: int | None = Query(None, ge=1), file_type: str | None = Query(None, pattern=SOURCE_TYPE_PATTERN), status: str | None = Query(None, pattern="^(pending|processing|done|completed|failed|deleted)$"), start_date: datetime | None = Query(None), end_date: datetime | None = Query(None), sort_by: str = Query("created_at"), sort_order: str = Query("desc", pattern="^(asc|desc)$"), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DocumentListResponse:
     service = DocumentService(db)
     actual_size = limit or size
     actual_skip = skip if skip is not None else (page - 1) * actual_size
     actual_page = page if skip is None else (actual_skip // actual_size) + 1
-    documents, total = service.get_user_documents(
-        user_id=current_user.id,
-        skip=actual_skip,
-        limit=actual_size,
-        exclude_deleted=True,
-        keyword=keyword,
-        tag_id=tag_id,
-        file_type=file_type,
-        status=status,
-        start_date=start_date,
-        end_date=end_date,
-        sort_by=sort_by,
-        sort_order=sort_order,
-    )
+    documents, total = service.get_user_documents(user_id=current_user.id, skip=actual_skip, limit=actual_size, exclude_deleted=True, keyword=keyword, tag_id=tag_id, file_type=file_type, status=status, start_date=start_date, end_date=end_date, sort_by=sort_by, sort_order=sort_order)
     return DocumentListResponse(total=total, page=actual_page, size=actual_size, items=[serialize_document_list_item(doc, service.get_latest_parse_job(doc.id)) for doc in documents])
 
 
@@ -383,8 +249,8 @@ async def get_document_file(document_id: int, current_user: User = Depends(get_c
     if not document:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
     assert_document_owner(document, current_user)
-    if document.source_type == "bookmark" or document.original_file_path.startswith("bookmark:"):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bookmark has no stored file.")
+    if document.source_type in {"bookmark", "note", "diary"} or document.original_file_path.startswith(("bookmark:", "note:", "diary:")):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This document has no stored file.")
     file_path = DocumentService(db).file_storage.get_file_path(document.original_file_path)
     if not file_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found.")
@@ -473,100 +339,16 @@ async def get_document_kg(document_id: int, current_user: User = Depends(get_cur
 
 
 def _apply_openapi_boundaries() -> None:
-    default_description = explain_interface(
-        responsibility="Operate on authenticated user-owned knowledge documents for the named route.",
-        database="Uses documents and directly related document tables scoped to the current user.",
-        files="Only touches stored upload files when the route explicitly uploads, downloads, or deletes file-backed documents.",
-    )
-    metadata_by_path_method = {
-        ("POST", "/documents/bookmarks"): (
-            "Save bookmark document",
-            explain_interface(
-                responsibility="Create a bookmark-backed document from a public HTTP/HTTPS URL and extract text chunks.",
-                database="Writes documents, document_chunks, document_events, and optional document_tags for the current user.",
-                files="none; bookmark documents store source_url/site_name metadata and do not create a stored upload file.",
-            ),
-        ),
-        ("POST", "/documents/upload"): (
-            "Upload document and queue parsing",
-            explain_interface(
-                responsibility="Accept one uploaded file, create its document record, and queue parsing.",
-                database="Writes documents, job_runs, and document_events in one upload flow.",
-                files="Writes the stored upload file before returning the queued document response.",
-            ),
-        ),
-        ("POST", "/documents/batch-upload"): (
-            "Batch upload documents",
-            explain_interface(
-                responsibility="Upload multiple files and report per-file success or failure.",
-                database="Writes documents, job_runs, and document_events for each accepted file.",
-                files="Writes one stored upload file for each accepted file.",
-            ),
-        ),
-        ("GET", "/documents"): (
-            "List documents",
-            explain_interface(
-                responsibility="Return a paginated, filtered list of current-user documents.",
-                database="Reads documents, document_tags, tags, and latest job_runs.",
-                files="none; list responses do not read stored file bytes.",
-            ),
-        ),
-        ("GET", "/documents/search"): (
-            "Search documents",
-            explain_interface(
-                responsibility="Search document titles, parsed text, cleaned text, and chunks.",
-                database="Reads documents and document_chunks for the current user.",
-                files="none; search uses indexed database text only.",
-            ),
-        ),
-        ("GET", "/documents/search/chunks"): (
-            "Search document chunks",
-            explain_interface(
-                responsibility="Return chunk-level search hits suitable for citations and chat sources.",
-                database="Reads documents and document_chunks for the current user.",
-                files="none; chunk search does not read stored file bytes.",
-            ),
-        ),
-        ("GET", "/documents/{document_id}/file"): (
-            "Download document file",
-            explain_interface(
-                responsibility="Return the original stored file for one file-backed document.",
-                database="Reads the documents row for authorization and does not write database rows.",
-                files="reads the stored file; bookmark documents are rejected because they have no stored file.",
-            ),
-        ),
-        ("GET", "/documents/{document_id}/kg"): (
-            "Read document knowledge graph",
-            explain_interface(
-                responsibility="Return extracted graph entities and relations for one document.",
-                database="Reads documents, kg_entities, and kg_relations for the current user.",
-                files="does not touch files.",
-            ),
-        ),
-        ("POST", "/documents/{document_id}/retry-parse"): (
-            "Retry parse compatibility alias",
-            explain_interface(
-                responsibility="Compatibility alias for /documents/{document_id}/retry.",
-                database="Same as /documents/{document_id}/retry: reads documents and writes job_runs/document_events.",
-                files="none; retry schedules parsing for the existing stored file.",
-                future="Prefer /documents/{document_id}/retry.",
-            ),
-        ),
-    }
-
+    default_description = explain_interface(responsibility="Operate on authenticated user-owned knowledge documents for the named route.", database="Uses documents and directly related document tables scoped to the current user.", files="Only touches stored upload files when the route explicitly uploads, downloads, or deletes file-backed documents.")
+    metadata_by_path_method = {}
     for route in router.routes:
         if not isinstance(route, APIRoute):
             continue
-        path = route.path_format
         method = next(iter(route.methods or {"GET"}))
         if method in {"HEAD", "OPTIONS"}:
             continue
-        summary, description = metadata_by_path_method.get(
-            (method, path),
-            (route.summary or route.name.replace("_", " ").replace("-", " ").title(), default_description),
-        )
-        route.summary = summary
-        route.description = description
+        route.summary = route.summary or route.name.replace("_", " ").replace("-", " ").title()
+        route.description = route.description or default_description
 
 
 _apply_openapi_boundaries()
