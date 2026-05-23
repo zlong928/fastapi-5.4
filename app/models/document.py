@@ -42,7 +42,9 @@ class Document(Base):
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     file_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    source_type: Mapped[str] = mapped_column(String(50), nullable=False)  # pdf, markdown, txt
+    source_type: Mapped[str] = mapped_column(String(50), nullable=False)  # pdf, markdown, txt, image, docx, epub, bookmark
+    source_url: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+    site_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     processing_mode: Mapped[str] = mapped_column(String(50), default="auto", nullable=False)
     processing_strategy: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
