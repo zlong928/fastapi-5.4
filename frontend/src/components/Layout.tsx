@@ -65,6 +65,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const isReaderPage = /^\/books\/[^/]+\/reader$/.test(location.pathname);
   const pageAction = actionForPath(location.pathname);
   const ActionIcon = pageAction.icon;
 
@@ -74,6 +75,7 @@ export function Layout({ children }: { children: ReactNode }) {
   }
 
   if (!user) return <main className="min-h-screen bg-white">{children}</main>;
+  if (isReaderPage) return <main className="min-h-screen bg-[#fbf7ef]">{children}</main>;
 
   return (
     <div className="min-h-screen bg-white text-slate-950">
