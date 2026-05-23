@@ -20,8 +20,8 @@ const tabs: Array<{ key: KnowledgeTab; label: string }> = [
   { key: "collections", label: "集合" },
   { key: "tags", label: "标签" }
 ];
-const fileTypes = ["", "pdf", "markdown", "txt", "image", "epub", "docx", "bookmark"];
-const fileTypeLabels: Record<string, string> = { pdf: "PDF", markdown: "Markdown", txt: "TXT", image: "图片", epub: "EPUB", docx: "DOCX", bookmark: "链接" };
+const fileTypes = ["", "pdf", "markdown", "txt", "image", "epub", "docx", "bookmark", "note", "diary"];
+const fileTypeLabels: Record<string, string> = { pdf: "PDF", markdown: "Markdown", txt: "TXT", image: "图片", epub: "EPUB", docx: "DOCX", bookmark: "链接", note: "笔记", diary: "日记" };
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers({ "Content-Type": "application/json", ...init?.headers });
