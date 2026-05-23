@@ -3,7 +3,6 @@ import { useParams } from "react-router-dom";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTask } from "@/hooks/useTask";
 import { API_BASE_URL } from "@/lib/api";
@@ -42,8 +41,7 @@ export function TaskDetailPage() {
 
       {task ? (
         <>
-          <Card className="rounded-3xl border-slate-100 shadow-none">
-            <CardContent className="p-4">
+          <div className="rounded-3xl border border-slate-100 bg-white p-4">
             <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
               <div>
                 <div className="flex items-center gap-2 text-slate-500">
@@ -54,28 +52,27 @@ export function TaskDetailPage() {
               </div>
               <StatusBadge status={task.status} />
             </div>
-            <dl className="mt-4 grid gap-3 md:grid-cols-2">
-              <div><dt className="text-sm text-slate-400">创建</dt><dd className="mt-1 font-medium">{formatChinaDateTime(task.created_at)}</dd></div>
-              <div><dt className="text-sm text-slate-400">更新</dt><dd className="mt-1 font-medium">{formatChinaDateTime(task.updated_at)}</dd></div>
-              <div><dt className="text-sm text-slate-400">大小</dt><dd className="mt-1 font-medium">{task.file_size ? `${task.file_size} bytes` : "-"}</dd></div>
-              <div><dt className="text-sm text-slate-400">类型</dt><dd className="mt-1 font-medium">{task.file_type ?? "-"}</dd></div>
-            </dl>
+            <div className="mt-4 grid gap-2 md:grid-cols-2">
+              <InfoRow label="创建" value={formatChinaDateTime(task.created_at)} />
+              <InfoRow label="更新" value={formatChinaDateTime(task.updated_at)} />
+              <InfoRow label="大小" value={task.file_size ? `${task.file_size} bytes` : "-"} />
+              <InfoRow label="类型" value={task.file_type ?? "-"} />
+            </div>
             {task.error ? (
               <Alert variant="destructive" className="mt-4 rounded-2xl border-red-100">
                 <AlertDescription>{task.error}</AlertDescription>
               </Alert>
             ) : null}
-            </CardContent>
-          </Card>
+          </div>
 
           <section className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-base font-semibold">结果</h2>
               {task.result ? (
                 <Button asChild variant="outline" size="sm" className="rounded-xl border-slate-100 shadow-none">
-                <a href={`${API_BASE_URL}/tasks/${encodeURIComponent(task.task_id)}/result`} target="_blank" rel="noreferrer">
-                  <Download className="h-4 w-4" />
-                </a>
+                  <a href={`${API_BASE_URL}/tasks/${encodeURIComponent(task.task_id)}/result`} target="_blank" rel="noreferrer">
+                    <Download className="h-4 w-4" />
+                  </a>
                 </Button>
               ) : null}
             </div>
@@ -83,6 +80,15 @@ export function TaskDetailPage() {
           </section>
         </>
       ) : null}
+    </div>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-2xl px-3 py-2 hover:bg-slate-50">
+      <span className="text-sm text-slate-400">{label}</span>
+      <span className="truncate text-sm text-slate-700">{value}</span>
     </div>
   );
 }
