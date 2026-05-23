@@ -122,7 +122,7 @@ export interface TokenResponse {
 
 export type DocumentStatus = "pending" | "processing" | "done" | "completed" | "failed" | "deleted";
 export type ParseJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "skipped";
-export type DocumentSourceType = "pdf" | "markdown" | "txt" | "image" | "epub" | "docx";
+export type DocumentSourceType = "pdf" | "markdown" | "txt" | "image" | "epub" | "docx" | "bookmark";
 export type DocumentProcessingMode =
   | "auto"
   | "plain_text"
@@ -186,6 +186,23 @@ export function processingModeLabel(mode?: DocumentProcessingMode | string | nul
   return DOCUMENT_PROCESSING_MODE_OPTIONS.find((option) => option.value === mode)?.label ?? mode ?? "Auto detect";
 }
 
+export interface BookmarkCreate {
+  url: string;
+  title?: string;
+  collection_name?: string | null;
+  tag_ids?: number[];
+  processing_mode?: DocumentProcessingMode;
+}
+
+export interface BookmarkCreateResponse {
+  document_id: number;
+  status: DocumentStatus;
+  processing_status?: DocumentStatus;
+  source_type: "bookmark" | string;
+  source_url?: string | null;
+  message: string;
+}
+
 export interface DocumentEventRead {
   id: number;
   document_id: number;
@@ -246,6 +263,8 @@ export interface DocumentRead {
   file_size: number;
   mime_type: string;
   source_type: DocumentSourceType;
+  source_url?: string | null;
+  site_name?: string | null;
   processing_mode: DocumentProcessingMode;
   processing_strategy?: string | null;
   parsed_text?: string | null;
@@ -277,6 +296,8 @@ export interface DocumentProcessingStatusResponse {
   error?: string | null;
   processing_error?: string | null;
   collection_name?: string | null;
+  source_url?: string | null;
+  site_name?: string | null;
   hash?: string | null;
   content_summary?: string | null;
   chunk_count?: number | null;
@@ -305,6 +326,8 @@ export interface DocumentListItem {
   original_filename: string;
   file_size: number;
   source_type: DocumentSourceType;
+  source_url?: string | null;
+  site_name?: string | null;
   processing_mode: DocumentProcessingMode;
   processing_strategy?: string | null;
   status: DocumentStatus;
@@ -335,6 +358,8 @@ export interface DocumentSearchResult {
   id: number;
   title: string;
   source_type: DocumentSourceType;
+  source_url?: string | null;
+  site_name?: string | null;
   status: DocumentStatus;
   snippet: string;
   matched_field: string;
@@ -444,7 +469,7 @@ export interface DocumentListParams {
   size?: number;
   keyword?: string;
   tag_id?: number;
-  file_type?: "pdf" | "markdown" | "txt" | "";
+  file_type?: DocumentSourceType | "";
   status?: DocumentStatus | "";
   start_date?: string;
   end_date?: string;
