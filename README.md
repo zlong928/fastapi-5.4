@@ -158,7 +158,7 @@ docker compose run --rm api python3 -m app.scripts.run_cleanup_jobs
 前端 Vercel 环境变量：
 
 ```env
-VITE_API_BASE_URL=https://你的后端域名
+VITE_API_BASE_URL=https://shira.tailfb111b.ts.net
 ```
 
 后端环境变量：
@@ -167,6 +167,8 @@ VITE_API_BASE_URL=https://你的后端域名
 FRONTEND_URL=https://fastapi-5-4.vercel.app
 CORS_ALLOWED_ORIGINS=https://fastapi-5-4.vercel.app
 ```
+
+生产前端不能使用 `http://localhost:8000`。本地开发时它表示开发者电脑上的 Docker/FastAPI 服务；Vercel 部署后的浏览器里，`localhost` 会变成访问者自己的机器，无法访问后端。当前前端生产构建默认使用 Tailscale 暴露的后端地址 `https://shira.tailfb111b.ts.net`。
 
 `FRONTEND_URL` 用于登录和 OAuth 成功后跳回前端，例如：
 
@@ -192,7 +194,7 @@ Google: https://你的后端域名/auth/google/callback
 
 流程是：OAuth 平台先回调后端，后端完成账号处理和 token 签发后，再通过 `FRONTEND_URL` 重定向到前端 `/oauth/callback`。
 
-如果后端生产环境变量 `ENV`、`APP_ENV`、`NODE_ENV` 或 `ENVIRONMENT` 任一值为 `production`，但 `FRONTEND_URL` 缺失或仍是 localhost，应用会在启动时报配置错误。Vercel 生产构建如果缺少 `VITE_API_BASE_URL`，或把它配置成 localhost，前端也会明确失败，避免静默请求 `localhost:8000`。
+如果后端生产环境变量 `ENV`、`APP_ENV`、`NODE_ENV` 或 `ENVIRONMENT` 任一值为 `production`，但 `FRONTEND_URL` 缺失或仍是 localhost，应用会在启动时报配置错误。前端生产构建会优先使用显式配置的 `VITE_API_BASE_URL`；如果缺失或错误配置成 localhost，生产包会回退到 `https://shira.tailfb111b.ts.net`，避免静态站点请求访问者本机的 `localhost:8000`。
 
 ## 测试
 

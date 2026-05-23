@@ -1,4 +1,9 @@
 {
+  "build": {
+    "env": {
+      "VITE_API_BASE_URL": "https://shira.tailfb111b.ts.net"
+    }
+  },
   "rewrites": [
     {
       "source": "/(.*)",

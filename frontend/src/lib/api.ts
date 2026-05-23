@@ -42,18 +42,15 @@ import {
   UserRead
 } from "./types";
 
+const DEFAULT_PRODUCTION_API_BASE_URL = "https://shira.tailfb111b.ts.net";
 const rawApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
 const isLocalApiBaseUrl = (url: string) => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(url);
 
-if (import.meta.env.PROD && !rawApiBaseUrl) {
-  throw new Error("Missing VITE_API_BASE_URL in production.");
-}
+const resolvedApiBaseUrl = import.meta.env.PROD && (!rawApiBaseUrl || isLocalApiBaseUrl(rawApiBaseUrl))
+  ? DEFAULT_PRODUCTION_API_BASE_URL
+  : rawApiBaseUrl || "http://localhost:8000";
 
-if (import.meta.env.PROD && rawApiBaseUrl && isLocalApiBaseUrl(rawApiBaseUrl)) {
-  throw new Error("VITE_API_BASE_URL must not point to localhost in production.");
-}
-
-export const API_BASE_URL = (rawApiBaseUrl || "http://localhost:8000").replace(/\/+$/, "");
+export const API_BASE_URL = resolvedApiBaseUrl.replace(/\/+$/, "");
 const TOKEN_KEY = "file_processing_token";
 
 export function getToken() {

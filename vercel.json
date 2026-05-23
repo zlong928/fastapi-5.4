@@ -2,6 +2,11 @@
   "buildCommand": "cd frontend && npm ci && npm run build",
   "outputDirectory": "frontend/dist",
   "installCommand": "cd frontend && npm ci",
+  "build": {
+    "env": {
+      "VITE_API_BASE_URL": "https://shira.tailfb111b.ts.net"
+    }
+  },
   "rewrites": [
     {
       "source": "/(.*)",
