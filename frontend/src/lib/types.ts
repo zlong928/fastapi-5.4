@@ -139,47 +139,14 @@ export const DOCUMENT_PROCESSING_MODE_OPTIONS: Array<{
   description: string;
   advanced?: boolean;
 }> = [
-  {
-    value: "auto",
-    label: "Auto detect",
-    description: "Let the system choose the best parser based on the uploaded file."
-  },
-  {
-    value: "plain_text",
-    label: "Plain text",
-    description: "Use for .txt or text files."
-  },
-  {
-    value: "pdf_text",
-    label: "PDF text extraction",
-    description: "Extract embedded text from PDF files. OCR fallback may be used if needed."
-  },
-  {
-    value: "scanned_pdf_ocr",
-    label: "Scanned PDF OCR",
-    description: "Use OCR-first processing for scanned PDF files."
-  },
-  {
-    value: "image_ocr",
-    label: "Image OCR",
-    description: "Extract text from image files."
-  },
-  {
-    value: "markdown_notes",
-    label: "Markdown / notes",
-    description: "Preserve Markdown-style headings and note structure."
-  },
-  {
-    value: "table_image_ocr",
-    label: "Table / screenshot OCR",
-    description: "Use OCR-oriented processing for screenshots or table images."
-  },
-  {
-    value: "basic_file_parser",
-    label: "Basic file parser",
-    description: "Use the simple compatibility parser for basic splitting/extraction.",
-    advanced: true
-  }
+  { value: "auto", label: "Auto detect", description: "Let the system choose the best parser based on the uploaded file." },
+  { value: "plain_text", label: "Plain text", description: "Use for .txt or text files." },
+  { value: "pdf_text", label: "PDF text extraction", description: "Extract embedded text from PDF files. OCR fallback may be used if needed." },
+  { value: "scanned_pdf_ocr", label: "Scanned PDF OCR", description: "Use OCR-first processing for scanned PDF files." },
+  { value: "image_ocr", label: "Image OCR", description: "Extract text from image files." },
+  { value: "markdown_notes", label: "Markdown / notes", description: "Preserve Markdown-style headings and note structure." },
+  { value: "table_image_ocr", label: "Table / screenshot OCR", description: "Use OCR-oriented processing for screenshots or table images." },
+  { value: "basic_file_parser", label: "Basic file parser", description: "Use the simple compatibility parser for basic splitting/extraction.", advanced: true }
 ];
 
 export function processingModeLabel(mode?: DocumentProcessingMode | string | null) {
@@ -246,9 +213,15 @@ export interface CollectionRead {
   description?: string | null;
   created_at: string;
   updated_at: string;
+  document_count?: number;
 }
 
 export interface CollectionCreate {
+  name: string;
+  description?: string | null;
+}
+
+export interface CollectionUpdate {
   name: string;
   description?: string | null;
 }
@@ -469,6 +442,7 @@ export interface DocumentListParams {
   size?: number;
   keyword?: string;
   tag_id?: number;
+  collection_name?: string;
   file_type?: DocumentSourceType | "";
   status?: DocumentStatus | "";
   start_date?: string;
