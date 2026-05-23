@@ -4,20 +4,28 @@ import { defineConfig, loadEnv } from "vite";
 
 const isLocalApiBaseUrl = (url: string) => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(url);
 
-export default defineConfig(({ mode }) => {
+function resolveApiBaseUrl(mode: string) {
   const env = loadEnv(mode, process.cwd(), "");
-  const apiBaseUrl = env.VITE_API_BASE_URL;
+  const configuredUrl = env.VITE_API_BASE_URL?.trim() ?? "";
 
-  if (mode === "production" && !apiBaseUrl) {
-    throw new Error("Missing VITE_API_BASE_URL in production.");
+  // Vercel production should never bake localhost into the frontend bundle.
+  // If no API URL is configured, or if it is accidentally set to localhost,
+  // use an empty base URL so browser requests stay on the deployed origin.
+  if (mode === "production" && (!configuredUrl || isLocalApiBaseUrl(configuredUrl))) {
+    return "";
   }
 
-  if (mode === "production" && apiBaseUrl && isLocalApiBaseUrl(apiBaseUrl)) {
-    throw new Error("VITE_API_BASE_URL must not point to localhost in production.");
-  }
+  return configuredUrl;
+}
+
+export default defineConfig(({ mode }) => {
+  const apiBaseUrl = resolveApiBaseUrl(mode);
 
   return {
     plugins: [react()],
+    define: {
+      "import.meta.env.VITE_API_BASE_URL": JSON.stringify(apiBaseUrl)
+    },
     server: {
       port: 3000
     },
