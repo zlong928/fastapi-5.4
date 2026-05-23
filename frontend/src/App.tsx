@@ -5,7 +5,6 @@ import { Layout } from "@/components/Layout";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { DocumentDetailPage } from "@/pages/DocumentDetailPage";
-import { BookReaderPage } from "@/pages/BookReaderPage";
 import { ChatPage } from "@/pages/ChatPage";
 import { ForgotPasswordPage } from "@/pages/ForgotPasswordPage";
 import { KnowledgePage } from "@/pages/KnowledgePage";
@@ -16,7 +15,6 @@ import { RegisterPage } from "@/pages/RegisterPage";
 import { ResetPasswordPage } from "@/pages/ResetPasswordPage";
 import { SearchPage } from "@/pages/SearchPage";
 import { SettingsPage } from "@/pages/SettingsPage";
-import { StatisticsPage } from "@/pages/StatisticsPage";
 import { TaskDetailPage } from "@/pages/TaskDetailPage";
 import { TasksPage } from "@/pages/TasksPage";
 
@@ -35,22 +33,19 @@ export function App() {
           <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
           <Route path="/knowledge" element={<ProtectedRoute><KnowledgePage /></ProtectedRoute>} />
           <Route path="/documents/:id" element={<ProtectedRoute><DocumentDetailPage /></ProtectedRoute>} />
-          <Route path="/statistics" element={<ProtectedRoute><StatisticsPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="/notes" element={<ProtectedRoute><NotesPage /></ProtectedRoute>} />
           <Route path="/search" element={<ProtectedRoute><SearchPage /></ProtectedRoute>} />
           <Route path="/chat" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
           <Route path="/tasks" element={<ProtectedRoute><TasksPage /></ProtectedRoute>} />
           <Route path="/tasks/:id" element={<ProtectedRoute><TaskDetailPage /></ProtectedRoute>} />
-
-          {/* Legacy routes kept as compatibility redirects while the product IA is centered on Knowledge. */}
           <Route path="/upload" element={<ProtectedRoute><Navigate to="/knowledge?upload=1" replace /></ProtectedRoute>} />
           <Route path="/documents" element={<ProtectedRoute><Navigate to="/knowledge" replace /></ProtectedRoute>} />
           <Route path="/tags" element={<ProtectedRoute><Navigate to="/knowledge?tab=tags" replace /></ProtectedRoute>} />
           <Route path="/tools" element={<ProtectedRoute><Navigate to="/knowledge" replace /></ProtectedRoute>} />
           <Route path="/books" element={<ProtectedRoute><Navigate to="/knowledge?type=epub" replace /></ProtectedRoute>} />
-          {/* Legacy EPUB reader route. EPUB should be opened through /documents/:id after full migration. */}
-          <Route path="/books/:bookId/reader" element={<ProtectedRoute><BookReaderPage /></ProtectedRoute>} />
+          <Route path="/books/:bookId/reader" element={<ProtectedRoute><Navigate to="/knowledge?type=epub" replace /></ProtectedRoute>} />
+          <Route path="/statistics" element={<ProtectedRoute><Navigate to="/" replace /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>
