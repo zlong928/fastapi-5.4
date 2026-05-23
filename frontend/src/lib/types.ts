@@ -122,7 +122,7 @@ export interface TokenResponse {
 
 export type DocumentStatus = "pending" | "processing" | "done" | "completed" | "failed" | "deleted";
 export type ParseJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "skipped";
-export type DocumentSourceType = "pdf" | "markdown" | "txt" | "image" | "epub" | "docx" | "bookmark";
+export type DocumentSourceType = "pdf" | "markdown" | "txt" | "image" | "epub" | "docx" | "bookmark" | "note" | "diary";
 export type DocumentProcessingMode =
   | "auto"
   | "plain_text"
@@ -224,6 +224,26 @@ export interface CollectionCreate {
 export interface CollectionUpdate {
   name: string;
   description?: string | null;
+}
+
+export interface NoteRead {
+  id: string;
+  document_id: number;
+  title: string;
+  body: string;
+  tags: string[];
+  source_type: "note" | "diary";
+  document_title?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotePayload {
+  title?: string | null;
+  body: string;
+  tags: string[];
+  source_type?: "note" | "diary";
+  document_title?: string | null;
 }
 
 export interface DocumentRead {
