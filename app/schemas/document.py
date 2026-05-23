@@ -168,8 +168,8 @@ class DocumentCreate(BaseModel):
     title: Optional[str] = None
     mime_type: str
     source_type: str = Field(
-        pattern="^(pdf|markdown|txt|image|docx|epub|bookmark)$",
-        description="File type: pdf, markdown, txt, image, docx, epub, or bookmark"
+        pattern="^(pdf|markdown|txt|image|docx|epub|bookmark|note|diary)$",
+        description="File type: pdf, markdown, txt, image, docx, epub, bookmark, note, or diary"
     )
     processing_mode: DocumentProcessingMode = DocumentProcessingMode.AUTO
     file_size: int = Field(ge=0, description="File size in bytes")
