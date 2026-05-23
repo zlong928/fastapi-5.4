@@ -6,30 +6,30 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.models import User, Document, DocumentEvent, JobRun
+from app.models import Document, DocumentChunk, DocumentEvent, JobRun, KgEntity, KgRelation, User
 from app.schemas.document import (
-    BookmarkCreate,
-    BookmarkCreateResponse,
-    ChunkSearchHit,
-    ChunkSearchResponse,
     BatchDeleteRequest,
     BatchDeleteResponse,
     BatchTagRequest,
     BatchTagResponse,
+    BookmarkCreate,
+    BookmarkCreateResponse,
+    ChunkSearchHit,
+    ChunkSearchResponse,
     DocumentBatchUploadItem,
     DocumentChunkRead,
     DocumentDetailResponse,
     DocumentEventRead,
-    DocumentUpdate,
     DocumentKgResponse,
     DocumentListResponse,
     DocumentProcessingMode,
     DocumentProcessingStatusResponse,
+    DocumentSearchResponse,
+    DocumentUpdate,
+    DocumentUploadResponse,
     PaginatedDocumentEvents,
     ParseJobRead,
     TagRead,
-    DocumentSearchResponse,
-    DocumentUploadResponse,
 )
 from app.services.bookmark_service import BookmarkError, BookmarkService
 from app.services.document_embedding_service import DocumentEmbeddingService
@@ -37,34 +37,14 @@ from app.services.document_service import DONE_STATUSES, DocumentService
 from app.services.document_search_service import DocumentSearchService
 from app.services.document_upload_service import DocumentUploadService, DuplicateUploadError
 from app.services.job_run_service import JobRunService
-from app.models import KgEntity, KgRelation
-from app.models import DocumentChunk
 from app.utils.json import json_loads_object_or_none
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
-def explain_interface(*, responsibility: str, database: str, files: str, future: str | None = None) -> str:
-    parts = [
-        f"Responsibility: {responsibility}",
-        f"Database: {database}",
-        f"Files: {files}",
-    ]
-    if future:
-        parts.append(f"Future simplification: {future}")
-    return "\n\n".join(parts)
-
-def get_document_service(db: Session = Depends(get_db)) -> DocumentService:
-    """获取文档服务实例。"""
-    return DocumentService(db)
-
-
 def assert_document_owner(document: Document, current_user: User) -> None:
     if document.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have permission to access this document.",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized.")
 
 
 def serialize_latest_parse_job(job_run: JobRun | None) -> ParseJobRead | None:
@@ -155,11 +135,7 @@ def serialize_document_list_item(document: Document, latest_job=None) -> dict:
 
 
 @router.post("/bookmarks", response_model=BookmarkCreateResponse, status_code=status.HTTP_201_CREATED)
-async def create_bookmark_document(
-    payload: BookmarkCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> BookmarkCreateResponse:
+async def create_bookmark_document(payload: BookmarkCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> BookmarkCreateResponse:
     try:
         document = await BookmarkService(db).create_bookmark(
             user_id=current_user.id,
@@ -181,17 +157,7 @@ async def create_bookmark_document(
     )
 
 
-@router.post(
-    "/upload",
-    response_model=DocumentUploadResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-    summary="Upload document and queue parsing",
-    description=explain_interface(
-        responsibility="Accept one source file, create a document record, create its parse job, sync optional Obsidian metadata, and enqueue background parsing.",
-        database="Writes documents, job_runs, and document_events in the upload flow; later parsing writes document_chunks, document_assets, kg_entities, kg_relations, and vector rows.",
-        files="Writes the stored upload file under the configured upload directory; may write Obsidian vault files when sync is configured.",
-    ),
-)
+@router.post("/upload", response_model=DocumentUploadResponse, status_code=status.HTTP_202_ACCEPTED)
 async def upload_document(
     file: UploadFile = File(...),
     title: str | None = Form(None),
@@ -199,29 +165,8 @@ async def upload_document(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DocumentUploadResponse:
-    """上传单个文档。
-
-    支持 PDF, Markdown, TXT 和图片文件。
-    
-    Args:
-        file: 上传的文件
-        title: 可选的文档标题，默认为文件名
-        current_user: 当前用户
-        db: 数据库会话
-
-    Returns:
-        DocumentUploadResponse: 上传响应
-
-    Raises:
-        HTTPException: 文件类型不支持或上传失败
-    """
     try:
-        result = await DocumentUploadService(db).upload_one(
-            file=file,
-            user=current_user,
-            title=title,
-            processing_mode=processing_mode,
-        )
+        result = await DocumentUploadService(db).upload_one(file=file, user=current_user, title=title, processing_mode=processing_mode)
         document = result.document
         job = result.parse_job
         message = "Document uploaded and queued for parsing."
@@ -239,38 +184,15 @@ async def upload_document(
             message=message,
         )
     except DuplicateUploadError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
-        if str(exc).startswith("File is too large."):
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=str(exc),
-            ) from exc
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
+        status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE if str(exc).startswith("File is too large.") else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Upload failed due to a server error.",
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Upload failed due to a server error.") from exc
 
 
-@router.post(
-    "/batch-upload",
-    response_model=list[DocumentBatchUploadItem],
-    status_code=status.HTTP_202_ACCEPTED,
-    summary="Upload multiple documents and queue parsing",
-    description=explain_interface(
-        responsibility="Apply the single-document upload flow to each submitted file and return per-file success or failure.",
-        database="For each accepted file, writes documents, job_runs, and document_events; failed files do not create document rows.",
-        files="Writes one stored upload file per accepted item; may write Obsidian vault files when sync is configured.",
-    ),
-)
+@router.post("/batch-upload", response_model=list[DocumentBatchUploadItem], status_code=status.HTTP_202_ACCEPTED)
 async def upload_batch(
     files: list[UploadFile] = File(...),
     processing_mode: DocumentProcessingMode = Form(DocumentProcessingMode.AUTO),
@@ -279,36 +201,19 @@ async def upload_batch(
 ) -> list[DocumentBatchUploadItem]:
     results: list[DocumentBatchUploadItem] = []
     upload_service = DocumentUploadService(db)
-
     for file in files:
         filename = file.filename or "unknown"
         try:
-            result = await upload_service.upload_one(
-                file=file,
-                user=current_user,
-                processing_mode=processing_mode,
-            )
+            result = await upload_service.upload_one(file=file, user=current_user, processing_mode=processing_mode)
             document = result.document
             job = result.parse_job
-            results.append(
-                DocumentBatchUploadItem(
-                    filename=filename,
-                    ok=True,
-                    document_id=document.id,
-                    parse_job_id=job.id,
-                    job_id=job.job_id,
-                    status=document.status,
-                    processing_mode=document.processing_mode,
-                )
-            )
-
+            results.append(DocumentBatchUploadItem(filename=filename, ok=True, document_id=document.id, parse_job_id=job.id, job_id=job.job_id, status=document.status, processing_mode=document.processing_mode))
         except HTTPException as exc:
             results.append(DocumentBatchUploadItem(filename=filename, ok=False, error=str(exc.detail)))
         except ValueError as exc:
             results.append(DocumentBatchUploadItem(filename=filename, ok=False, error=str(exc)))
-        except Exception as exc:
+        except Exception:
             results.append(DocumentBatchUploadItem(filename=filename, ok=False, error="Upload failed due to a server error."))
-
     return results
 
 
@@ -333,26 +238,210 @@ async def list_documents(
     actual_size = limit or size
     actual_skip = skip if skip is not None else (page - 1) * actual_size
     actual_page = page if skip is None else (actual_skip // actual_size) + 1
-    documents, total = service.get_user_documents(
-        user_id=current_user.id,
-        skip=actual_skip,
-        limit=actual_size,
-        keyword=keyword,
-        tag_id=tag_id,
-        file_type=file_type,
-        status=status,
-        start_date=start_date,
-        end_date=end_date,
-        sort_by=sort_by,
-        sort_order=sort_order,
-    )
-
-    items = []
-    for doc in documents:
-        latest_job = service.get_latest_parse_job(doc.id)
-        items.append(serialize_document_list_item(doc, latest_job))
-
-    return DocumentListResponse(total=total, page=actual_page, size=actual_size, items=items)
+    documents, total = service.get_user_documents(current_user.id, actual_skip, actual_size, True, keyword, tag_id, file_type, status, start_date, end_date, sort_by, sort_order)
+    return DocumentListResponse(total=total, page=actual_page, size=actual_size, items=[serialize_document_list_item(doc, service.get_latest_parse_job(doc.id)) for doc in documents])
 
 
-# The rest of this file is intentionally unchanged below this point.
+@router.get("/search", response_model=DocumentSearchResponse)
+async def search_documents(q: str = Query(..., min_length=1), limit: int = Query(20, ge=1, le=50), mode: str = Query("keyword", pattern="^(keyword|hybrid|semantic)$"), include_unparsed: bool = Query(False), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DocumentSearchResponse:
+    service = DocumentSearchService(db)
+    hits = service.hybrid_search(current_user.id, q, limit=limit) if mode == "hybrid" else service.search(current_user.id, q, limit=limit)
+    if not include_unparsed:
+        hits = [hit for hit in hits if hit.document.status in DONE_STATUSES]
+    return DocumentSearchResponse(query=q, total=len(hits), items=[{"id": hit.document.id, "title": hit.document.title, "source_type": hit.document.source_type, "source_url": hit.document.source_url, "site_name": hit.document.site_name, "status": hit.document.status, "snippet": hit.snippet, "matched_field": hit.matched_field, "score": hit.score, "parsed_at": hit.document.parsed_at} for hit in hits])
+
+
+@router.get("/search/chunks", response_model=ChunkSearchResponse)
+async def search_document_chunks(q: str = Query(..., min_length=1), limit: int = Query(20, ge=1, le=50), document_id: int | None = Query(None), threshold: float = Query(0.0, ge=0.0, le=1.0), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> ChunkSearchResponse:
+    hits = DocumentSearchService(db).search_chunks(current_user.id, q, limit=limit, document_id=document_id, threshold=threshold)
+    return ChunkSearchResponse(query=q, total=len(hits), items=[ChunkSearchHit(**hit) for hit in hits])
+
+
+@router.delete("/batch", response_model=BatchDeleteResponse)
+async def batch_delete_documents(payload: BatchDeleteRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> BatchDeleteResponse:
+    success_ids, failed_ids, errors = DocumentService(db).batch_delete_documents(current_user.id, payload.ids)
+    return BatchDeleteResponse(success_ids=success_ids, failed_ids=failed_ids, errors=errors)
+
+
+@router.post("/batch-tag", response_model=BatchTagResponse)
+async def batch_tag_documents(payload: BatchTagRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> BatchTagResponse:
+    try:
+        assigned_count = DocumentService(db).batch_tag_documents(current_user.id, payload.document_ids, payload.tag_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return BatchTagResponse(document_ids=payload.document_ids, tag_ids=payload.tag_ids, assigned_count=assigned_count)
+
+
+@router.post("/{document_id}/re-embed", response_model=dict)
+async def re_embed_document(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    document = DocumentService(db).get_document_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    assert_document_owner(document, current_user)
+    if document.status not in DONE_STATUSES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Document must be completed first.")
+    count = DocumentEmbeddingService().embed_document(document_id)
+    return {"document_id": document_id, "chunks_embedded": count, "message": f"Re-embedded {count} chunks."}
+
+
+@router.post("/re-embed-all", response_model=dict)
+async def re_embed_all_documents(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    docs = db.query(Document).filter(Document.user_id == current_user.id, Document.status.in_(DONE_STATUSES)).all()
+    total = 0
+    for doc in docs:
+        try:
+            total += DocumentEmbeddingService().embed_document(doc.id)
+        except Exception:
+            db.rollback()
+    return {"user_id": current_user.id, "documents_processed": len(docs), "chunks_embedded": total}
+
+
+@router.get("/{document_id}", response_model=DocumentDetailResponse)
+async def get_document_detail(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DocumentDetailResponse:
+    service = DocumentService(db)
+    document = service.get_document_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    assert_document_owner(document, current_user)
+    return serialize_document_detail(document, service.get_latest_parse_job(document.id))
+
+
+@router.patch("/{document_id}", response_model=DocumentDetailResponse)
+async def update_document(document_id: int, payload: DocumentUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DocumentDetailResponse:
+    service = DocumentService(db)
+    document = service.get_document_by_id(document_id)
+    if not document or document.status == "deleted":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    assert_document_owner(document, current_user)
+    changed = False
+    if payload.title is not None:
+        document.title = payload.title.strip()
+        changed = True
+    if payload.collection_name is not None:
+        document.collection_name = payload.collection_name.strip() or None
+        changed = True
+    if changed:
+        service.log_event(document.id, current_user.id, "update", "文档信息已更新", commit=False)
+        db.commit()
+        db.refresh(document)
+    return serialize_document_detail(document, service.get_latest_parse_job(document.id))
+
+
+@router.get("/{document_id}/process/status", response_model=DocumentProcessingStatusResponse)
+async def get_document_processing_status(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DocumentProcessingStatusResponse:
+    document = DocumentService(db).get_document_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    assert_document_owner(document, current_user)
+    return DocumentProcessingStatusResponse(document_id=document.id, status=document.status, processing_status=document.status, error=document.error_message, processing_error=document.fail_reason or document.error_message, collection_name=document.collection_name, source_url=document.source_url, site_name=document.site_name, hash=document.content_hash, content_summary=document.content_summary, chunk_count=document.chunk_count, created_at=document.created_at, updated_at=document.updated_at)
+
+
+@router.post("/{document_id}/process", response_model=DocumentProcessingStatusResponse, status_code=status.HTTP_202_ACCEPTED)
+async def process_document(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DocumentProcessingStatusResponse:
+    service = DocumentService(db)
+    document = service.get_document_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    assert_document_owner(document, current_user)
+    if service.get_running_parse_job(document_id) is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Document processing is already pending or running.")
+    try:
+        document, _job = service.enqueue_parse_document(document_id, job_type="manual_process")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return DocumentProcessingStatusResponse(document_id=document.id, status=document.status, processing_status=document.status, error=document.error_message, processing_error=document.fail_reason or document.error_message, collection_name=document.collection_name, source_url=document.source_url, site_name=document.site_name, hash=document.content_hash, content_summary=document.content_summary, chunk_count=document.chunk_count, created_at=document.created_at, updated_at=document.updated_at)
+
+
+@router.get("/{document_id}/file")
+async def get_document_file(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> FileResponse:
+    document = DocumentService(db).get_document_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    assert_document_owner(document, current_user)
+    if document.source_type == "bookmark" or document.original_file_path.startswith("bookmark:"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bookmark has no stored file.")
+    file_path = DocumentService(db).file_storage.get_file_path(document.original_file_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found.")
+    return FileResponse(path=file_path, media_type=document.mime_type, filename=document.original_filename)
+
+
+def retry_document_or_raise(document_id: int, current_user: User, db: Session) -> DocumentDetailResponse:
+    service = DocumentService(db)
+    document = service.get_document_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    assert_document_owner(document, current_user)
+    try:
+        running_job = service.get_running_parse_job(document_id)
+        if running_job is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Document processing is already pending or running.")
+        document, job = service.retry_parse(document_id)
+        return serialize_document_detail(document, job)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/{document_id}/retry", response_model=DocumentDetailResponse, status_code=status.HTTP_202_ACCEPTED)
+async def retry_document(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DocumentDetailResponse:
+    return retry_document_or_raise(document_id, current_user, db)
+
+
+@router.post("/{document_id}/retry-parse", response_model=DocumentDetailResponse, deprecated=True)
+async def retry_parse_document(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DocumentDetailResponse:
+    return retry_document_or_raise(document_id, current_user, db)
+
+
+@router.delete("/{document_id}", response_model=dict)
+async def delete_document(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    service = DocumentService(db)
+    document = service.get_document_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    assert_document_owner(document, current_user)
+    deleted_id = service.hard_delete_document(document_id)
+    return {"id": deleted_id, "status": "deleted", "message": "Document deleted."}
+
+
+@router.get("/{document_id}/events", response_model=PaginatedDocumentEvents)
+async def get_document_events(document_id: int, page: int = Query(1, ge=1), size: int = Query(20, ge=1, le=100), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> PaginatedDocumentEvents:
+    document = DocumentService(db).get_document_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    assert_document_owner(document, current_user)
+    query = db.query(DocumentEvent).filter(DocumentEvent.document_id == document.id)
+    total = query.count()
+    events = query.order_by(DocumentEvent.created_at.desc()).offset((page - 1) * size).limit(size).all()
+    return PaginatedDocumentEvents(total=total, page=page, size=size, items=[DocumentEventRead.model_validate(event) for event in events])
+
+
+@router.get("/{document_id}/parse-jobs", response_model=list[ParseJobRead])
+async def get_document_parse_jobs(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[ParseJobRead]:
+    document = DocumentService(db).get_document_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    assert_document_owner(document, current_user)
+    return [item for item in (serialize_latest_parse_job(job) for job in JobRunService(db).list_jobs(user_id=current_user.id, kind_filter="document_parse", document_id=document.id, limit=100)) if item is not None]
+
+
+@router.get("/{document_id}/chunks", response_model=list[DocumentChunkRead])
+async def get_document_chunks(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[DocumentChunkRead]:
+    document = DocumentService(db).get_document_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    assert_document_owner(document, current_user)
+    chunks = db.query(DocumentChunk).filter(DocumentChunk.document_id == document.id).order_by(DocumentChunk.chunk_index).all()
+    return [DocumentChunkRead.model_validate(chunk) for chunk in chunks]
+
+
+@router.get("/{document_id}/kg", response_model=DocumentKgResponse)
+async def get_document_kg(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DocumentKgResponse:
+    document = DocumentService(db).get_document_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    assert_document_owner(document, current_user)
+    entities = db.query(KgEntity).filter(KgEntity.document_id == document_id).order_by(KgEntity.name).all()
+    relations = db.query(KgRelation).filter(KgRelation.document_id == document_id).order_by(KgRelation.id).all()
+    return DocumentKgResponse(document_id=document_id, entities=entities, relations=relations)
