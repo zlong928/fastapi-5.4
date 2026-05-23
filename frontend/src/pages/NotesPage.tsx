@@ -35,7 +35,7 @@ function saveNotes(notes: Note[]) {
 function emptyNote(documentTitle?: string): Note {
   return {
     id: crypto.randomUUID(),
-    title: "未命名笔记",
+    title: "未命名",
     body: "",
     tags: [],
     documentTitle,
@@ -45,8 +45,8 @@ function emptyNote(documentTitle?: string): Note {
 
 function statusCopy(status: SaveStatus) {
   if (status === "dirty") return "未保存";
-  if (status === "saving") return "正在保存";
-  if (status === "failed") return "保存失败";
+  if (status === "saving") return "保存中";
+  if (status === "failed") return "失败";
   return "已保存";
 }
 
@@ -102,7 +102,7 @@ export function NotesPage() {
   }, [notes, query]);
 
   function createNote() {
-    if (saveStatus === "dirty" && !confirm("当前笔记还未保存，是否放弃这些修改？")) return;
+    if (saveStatus === "dirty" && !confirm("放弃未保存修改？")) return;
     const note = emptyNote(linkedDocumentQuery.data?.title);
     setDraft(note);
     setActiveId(note.id);
@@ -111,7 +111,7 @@ export function NotesPage() {
 
   function selectNote(noteId: string) {
     if (noteId === activeId) return;
-    if (saveStatus === "dirty" && !confirm("当前笔记还未保存，是否放弃这些修改？")) return;
+    if (saveStatus === "dirty" && !confirm("放弃未保存修改？")) return;
     setActiveId(noteId);
   }
 
@@ -140,68 +140,52 @@ export function NotesPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <section className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
-        <div>
-          <p className="text-sm font-medium uppercase tracking-wide text-slate-500">Notes</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight">笔记</h1>
-          <p className="mt-2 text-sm text-slate-500">写作、整理想法并关联知识库资料。保存由你手动触发：Command + S 或 Ctrl + S。</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" onClick={saveDraft} disabled={!draft || saveStatus === "saving" || saveStatus === "saved"} className="gap-2 rounded-full">
-            <Save className="h-4 w-4" />
-            保存
-          </Button>
-          <Button type="button" onClick={createNote} className="gap-2 rounded-full">
+    <div className="mx-auto grid min-h-[calc(100vh-6rem)] max-w-7xl gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+      <aside className="rounded-3xl border border-slate-100 bg-white p-3">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h1 className="text-lg font-semibold tracking-tight">笔记</h1>
+          <Button type="button" size="sm" variant="ghost" className="h-9 w-9 rounded-xl p-0" onClick={createNote}>
             <Plus className="h-4 w-4" />
-            新建笔记
           </Button>
         </div>
-      </section>
 
-      {linkedDocumentQuery.data ? (
-        <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-          当前可创建关联笔记：{linkedDocumentQuery.data.title}
+        <label className="relative block">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索"
+            className="h-10 w-full rounded-2xl border border-transparent bg-slate-50 pl-9 pr-3 text-sm outline-none focus:border-slate-200 focus:bg-white"
+          />
+        </label>
+
+        <div className="mt-3 space-y-1.5">
+          {filteredNotes.map((note) => (
+            <button
+              key={note.id}
+              type="button"
+              onClick={() => selectNote(note.id)}
+              className={`w-full rounded-2xl px-3 py-2.5 text-left transition ${note.id === draft?.id ? "bg-slate-950 text-white" : "text-slate-700 hover:bg-slate-50"}`}
+            >
+              <p className="truncate text-sm font-medium">{note.title || "未命名"}</p>
+              <p className={`mt-1 line-clamp-2 text-xs ${note.id === draft?.id ? "text-slate-300" : "text-slate-400"}`}>{note.body || "空"}</p>
+            </button>
+          ))}
+          {!filteredNotes.length ? <p className="px-3 py-6 text-center text-sm text-slate-400">无笔记</p> : null}
         </div>
-      ) : null}
+      </aside>
 
-      <section className="grid min-h-[680px] gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="rounded-2xl border border-slate-100 bg-white p-3 shadow-sm">
-          <label className="relative block">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+      {draft ? (
+        <article className="rounded-3xl border border-slate-100 bg-white p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="按关键词或标签筛选笔记"
-              className="h-10 w-full rounded-full border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-slate-400"
+              value={draft.title}
+              onChange={(event) => updateDraft({ title: event.target.value })}
+              className="min-w-0 flex-1 border-0 bg-transparent text-2xl font-semibold tracking-tight outline-none"
+              placeholder="未命名"
             />
-          </label>
-          <div className="mt-3 space-y-2">
-            {filteredNotes.map((note) => (
-              <button
-                key={note.id}
-                type="button"
-                onClick={() => selectNote(note.id)}
-                className={`w-full rounded-xl p-3 text-left transition ${note.id === draft?.id ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-slate-100"}`}
-              >
-                <p className="truncate text-sm font-semibold">{note.title || "未命名笔记"}</p>
-                <p className={`mt-1 line-clamp-2 text-xs ${note.id === draft?.id ? "text-slate-300" : "text-slate-500"}`}>{note.body || "空笔记"}</p>
-              </button>
-            ))}
-            {!filteredNotes.length ? <p className="p-5 text-center text-sm text-slate-500">还没有匹配的笔记。</p> : null}
-          </div>
-        </aside>
-
-        {draft ? (
-          <article className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
-              <input
-                value={draft.title}
-                onChange={(event) => updateDraft({ title: event.target.value })}
-                className="min-w-0 flex-1 rounded-md border-0 text-2xl font-semibold tracking-tight outline-none"
-                placeholder="笔记标题"
-              />
-              <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${
+            <div className="flex items-center gap-2">
+              <span className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1 text-xs ${
                 saveStatus === "dirty" ? "bg-amber-50 text-amber-700" :
                 saveStatus === "failed" ? "bg-red-50 text-red-700" :
                 "bg-emerald-50 text-emerald-700"
@@ -209,39 +193,46 @@ export function NotesPage() {
                 {saveStatus === "failed" ? <AlertCircle className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
                 {statusCopy(saveStatus)}
               </span>
+              <Button type="button" variant="outline" size="sm" className="rounded-xl border-slate-100 shadow-none" onClick={saveDraft} disabled={saveStatus === "saving" || saveStatus === "saved"}>
+                <Save className="h-4 w-4" />
+                保存
+              </Button>
             </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <label>
-                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tags</span>
-                <div className="mt-1">
-                  <TagInput value={draft.tags} onChange={(tags) => updateDraft({ tags })} />
-                </div>
-              </label>
-              <label>
-                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">关联文档</span>
-                <input
-                  value={draft.documentTitle ?? ""}
-                  onChange={(event) => updateDraft({ documentTitle: event.target.value })}
-                  className="mt-1 h-10 w-full rounded-md border border-slate-300 px-3 text-sm"
-                  placeholder="可填写知识库文档标题"
-                />
-              </label>
-            </div>
-            <textarea
-              value={draft.body}
-              onChange={(event) => updateDraft({ body: event.target.value })}
-              className="mt-5 min-h-[480px] w-full resize-y rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-7 outline-none focus:border-slate-400 focus:bg-white"
-              placeholder="写下你的摘要、想法、问题或下一步行动..."
-            />
-          </article>
-        ) : (
-          <div className="flex min-h-[520px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 text-center">
-            <FileText className="h-10 w-10 text-slate-300" />
-            <p className="mt-3 font-medium text-slate-700">开始写第一条笔记</p>
-            <Button type="button" onClick={createNote} className="mt-4">新建笔记</Button>
           </div>
-        )}
-      </section>
+
+          <div className="mt-3 flex flex-col gap-2 md:flex-row">
+            <div className="min-w-0 flex-1">
+              <TagInput value={draft.tags} onChange={(tags) => updateDraft({ tags })} />
+            </div>
+            <input
+              value={draft.documentTitle ?? ""}
+              onChange={(event) => updateDraft({ documentTitle: event.target.value })}
+              className="h-10 rounded-2xl border border-slate-100 bg-white px-3 text-sm outline-none focus:border-slate-200 md:w-64"
+              placeholder="关联文档"
+            />
+          </div>
+
+          {linkedDocumentQuery.data ? (
+            <div className="mt-3 rounded-2xl bg-slate-50 px-3 py-2 text-sm text-slate-500">
+              {linkedDocumentQuery.data.title}
+            </div>
+          ) : null}
+
+          <textarea
+            value={draft.body}
+            onChange={(event) => updateDraft({ body: event.target.value })}
+            className="mt-4 min-h-[560px] w-full resize-y rounded-2xl border border-transparent bg-slate-50 p-4 text-sm leading-7 outline-none focus:border-slate-200 focus:bg-white"
+            placeholder="开始写..."
+          />
+        </article>
+      ) : (
+        <div className="flex items-center justify-center rounded-3xl border border-dashed border-slate-100 bg-white text-center">
+          <div>
+            <FileText className="mx-auto h-8 w-8 text-slate-300" />
+            <Button type="button" onClick={createNote} className="mt-4 rounded-xl">新建</Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
