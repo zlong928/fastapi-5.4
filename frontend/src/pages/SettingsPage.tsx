@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bell, BookOpen, Check, Database, Eye, Monitor, RotateCcw, Save, Shield, SlidersHorizontal, UserRound } from "lucide-react";
+import { Bell, Check, Database, Monitor, RotateCcw, Save, Shield, SlidersHorizontal, UserRound } from "lucide-react";
 import { useAuth } from "@/auth/AuthContext";
 import { Button } from "@/components/ui/button";
 
@@ -35,6 +35,25 @@ const defaultSettings: UserSettings = {
   confirmBeforeDelete: true,
   hideSensitiveMetadata: false,
   readerFullscreenHint: true,
+};
+
+const appearanceLabels: Record<AppearanceMode, string> = {
+  system: "跟随系统",
+  light: "浅色",
+  dark: "深色",
+};
+
+const fontScaleLabels: Record<FontScale, string> = {
+  compact: "紧凑",
+  default: "默认",
+  comfortable: "舒适",
+};
+
+const landingPageLabels: Record<LandingPage, string> = {
+  dashboard: "首页概览",
+  knowledge: "知识库",
+  notes: "笔记",
+  chat: "问答",
 };
 
 function loadSettings(): UserSettings {
@@ -144,6 +163,19 @@ function SelectRow<T extends string>({
   );
 }
 
+function SummaryRow({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-2xl bg-slate-50 px-3 py-2.5 text-sm">
+      <span className="text-slate-500">{label}</span>
+      <span className={strong ? "font-semibold text-slate-950" : "font-medium text-slate-800"}>{value}</span>
+    </div>
+  );
+}
+
+function onOff(value: boolean) {
+  return value ? "开启" : "关闭";
+}
+
 export function SettingsPage() {
   const { user } = useAuth();
   const [savedSettings, setSavedSettings] = useState<UserSettings>(() => loadSettings());
@@ -184,7 +216,7 @@ export function SettingsPage() {
           <p className="text-sm font-medium text-slate-500">个人工作台偏好</p>
           <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-950">设置</h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
-            调整显示、知识库默认行为、通知和隐私偏好。当前以本机持久化为主，后续接入后端用户偏好表时可直接迁移这些字段。
+            调整显示、知识库默认行为、通知和隐私偏好。设置会保存到当前浏览器，并在下次打开时自动恢复。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -295,7 +327,7 @@ export function SettingsPage() {
           </SettingsCard>
         </div>
 
-        <aside className="space-y-5 lg:sticky lg:top-20 lg:self-start">
+        <aside className="space-y-4 lg:sticky lg:top-20 lg:self-start">
           <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm shadow-slate-100/60">
             <div className="flex items-center gap-3">
               <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-950 text-sm font-semibold text-white">
@@ -306,25 +338,28 @@ export function SettingsPage() {
                 <p className="truncate text-sm text-slate-500">{user?.email ?? "未绑定邮箱"}</p>
               </div>
             </div>
-            <div className="mt-5 space-y-2 text-sm">
-              <div className="flex items-center justify-between rounded-2xl bg-slate-50 px-3 py-2"><span className="text-slate-500">外观</span><span className="font-medium text-slate-800">{draftSettings.appearance === "system" ? "跟随系统" : draftSettings.appearance === "dark" ? "深色" : "浅色"}</span></div>
-              <div className="flex items-center justify-between rounded-2xl bg-slate-50 px-3 py-2"><span className="text-slate-500">字号</span><span className="font-medium text-slate-800">{draftSettings.fontScale === "compact" ? "紧凑" : draftSettings.fontScale === "comfortable" ? "舒适" : "默认"}</span></div>
-              <div className="flex items-center justify-between rounded-2xl bg-slate-50 px-3 py-2"><span className="text-slate-500">删除保护</span><span className="font-medium text-slate-800">{draftSettings.confirmBeforeDelete ? "开启" : "关闭"}</span></div>
+            <div className="mt-5 space-y-2">
+              <SummaryRow label="外观" value={appearanceLabels[draftSettings.appearance]} strong />
+              <SummaryRow label="字号" value={fontScaleLabels[draftSettings.fontScale]} />
+              <SummaryRow label="默认入口" value={landingPageLabels[draftSettings.landingPage]} />
+              <SummaryRow label="删除保护" value={onOff(draftSettings.confirmBeforeDelete)} />
             </div>
           </section>
 
-          <section className="rounded-3xl border border-slate-100 bg-slate-950 p-5 text-white shadow-sm">
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <Eye className="h-4 w-4" />设计采纳原则
+          <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm shadow-slate-100/60">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-900">当前显示能力</h2>
+              <span className={isDirty ? "rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700" : "rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700"}>
+                {isDirty ? "未保存" : "已同步"}
+              </span>
             </div>
-            <p className="mt-3 text-sm leading-6 text-slate-300">
-              设置项按使用场景分组，只保留会影响多数用户或关键少数用户的选项；每个控件都有说明文字、当前状态和保存反馈，避免变成静态说明页。
-            </p>
-          </section>
-
-          <section className="rounded-3xl border border-amber-100 bg-amber-50 p-5 text-sm leading-6 text-amber-800">
-            <p className="font-semibold">后续可接后端</p>
-            <p className="mt-1">建议新增 <code className="rounded bg-amber-100 px-1 py-0.5">GET/PATCH /users/me/settings</code>，把这些字段从本机存储升级为跨设备同步。</p>
+            <div className="space-y-2 text-sm">
+              <SummaryRow label="聚焦搜索" value={onOff(draftSettings.autoOpenSearch)} />
+              <SummaryRow label="自动标签" value={onOff(draftSettings.uploadAutoTag)} />
+              <SummaryRow label="处理提醒" value={onOff(draftSettings.showProcessingToast)} />
+              <SummaryRow label="每周摘要" value={onOff(draftSettings.weeklyDigest)} />
+              <SummaryRow label="隐藏元数据" value={onOff(draftSettings.hideSensitiveMetadata)} />
+            </div>
           </section>
         </aside>
       </div>
