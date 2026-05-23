@@ -32,19 +32,50 @@ DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR / 'app.db'}")
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-me-in-production")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 
-def parse_cors_allowed_origins(frontend_url: str, extra_origins: str = "") -> list[str]:
+def normalize_url(url: str) -> str:
+    return url.strip().rstrip("/")
+
+
+def is_production_environment() -> bool:
+    return any(
+        os.getenv(name, "").strip().lower() == "production"
+        for name in ("ENV", "APP_ENV", "NODE_ENV", "ENVIRONMENT")
+    )
+
+
+def is_localhost_url(url: str) -> bool:
+    normalized = normalize_url(url).lower()
+    return normalized.startswith(("http://localhost", "https://localhost", "http://127.0.0.1", "https://127.0.0.1"))
+
+
+IS_PRODUCTION = is_production_environment()
+_raw_frontend_url = os.getenv("FRONTEND_URL")
+FRONTEND_URL = normalize_url(_raw_frontend_url or "http://localhost:3000")
+
+if IS_PRODUCTION and not _raw_frontend_url:
+    raise RuntimeError("FRONTEND_URL must be explicitly set in production.")
+
+if IS_PRODUCTION and is_localhost_url(FRONTEND_URL):
+    raise RuntimeError("FRONTEND_URL must be set to the deployed frontend URL in production.")
+
+
+def parse_cors_allowed_origins(frontend_url: str, extra_origins: str = "", include_local_defaults: bool = True) -> list[str]:
     origins: list[str] = []
-    for origin in [frontend_url, "http://localhost:3000", "http://127.0.0.1:3000", *extra_origins.split(",")]:
-        normalized = origin.strip().rstrip("/")
+    default_origins = ["http://localhost:3000", "http://127.0.0.1:3000"] if include_local_defaults else []
+    for origin in [frontend_url, *default_origins, *extra_origins.split(",")]:
+        normalized = normalize_url(origin)
         if normalized and normalized not in origins:
             origins.append(normalized)
     return origins
 
 
-CORS_ALLOWED_ORIGINS = parse_cors_allowed_origins(FRONTEND_URL, os.getenv("CORS_ALLOWED_ORIGINS", ""))
+CORS_ALLOWED_ORIGINS = parse_cors_allowed_origins(
+    FRONTEND_URL,
+    os.getenv("CORS_ALLOWED_ORIGINS", ""),
+    include_local_defaults=not IS_PRODUCTION,
+)
 CORS_ALLOWED_ORIGIN_REGEX = os.getenv("CORS_ALLOWED_ORIGIN_REGEX", r"https://.*\.vercel\.app")
 SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY", "change-me-in-production")
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")

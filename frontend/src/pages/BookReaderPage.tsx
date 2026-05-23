@@ -7,6 +7,12 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { getBook, getBookFileUrl, getBookProgress, getToken, saveBookProgress } from "@/lib/api";
 
+type ThemeableRendition = Rendition & {
+  themes: {
+    default: (styles: Record<string, Record<string, string>>) => void;
+  };
+};
+
 export function BookReaderPage() {
   const { bookId } = useParams();
   const numericBookId = Number(bookId);
@@ -47,7 +53,7 @@ export function BookReaderPage() {
     bookRef.current = epubBook;
     renditionRef.current = rendition;
 
-    rendition.themes.default({
+    (rendition as ThemeableRendition).themes.default({
       body: {
         "font-family": "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif",
         color: "#111827",

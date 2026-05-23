@@ -148,7 +148,51 @@ docker compose run --rm api python3 -m app.scripts.run_cleanup_jobs
 - 持久化 `UPLOAD_DIR`
 - Redis 服务
 - 前端 `VITE_API_BASE_URL`
+- 后端 `FRONTEND_URL`
 - HTTPS/CORS 白名单
+
+### Vercel 前端 + 线上后端
+
+生产部署不要让前端或后端回退到 localhost。必须显式配置以下环境变量：
+
+前端 Vercel 环境变量：
+
+```env
+VITE_API_BASE_URL=https://你的后端域名
+```
+
+后端环境变量：
+
+```env
+FRONTEND_URL=https://fastapi-5-4.vercel.app
+CORS_ALLOWED_ORIGINS=https://fastapi-5-4.vercel.app
+```
+
+`FRONTEND_URL` 用于登录和 OAuth 成功后跳回前端，例如：
+
+```text
+https://你的-vercel-前端域名/oauth/callback?token=...
+```
+
+`CORS_ALLOWED_ORIGINS` 可以继续用逗号追加其它可信前端来源；应用也会自动把 `FRONTEND_URL` 加入 CORS 白名单。本地开发默认仍然允许：
+
+```text
+http://localhost:3000
+http://127.0.0.1:3000
+```
+
+生产环境不会自动加入本地 origin；当 `ENV`、`APP_ENV`、`NODE_ENV` 或 `ENVIRONMENT` 任一值为 `production` 时，CORS 只包含 `FRONTEND_URL` 和显式配置的 `CORS_ALLOWED_ORIGINS`。`CORS_ALLOWED_ORIGIN_REGEX` 默认仍支持 `https://*.vercel.app` 预览域名，但不能替代 `FRONTEND_URL`，后端仍要求 production 显式配置 `FRONTEND_URL`。
+
+OAuth 平台 callback URL 必须填写后端地址，不是 Vercel 前端地址：
+
+```text
+GitHub: https://你的后端域名/auth/github/callback
+Google: https://你的后端域名/auth/google/callback
+```
+
+流程是：OAuth 平台先回调后端，后端完成账号处理和 token 签发后，再通过 `FRONTEND_URL` 重定向到前端 `/oauth/callback`。
+
+如果后端生产环境变量 `ENV`、`APP_ENV`、`NODE_ENV` 或 `ENVIRONMENT` 任一值为 `production`，但 `FRONTEND_URL` 缺失或仍是 localhost，应用会在启动时报配置错误。Vercel 生产构建如果缺少 `VITE_API_BASE_URL`，或把它配置成 localhost，前端也会明确失败，避免静默请求 `localhost:8000`。
 
 ## 测试
 

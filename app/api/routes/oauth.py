@@ -7,7 +7,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.core.config import FRONTEND_URL
+from app.core.config import FRONTEND_URL, normalize_url
 from app.core.oauth import oauth
 from app.core.security import create_access_token
 from app.db.session import get_db
@@ -103,4 +103,4 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
 
 def _redirect_with_token(access_token: str) -> RedirectResponse:
     query = urlencode({"token": access_token})
-    return RedirectResponse(url=f"{FRONTEND_URL.rstrip('/')}/oauth/callback?{query}")
+    return RedirectResponse(url=f"{normalize_url(FRONTEND_URL)}/oauth/callback?{query}")

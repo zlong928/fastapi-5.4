@@ -42,8 +42,18 @@ import {
   UserRead
 } from "./types";
 
-const DEFAULT_API_BASE_URL = import.meta.env.PROD ? import.meta.env.VITE_API_BASE_URL : "http://localhost:8000";
-export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE_URL).replace(/\/+$/, "");
+const rawApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
+const isLocalApiBaseUrl = (url: string) => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(url);
+
+if (import.meta.env.PROD && !rawApiBaseUrl) {
+  throw new Error("Missing VITE_API_BASE_URL in production.");
+}
+
+if (import.meta.env.PROD && rawApiBaseUrl && isLocalApiBaseUrl(rawApiBaseUrl)) {
+  throw new Error("VITE_API_BASE_URL must not point to localhost in production.");
+}
+
+export const API_BASE_URL = (rawApiBaseUrl || "http://localhost:8000").replace(/\/+$/, "");
 const TOKEN_KEY = "file_processing_token";
 
 export function getToken() {
