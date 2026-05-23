@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Tag as TagIcon } from "lucide-react";
 import { useState } from "react";
 import { TagInput } from "@/components/TagInput";
 import { batchTagDocuments, getTags } from "@/lib/api";
@@ -27,7 +26,7 @@ export function TagSelector({ documentIds, compact = false }: { documentIds: num
       return batchTagDocuments(documentIds, tagIds);
     },
     onSuccess: () => {
-      setMessage("标签已应用");
+      setMessage("已应用");
       setDraftTags([]);
       queryClient.invalidateQueries({ queryKey: ["tags"] });
       queryClient.invalidateQueries({ queryKey: ["documents"] });
@@ -40,10 +39,8 @@ export function TagSelector({ documentIds, compact = false }: { documentIds: num
   }
 
   return (
-    <div className={compact ? "space-y-2" : "space-y-3 rounded-lg border border-slate-200 bg-white p-3"}>
-      {!compact ? <div className="flex items-center gap-2 text-sm font-semibold text-slate-700"><TagIcon className="h-4 w-4" />文档标签</div> : null}
+    <div className={compact ? "space-y-2" : "space-y-2 rounded-2xl border border-slate-100 bg-white p-3"}>
       <TagInput value={draftTags} onChange={onTagsChange} />
-      <p className="text-xs text-slate-500">手动输入 # 后选择或创建标签。移除已有文档标签需要后端补充删除接口。</p>
       {message ? <p className="text-xs text-emerald-600">{message}</p> : null}
     </div>
   );
