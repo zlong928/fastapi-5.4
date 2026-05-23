@@ -5,6 +5,7 @@ import { Layout } from "@/components/Layout";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { DocumentDetailPage } from "@/pages/DocumentDetailPage";
+import { BookReaderPage } from "@/pages/BookReaderPage";
 import { ChatPage } from "@/pages/ChatPage";
 import { ForgotPasswordPage } from "@/pages/ForgotPasswordPage";
 import { KnowledgePage } from "@/pages/KnowledgePage";
@@ -44,7 +45,7 @@ export function App() {
           <Route path="/tags" element={<ProtectedRoute><Navigate to="/knowledge?tab=tags" replace /></ProtectedRoute>} />
           <Route path="/tools" element={<ProtectedRoute><Navigate to="/knowledge" replace /></ProtectedRoute>} />
           <Route path="/books" element={<ProtectedRoute><Navigate to="/knowledge?type=epub" replace /></ProtectedRoute>} />
-          <Route path="/books/:bookId/reader" element={<ProtectedRoute><Navigate to="/knowledge?type=epub" replace /></ProtectedRoute>} />
+          <Route path="/books/:bookId/reader" element={<ProtectedRoute><BookReaderPage /></ProtectedRoute>} />
           <Route path="/statistics" element={<ProtectedRoute><Navigate to="/" replace /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
