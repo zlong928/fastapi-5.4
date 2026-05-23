@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Bell, Check, Database, Monitor, RotateCcw, Save, Shield, SlidersHorizontal, UserRound } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Bell, Check, Database, Monitor, RotateCcw, Shield, SlidersHorizontal, UserRound } from "lucide-react";
 import { useAuth } from "@/auth/AuthContext";
 import { Button } from "@/components/ui/button";
 
@@ -64,6 +64,11 @@ function loadSettings(): UserSettings {
   } catch {
     return defaultSettings;
   }
+}
+
+function persistSettings(settings: UserSettings) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
 }
 
 function resolveDarkMode(appearance: AppearanceMode) {
@@ -183,48 +188,44 @@ function onOff(value: boolean) {
 
 export function SettingsPage() {
   const { user } = useAuth();
-  const [savedSettings, setSavedSettings] = useState<UserSettings>(() => loadSettings());
-  const [draftSettings, setDraftSettings] = useState<UserSettings>(() => loadSettings());
-  const [status, setStatus] = useState("已加载本机偏好");
+  const [settings, setSettings] = useState<UserSettings>(() => loadSettings());
+  const [status, setStatus] = useState("已加载上次操作");
 
   useEffect(() => {
-    applyVisualSettings(draftSettings);
-  }, [draftSettings]);
+    applyVisualSettings(settings);
+    persistSettings(settings);
+  }, [settings]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia?.("(prefers-color-scheme: dark)");
     if (!mediaQuery) return undefined;
 
     const handleSystemThemeChange = () => {
-      if (draftSettings.appearance === "system") applyVisualSettings(draftSettings);
+      if (settings.appearance === "system") applyVisualSettings(settings);
     };
 
     mediaQuery.addEventListener("change", handleSystemThemeChange);
     return () => mediaQuery.removeEventListener("change", handleSystemThemeChange);
-  }, [draftSettings]);
+  }, [settings]);
 
-  const isDirty = useMemo(() => JSON.stringify(savedSettings) !== JSON.stringify(draftSettings), [draftSettings, savedSettings]);
-  const effectiveName = draftSettings.displayName.trim() || user?.username || "用户";
-  const activeTheme = resolveDarkMode(draftSettings.appearance) ? "深色已生效" : "浅色已生效";
+  const effectiveName = settings.displayName.trim() || user?.username || "用户";
+  const activeTheme = resolveDarkMode(settings.appearance) ? "深色已生效" : "浅色已生效";
 
-  function updateDraft<K extends keyof UserSettings>(key: K, value: UserSettings[K]) {
-    setDraftSettings((current) => ({ ...current, [key]: value }));
-    setStatus("有未保存的更改");
-  }
-
-  function saveSettings() {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(draftSettings));
-    setSavedSettings(draftSettings);
-    applyVisualSettings(draftSettings);
-    setStatus("设置已保存并生效");
+  function updateSetting<K extends keyof UserSettings>(key: K, value: UserSettings[K]) {
+    setSettings((current) => {
+      const next = { ...current, [key]: value };
+      applyVisualSettings(next);
+      persistSettings(next);
+      return next;
+    });
+    setStatus("已自动保存到本机");
   }
 
   function resetSettings() {
     window.localStorage.removeItem(STORAGE_KEY);
-    setDraftSettings(defaultSettings);
-    setSavedSettings(defaultSettings);
+    setSettings(defaultSettings);
     applyVisualSettings(defaultSettings);
-    setStatus("已恢复默认设置");
+    setStatus("已恢复默认并记录");
   }
 
   return (
@@ -234,7 +235,7 @@ export function SettingsPage() {
           <p className="text-sm font-medium text-slate-500 dark:text-slate-400">个人工作台偏好</p>
           <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-50">设置</h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500 dark:text-slate-400">
-            优先完善主题能力：浅色、深色、跟随系统会立即预览，保存后刷新仍然保留。
+            设置采用本机自动保存：修改后立即生效，刷新后会恢复你上次的选择，不需要提交到后端。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -243,9 +244,6 @@ export function SettingsPage() {
           </span>
           <Button type="button" variant="outline" onClick={resetSettings} className="rounded-xl border-border shadow-none">
             <RotateCcw className="h-4 w-4" />恢复默认
-          </Button>
-          <Button type="button" onClick={saveSettings} disabled={!isDirty} className="rounded-xl disabled:cursor-not-allowed disabled:opacity-50">
-            <Save className="h-4 w-4" />保存设置
           </Button>
         </div>
       </div>
@@ -256,8 +254,8 @@ export function SettingsPage() {
             <label className="grid gap-3 rounded-2xl border border-border bg-card px-4 py-3 sm:grid-cols-[1fr_260px] sm:items-center">
               <FieldLabel label="显示昵称" hint="为空时默认使用账户用户名。" />
               <input
-                value={draftSettings.displayName}
-                onChange={(event) => updateDraft("displayName", event.target.value)}
+                value={settings.displayName}
+                onChange={(event) => updateSetting("displayName", event.target.value)}
                 placeholder={user?.username || "输入昵称"}
                 className="h-10 rounded-xl border border-input bg-background px-3 text-sm text-foreground outline-none transition placeholder:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-100 dark:focus:border-slate-500 dark:focus:ring-slate-800"
               />
@@ -269,33 +267,33 @@ export function SettingsPage() {
             </div>
           </SettingsCard>
 
-          <SettingsCard icon={Monitor} title="显示与入口" description="主题选择会即时应用到当前页面；保存后刷新仍然保留。">
+          <SettingsCard icon={Monitor} title="显示与入口" description="主题选择会即时应用到当前页面；刷新后仍会保留上次选择。">
             <SelectRow
               label="外观模式"
               hint={`当前效果：${activeTheme}。系统模式会跟随浏览器或操作系统的深浅色偏好。`}
-              value={draftSettings.appearance}
-              onChange={(value) => updateDraft("appearance", value)}
+              value={settings.appearance}
+              onChange={(value) => updateSetting("appearance", value)}
               options={[{ value: "system", label: "跟随系统" }, { value: "light", label: "浅色" }, { value: "dark", label: "深色" }]}
             />
             <SelectRow
               label="界面字号"
               hint="紧凑适合信息密度高的页面，舒适适合长时间阅读。"
-              value={draftSettings.fontScale}
-              onChange={(value) => updateDraft("fontScale", value)}
+              value={settings.fontScale}
+              onChange={(value) => updateSetting("fontScale", value)}
               options={[{ value: "compact", label: "紧凑" }, { value: "default", label: "默认" }, { value: "comfortable", label: "舒适" }]}
             />
             <SelectRow
               label="默认入口"
               hint="用于记录你希望打开系统后优先进入的工作区。"
-              value={draftSettings.landingPage}
-              onChange={(value) => updateDraft("landingPage", value)}
+              value={settings.landingPage}
+              onChange={(value) => updateSetting("landingPage", value)}
               options={[{ value: "dashboard", label: "首页概览" }, { value: "knowledge", label: "知识库" }, { value: "notes", label: "笔记" }, { value: "chat", label: "问答" }]}
             />
             <ToggleRow
               label="进入后聚焦搜索"
               hint="适合把系统当作资料检索入口的用户。"
-              checked={draftSettings.autoOpenSearch}
-              onChange={(value) => updateDraft("autoOpenSearch", value)}
+              checked={settings.autoOpenSearch}
+              onChange={(value) => updateSetting("autoOpenSearch", value)}
             />
           </SettingsCard>
 
@@ -303,20 +301,20 @@ export function SettingsPage() {
             <ToggleRow
               label="上传后自动建议标签"
               hint="开启后，文档处理完成时优先展示系统建议标签。"
-              checked={draftSettings.uploadAutoTag}
-              onChange={(value) => updateDraft("uploadAutoTag", value)}
+              checked={settings.uploadAutoTag}
+              onChange={(value) => updateSetting("uploadAutoTag", value)}
             />
             <ToggleRow
               label="显示处理状态提醒"
               hint="文档解析、失败、重试完成时在页面上显示提示。"
-              checked={draftSettings.showProcessingToast}
-              onChange={(value) => updateDraft("showProcessingToast", value)}
+              checked={settings.showProcessingToast}
+              onChange={(value) => updateSetting("showProcessingToast", value)}
             />
             <ToggleRow
               label="阅读器全屏提示"
               hint="打开 EPUB 或长文档时提示可进入全屏阅读模式。"
-              checked={draftSettings.readerFullscreenHint}
-              onChange={(value) => updateDraft("readerFullscreenHint", value)}
+              checked={settings.readerFullscreenHint}
+              onChange={(value) => updateSetting("readerFullscreenHint", value)}
             />
           </SettingsCard>
 
@@ -324,8 +322,8 @@ export function SettingsPage() {
             <ToggleRow
               label="每周知识库摘要"
               hint="汇总本周新增资料、失败任务和高频标签。"
-              checked={draftSettings.weeklyDigest}
-              onChange={(value) => updateDraft("weeklyDigest", value)}
+              checked={settings.weeklyDigest}
+              onChange={(value) => updateSetting("weeklyDigest", value)}
             />
           </SettingsCard>
 
@@ -333,14 +331,14 @@ export function SettingsPage() {
             <ToggleRow
               label="删除前二次确认"
               hint="防止误删文档、标签、集合或笔记。"
-              checked={draftSettings.confirmBeforeDelete}
-              onChange={(value) => updateDraft("confirmBeforeDelete", value)}
+              checked={settings.confirmBeforeDelete}
+              onChange={(value) => updateSetting("confirmBeforeDelete", value)}
             />
             <ToggleRow
               label="隐藏敏感元数据"
               hint="在列表和预览中弱化原始文件名、路径、上传来源等信息。"
-              checked={draftSettings.hideSensitiveMetadata}
-              onChange={(value) => updateDraft("hideSensitiveMetadata", value)}
+              checked={settings.hideSensitiveMetadata}
+              onChange={(value) => updateSetting("hideSensitiveMetadata", value)}
             />
           </SettingsCard>
         </div>
@@ -357,27 +355,27 @@ export function SettingsPage() {
               </div>
             </div>
             <div className="mt-5 space-y-2">
-              <SummaryRow label="外观" value={appearanceLabels[draftSettings.appearance]} strong />
+              <SummaryRow label="外观" value={appearanceLabels[settings.appearance]} strong />
               <SummaryRow label="当前主题" value={activeTheme.replace("已生效", "")} />
-              <SummaryRow label="字号" value={fontScaleLabels[draftSettings.fontScale]} />
-              <SummaryRow label="默认入口" value={landingPageLabels[draftSettings.landingPage]} />
-              <SummaryRow label="删除保护" value={onOff(draftSettings.confirmBeforeDelete)} />
+              <SummaryRow label="字号" value={fontScaleLabels[settings.fontScale]} />
+              <SummaryRow label="默认入口" value={landingPageLabels[settings.landingPage]} />
+              <SummaryRow label="删除保护" value={onOff(settings.confirmBeforeDelete)} />
             </div>
           </section>
 
           <section className="rounded-3xl border border-border bg-card p-5 text-card-foreground shadow-sm shadow-slate-100/60 transition-colors dark:shadow-none">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-50">当前显示能力</h2>
-              <span className={isDirty ? "rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 dark:bg-amber-950/40 dark:text-amber-300" : "rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"}>
-                {isDirty ? "未保存" : "已同步"}
+              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                本机已记录
               </span>
             </div>
             <div className="space-y-2 text-sm">
-              <SummaryRow label="聚焦搜索" value={onOff(draftSettings.autoOpenSearch)} />
-              <SummaryRow label="自动标签" value={onOff(draftSettings.uploadAutoTag)} />
-              <SummaryRow label="处理提醒" value={onOff(draftSettings.showProcessingToast)} />
-              <SummaryRow label="每周摘要" value={onOff(draftSettings.weeklyDigest)} />
-              <SummaryRow label="隐藏元数据" value={onOff(draftSettings.hideSensitiveMetadata)} />
+              <SummaryRow label="聚焦搜索" value={onOff(settings.autoOpenSearch)} />
+              <SummaryRow label="自动标签" value={onOff(settings.uploadAutoTag)} />
+              <SummaryRow label="处理提醒" value={onOff(settings.showProcessingToast)} />
+              <SummaryRow label="每周摘要" value={onOff(settings.weeklyDigest)} />
+              <SummaryRow label="隐藏元数据" value={onOff(settings.hideSensitiveMetadata)} />
             </div>
           </section>
         </aside>
