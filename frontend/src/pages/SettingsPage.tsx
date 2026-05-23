@@ -1,56 +1,32 @@
 import { useAuth } from "@/auth/AuthContext";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+
+function Row({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-2xl px-3 py-2.5 hover:bg-slate-50">
+      <span className="text-sm text-slate-400">{label}</span>
+      <span className="truncate text-sm font-medium text-slate-800">{value || "-"}</span>
+    </div>
+  );
+}
 
 export function SettingsPage() {
   const { user } = useAuth();
 
   return (
-    <div className="space-y-6">
-      <div>
-        <p className="text-sm font-medium uppercase tracking-wide text-slate-500">Account</p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight">Settings</h1>
-        <p className="mt-2 text-sm text-slate-500">Review the current user profile and runtime boundaries.</p>
-      </div>
+    <div className="mx-auto max-w-3xl space-y-4">
+      <h1 className="text-2xl font-semibold tracking-tight">设置</h1>
 
-      <Card>
-        <CardHeader className="border-b border-slate-200 pb-4">
-          <h2 className="font-semibold">Profile</h2>
-        </CardHeader>
-        <CardContent className="grid gap-4 p-5 md:grid-cols-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Username</p>
-            <p className="mt-1 font-medium">{user?.username ?? "-"}</p>
-          </div>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Email</p>
-            <p className="mt-1 font-medium">{user?.email ?? "-"}</p>
-          </div>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">User ID</p>
-            <p className="mt-1 font-medium">{user?.id ?? "-"}</p>
-          </div>
-        </CardContent>
-      </Card>
+      <section className="rounded-3xl border border-slate-100 bg-white p-3">
+        <Row label="用户名" value={user?.username ?? "-"} />
+        <Row label="邮箱" value={user?.email ?? "-"} />
+        <Row label="ID" value={user?.id ?? "-"} />
+      </section>
 
-      <Card>
-        <CardHeader className="border-b border-slate-200 pb-4">
-          <h2 className="font-semibold">File policy</h2>
-        </CardHeader>
-        <CardContent className="grid gap-4 p-5 md:grid-cols-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Allowed types</p>
-            <p className="mt-1 font-medium">PDF, Markdown, TXT</p>
-          </div>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Frontend limit</p>
-            <p className="mt-1 font-medium">10 MB per file</p>
-          </div>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Storage names</p>
-            <p className="mt-1 font-medium">UUID-based safe filenames</p>
-          </div>
-        </CardContent>
-      </Card>
+      <section className="rounded-3xl border border-slate-100 bg-white p-3">
+        <Row label="文件" value="PDF / EPUB / Markdown / TXT / Image" />
+        <Row label="上传限制" value="10 MB" />
+        <Row label="存储" value="UUID" />
+      </section>
     </div>
   );
 }
