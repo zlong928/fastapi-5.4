@@ -76,6 +76,23 @@ class CollectionCreate(BaseModel):
     description: Optional[str] = None
 
 
+class BookmarkCreate(BaseModel):
+    url: str = Field(min_length=8, max_length=2048)
+    title: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    collection_name: Optional[str] = Field(default=None, max_length=255)
+    tag_ids: list[int] = Field(default_factory=list, max_length=50)
+    processing_mode: DocumentProcessingMode = DocumentProcessingMode.AUTO
+
+
+class BookmarkCreateResponse(BaseModel):
+    document_id: int
+    status: str
+    processing_status: str
+    source_type: str = "bookmark"
+    source_url: Optional[str] = None
+    message: str
+
+
 class DocumentRead(BaseModel):
     """文档的完整读取模式，包含事件。"""
     id: int
@@ -87,6 +104,8 @@ class DocumentRead(BaseModel):
     file_size: int
     mime_type: str
     source_type: str
+    source_url: Optional[str] = None
+    site_name: Optional[str] = None
     processing_mode: DocumentProcessingMode = DocumentProcessingMode.AUTO
     processing_strategy: Optional[str] = None
     parsed_text: Optional[str] = None
@@ -118,6 +137,8 @@ class DocumentListItem(BaseModel):
     id: int
     title: str
     source_type: str
+    source_url: Optional[str] = None
+    site_name: Optional[str] = None
     processing_mode: DocumentProcessingMode = DocumentProcessingMode.AUTO
     processing_strategy: Optional[str] = None
     status: str
@@ -147,11 +168,11 @@ class DocumentCreate(BaseModel):
     title: Optional[str] = None
     mime_type: str
     source_type: str = Field(
-        pattern="^(pdf|markdown|txt|image|docx|epub)$",
-        description="File type: pdf, markdown, txt, image, docx, or epub"
+        pattern="^(pdf|markdown|txt|image|docx|epub|bookmark)$",
+        description="File type: pdf, markdown, txt, image, docx, epub, or bookmark"
     )
     processing_mode: DocumentProcessingMode = DocumentProcessingMode.AUTO
-    file_size: int = Field(gt=0, description="File size in bytes")
+    file_size: int = Field(ge=0, description="File size in bytes")
 
 
 class DocumentUpdate(BaseModel):
@@ -247,6 +268,8 @@ class DocumentDetailResponse(BaseModel):
     title: str
     original_filename: str
     source_type: str
+    source_url: Optional[str] = None
+    site_name: Optional[str] = None
     processing_mode: DocumentProcessingMode = DocumentProcessingMode.AUTO
     processing_strategy: Optional[str] = None
     status: str
@@ -280,6 +303,8 @@ class DocumentSearchResult(BaseModel):
     id: int
     title: str
     source_type: str
+    source_url: Optional[str] = None
+    site_name: Optional[str] = None
     status: str
     snippet: str
     matched_field: str
@@ -352,6 +377,8 @@ class DocumentProcessingStatusResponse(BaseModel):
     error: Optional[str] = None
     processing_error: Optional[str] = None
     collection_name: Optional[str] = None
+    source_url: Optional[str] = None
+    site_name: Optional[str] = None
     hash: Optional[str] = None
     content_summary: Optional[str] = None
     chunk_count: int = 0
