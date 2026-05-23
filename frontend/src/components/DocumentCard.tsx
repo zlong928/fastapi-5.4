@@ -1,7 +1,6 @@
 import {
   AlertCircle,
   BrainCircuit,
-  CheckCircle2,
   Clock,
   Eye,
   FileText,
@@ -13,48 +12,56 @@ import {
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { formatChinaDateTime } from "@/lib/time";
-import { DocumentListItem, DocumentStatus, processingModeLabel } from "@/lib/types";
+import { DocumentListItem, DocumentStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-function getStatusIcon(status: DocumentStatus) {
+function shouldShowStatus(status: DocumentStatus | string) {
+  return status === "pending" || status === "processing" || status === "failed";
+}
+
+function getStatusIcon(status: DocumentStatus | string) {
   switch (status) {
     case "pending":
     case "processing":
       return <Clock className="h-3.5 w-3.5" />;
-    case "done":
-    case "completed":
-      return <CheckCircle2 className="h-3.5 w-3.5" />;
     case "failed":
       return <AlertCircle className="h-3.5 w-3.5" />;
-    case "deleted":
-      return <Trash2 className="h-3.5 w-3.5" />;
     default:
       return null;
   }
 }
 
-function getStatusText(status: DocumentStatus) {
+function getStatusText(status: DocumentStatus | string) {
   switch (status) {
-    case "pending": return "等待";
+    case "pending": return "等待解析";
     case "processing": return "解析中";
-    case "done":
-    case "completed": return "完成";
-    case "failed": return "失败";
-    case "deleted": return "已删除";
+    case "failed": return "解析失败";
     default: return status;
   }
 }
 
-function getStatusColor(status: DocumentStatus) {
+function getStatusColor(status: DocumentStatus | string) {
   switch (status) {
     case "pending":
     case "processing": return "bg-amber-50 text-amber-700 ring-amber-100";
-    case "done":
-    case "completed": return "bg-emerald-50 text-emerald-700 ring-emerald-100";
     case "failed": return "bg-red-50 text-red-700 ring-red-100";
-    case "deleted": return "bg-slate-50 text-slate-500 ring-slate-100";
     default: return "bg-slate-50 text-slate-600 ring-slate-100";
   }
+}
+
+function sourceTypeLabel(sourceType: string) {
+  const labels: Record<string, string> = {
+    pdf: "PDF",
+    markdown: "Markdown",
+    txt: "文本",
+    image: "图片",
+    epub: "EPUB",
+    docx: "Word",
+    bookmark: "网页收藏",
+    note: "笔记",
+    diary: "日记"
+  };
+  return labels[sourceType] ?? sourceType.toUpperCase();
 }
 
 function formatBytes(bytes: number) {
@@ -63,6 +70,12 @@ function formatBytes(bytes: number) {
   const sizes = ["B", "KB", "MB", "GB"];
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
   return `${(bytes / Math.pow(k, index)).toFixed(1)} ${sizes[index]}`;
+}
+
+function formatDocumentTime(document: DocumentListItem) {
+  const isNoteLike = document.source_type === "note" || document.source_type === "diary";
+  const timestamp = isNoteLike ? document.updated_at : document.uploaded_at || document.created_at;
+  return `${isNoteLike ? "更新于" : "上传于"} ${formatChinaDateTime(timestamp)}`;
 }
 
 interface DocumentCardProps {
@@ -78,7 +91,8 @@ export function DocumentCard({ document, onRetry, onDelete, onMoveToCollection, 
   const navigate = useNavigate();
   const processingStatus = document.processing_status ?? document.status;
   const processingError = document.processing_error ?? document.fail_reason ?? document.error_message;
-  const meta = [document.source_type?.toUpperCase(), formatBytes(document.file_size), processingModeLabel(document.processing_mode), document.chunk_count > 0 ? `${document.chunk_count} chunks` : null, document.collection_name ? `集合：${document.collection_name}` : null].filter(Boolean);
+  const meta = [sourceTypeLabel(document.source_type), formatBytes(document.file_size), formatDocumentTime(document)].filter(Boolean);
+  const isIndexed = document.chunk_count > 0;
 
   return (
     <article className="group cursor-pointer rounded-2xl border border-slate-100 bg-white px-4 py-3 transition hover:border-slate-200 hover:bg-slate-50/70" onClick={() => navigate(`/documents/${document.id}`)}>
@@ -87,14 +101,18 @@ export function DocumentCard({ document, onRetry, onDelete, onMoveToCollection, 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="truncate text-sm font-semibold text-slate-900">{document.title}</h3>
-            <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1", getStatusColor(processingStatus))}>{getStatusIcon(processingStatus)}{getStatusText(processingStatus)}</span>
+            {shouldShowStatus(processingStatus) ? <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1", getStatusColor(processingStatus))}>{getStatusIcon(processingStatus)}{getStatusText(processingStatus)}</span> : null}
           </div>
-          <p className="mt-1 truncate text-xs text-slate-500">{document.original_filename}</p>
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
             {meta.map((item) => <span key={String(item)}>{item}</span>)}
-            <span>上传于 {formatChinaDateTime(document.created_at)}</span>
+            {isIndexed ? <span>已索引</span> : null}
           </div>
-          {document.tags.length > 0 ? <div className="mt-2 flex flex-wrap gap-1.5">{document.tags.slice(0, 5).map((tag) => <span key={tag.id} className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">#{tag.name}</span>)}{document.tags.length > 5 ? <span className="text-xs text-slate-400">+{document.tags.length - 5}</span> : null}</div> : null}
+          {document.content_summary ? <p className="mt-2 line-clamp-1 text-sm text-slate-500">{document.content_summary}</p> : <p className="mt-2 truncate text-xs text-slate-400">{document.original_filename}</p>}
+          {(document.tags.length > 0 || document.collection_name) ? <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {document.collection_name ? <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">集合：{document.collection_name}</span> : null}
+            {document.tags.slice(0, 5).map((tag) => <span key={tag.id} className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">#{tag.name}</span>)}
+            {document.tags.length > 5 ? <span className="text-xs text-slate-400">+{document.tags.length - 5}</span> : null}
+          </div> : null}
           {processingStatus === "failed" && processingError ? <p className="mt-2 line-clamp-2 rounded-xl bg-red-50 px-3 py-2 text-xs text-red-700">{processingError}</p> : null}
         </div>
         <div className="flex shrink-0 items-center gap-1 opacity-100 md:opacity-0 md:transition md:group-hover:opacity-100" onClick={(event) => event.stopPropagation()}>
