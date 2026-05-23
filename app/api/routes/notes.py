@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime
 from typing import Literal
 
@@ -12,7 +13,7 @@ from app.api.deps import get_current_user
 from app.core.time import app_now
 from app.db.session import get_db
 from app.models import Document, DocumentChunk, DocumentTag, Tag, User
-from app.schemas.document import DocumentDetailResponse, DocumentEventRead, ParseJobRead, TagRead
+from app.schemas.document import DocumentDetailResponse, DocumentEventRead, TagRead
 from app.services.document_embedding_service import DocumentEmbeddingService
 from app.services.document_service import DocumentService
 
@@ -53,13 +54,12 @@ def note_title(title: str | None) -> str:
 
 
 def serialize_note(document: Document) -> NoteRead:
-    tags = [link.tag.name for link in document.tag_links]
     return NoteRead(
         id=note_uid_from_path(document.original_file_path),
         document_id=document.id,
         title=document.title,
         body=document.cleaned_text or document.parsed_text or "",
-        tags=tags,
+        tags=[link.tag.name for link in document.tag_links],
         source_type=document.source_type,
         document_title=document.site_name,
         created_at=document.created_at,
@@ -105,6 +105,18 @@ def serialize_document_detail(document: Document) -> DocumentDetailResponse:
     )
 
 
+def find_note_document(db: Session, user_id: int, note_id: str) -> Document | None:
+    return (
+        db.query(Document)
+        .filter(
+            Document.user_id == user_id,
+            Document.source_type.in_(["note", "diary"]),
+            Document.original_file_path.in_([f"note:{note_id}", f"diary:{note_id}"]),
+        )
+        .first()
+    )
+
+
 def split_note_chunks(text: str, *, max_chars: int = 900) -> list[str]:
     paragraphs = [part.strip() for part in text.replace("\r\n", "\n").split("\n\n") if part.strip()]
     if not paragraphs and text.strip():
@@ -130,7 +142,7 @@ def split_note_chunks(text: str, *, max_chars: int = 900) -> list[str]:
     return chunks
 
 
-def sync_note_chunks(db: Session, document: Document, body: str) -> None:
+def sync_note_chunks(db: Session, document: Document, body: str, source_type: str) -> None:
     db.query(DocumentChunk).filter(DocumentChunk.document_id == document.id).delete(synchronize_session=False)
     chunks = split_note_chunks(body)
     position = 0
@@ -142,20 +154,20 @@ def sync_note_chunks(db: Session, document: Document, body: str) -> None:
         db.add(DocumentChunk(
             document_id=document.id,
             chunk_index=index,
-            chunk_type="note",
+            chunk_type=source_type,
             text=chunk,
             cleaned_text=chunk,
             char_start=start,
             char_end=end,
             token_count=len(chunk.split()),
-            metadata_json='{"source_type":"note"}',
+            metadata_json=json.dumps({"source_type": source_type}, ensure_ascii=False),
         ))
         position = end
     document.chunk_count = len(chunks)
 
 
 def sync_note_tags(db: Session, document: Document, user_id: int, tag_names: list[str]) -> None:
-    clean_names = []
+    clean_names: list[str] = []
     for name in tag_names:
         cleaned = normalize_tag_name(name)
         if cleaned and cleaned not in clean_names:
@@ -184,7 +196,7 @@ def upsert_note_document(db: Session, current_user: User, payload: NotePayload, 
     title = note_title(payload.title)
     body = payload.body or ""
     content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
-    document = db.query(Document).filter(Document.user_id == current_user.id, Document.original_file_path == path).first()
+    document = find_note_document(db, current_user.id, uid)
     now = app_now()
     if document is None:
         document = Document(
@@ -212,17 +224,22 @@ def upsert_note_document(db: Session, current_user: User, payload: NotePayload, 
     else:
         document.title = title
         document.original_filename = f"{title}.md"
+        document.original_file_path = path
         document.file_size = len(body.encode("utf-8"))
+        document.mime_type = "text/markdown"
         document.source_type = source_type
         document.site_name = payload.document_title
+        document.processing_mode = "markdown_notes"
+        document.processing_strategy = "note_document"
         document.parsed_text = body
         document.cleaned_text = body
         document.status = "done"
+        document.collection_name = "笔记" if source_type == "note" else "日记"
         document.content_hash = content_hash
         document.content_summary = body.strip()[:120] or None
         document.parsed_at = now
     sync_note_tags(db, document, current_user.id, payload.tags)
-    sync_note_chunks(db, document, body)
+    sync_note_chunks(db, document, body, source_type)
     DocumentService(db).log_event(document.id, current_user.id, "note_saved", "笔记已保存", commit=False)
     db.commit()
     db.refresh(document)
@@ -232,11 +249,7 @@ def upsert_note_document(db: Session, current_user: User, payload: NotePayload, 
 
 
 @router.get("", response_model=list[NoteRead])
-def list_notes(
-    source_type: str | None = Query(None, pattern="^(note|diary)$"),
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> list[NoteRead]:
+def list_notes(source_type: str | None = Query(None, pattern="^(note|diary)$"), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[NoteRead]:
     query = db.query(Document).filter(Document.user_id == current_user.id, Document.status != "deleted", Document.source_type.in_(["note", "diary"]))
     if source_type:
         query = query.filter(Document.source_type == source_type)
@@ -252,7 +265,7 @@ def create_note(payload: NotePayload, current_user: User = Depends(get_current_u
 
 @router.get("/{note_id}", response_model=NoteRead)
 def get_note(note_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> NoteRead:
-    document = db.query(Document).filter(Document.user_id == current_user.id, Document.original_file_path.in_([f"note:{note_id}", f"diary:{note_id}"])).first()
+    document = find_note_document(db, current_user.id, note_id)
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found.")
     return serialize_note(document)
@@ -260,8 +273,7 @@ def get_note(note_id: str, current_user: User = Depends(get_current_user), db: S
 
 @router.patch("/{note_id}", response_model=NoteRead)
 def update_note(note_id: str, payload: NotePayload, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> NoteRead:
-    existing = db.query(Document).filter(Document.user_id == current_user.id, Document.original_file_path.in_([f"note:{note_id}", f"diary:{note_id}"])).first()
-    if existing is None:
+    if find_note_document(db, current_user.id, note_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found.")
     document = upsert_note_document(db, current_user, payload, note_id=note_id)
     return serialize_note(document)
@@ -269,16 +281,18 @@ def update_note(note_id: str, payload: NotePayload, current_user: User = Depends
 
 @router.delete("/{note_id}", response_model=dict)
 def delete_note(note_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
-    document = db.query(Document).filter(Document.user_id == current_user.id, Document.original_file_path.in_([f"note:{note_id}", f"diary:{note_id}"])).first()
+    document = find_note_document(db, current_user.id, note_id)
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found.")
-    deleted_id = DocumentService(db).hard_delete_document(document.id)
-    return {"id": note_id, "document_id": deleted_id, "status": "deleted"}
+    deleted_document_id = document.id
+    db.delete(document)
+    db.commit()
+    return {"id": note_id, "document_id": deleted_document_id, "status": "deleted"}
 
 
 @router.get("/{note_id}/document", response_model=DocumentDetailResponse)
 def get_note_document(note_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DocumentDetailResponse:
-    document = db.query(Document).filter(Document.user_id == current_user.id, Document.original_file_path.in_([f"note:{note_id}", f"diary:{note_id}"])).first()
+    document = find_note_document(db, current_user.id, note_id)
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found.")
     return serialize_document_detail(document)
