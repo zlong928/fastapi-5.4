@@ -182,6 +182,7 @@ class DocumentSearchService:
             if score <= 0 or score < threshold:
                 continue
             metadata = self._metadata(chunk.metadata_json)
+            source = self._chunk_source(chunk, metadata)
             results.append(
                 {
                     "chunk_id": chunk.id,
@@ -194,7 +195,7 @@ class DocumentSearchService:
                     "text": chunk.cleaned_text,
                     "score": score,
                     "metadata": metadata,
-                    "source": metadata.get("source"),
+                    "source": source,
                     "start_index": metadata.get("start_index", chunk.char_start),
                     "hash": chunk.document.content_hash or metadata.get("hash"),
                     "page_start": chunk.page_start,
@@ -235,6 +236,7 @@ class DocumentSearchService:
         results = []
         for chunk in chunks:
             metadata = self._metadata(chunk.metadata_json)
+            source = self._chunk_source(chunk, metadata)
             results.append({
                 "chunk_id": chunk.id,
                 "id": chunk.vector_id or str(chunk.id),
@@ -246,7 +248,7 @@ class DocumentSearchService:
                 "text": chunk.cleaned_text,
                 "score": 1.0,
                 "metadata": metadata,
-                "source": metadata.get("source"),
+                "source": source,
                 "start_index": metadata.get("start_index", chunk.char_start),
                 "hash": chunk.document.content_hash,
                 "page_start": chunk.page_start,
@@ -297,6 +299,10 @@ class DocumentSearchService:
             return parsed if isinstance(parsed, dict) else {}
         except json.JSONDecodeError:
             return {}
+
+    def _chunk_source(self, chunk: DocumentChunk, metadata: dict) -> str | None:
+        value = metadata.get("source") or metadata.get("url") or chunk.document.source_url
+        return str(value) if value else None
 
     def _query_vector(self, query: str) -> list[float]:
         try:

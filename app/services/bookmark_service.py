@@ -22,6 +22,7 @@ MAX_REDIRECTS = 3
 REQUEST_TIMEOUT = 8.0
 BOOKMARK_USER_AGENT = "SecondBrainBookmarkFetcher/1.0"
 ALLOWED_CONTENT_TYPES = ("text/html", "text/plain")
+DOCKER_DESKTOP_PROXY_NET = ipaddress.ip_network("198.18.0.0/15")
 
 
 class BookmarkError(ValueError):
@@ -112,10 +113,11 @@ def _resolve_public_host(hostname: str) -> None:
         raise BookmarkError("不允许访问本机地址")
     try:
         ip_obj = ipaddress.ip_address(host)
+    except ValueError:
+        ip_obj = None
+    if ip_obj is not None:
         _assert_public_ip(ip_obj)
         return
-    except ValueError:
-        pass
 
     try:
         infos = socket.getaddrinfo(host, None)
@@ -125,10 +127,12 @@ def _resolve_public_host(hostname: str) -> None:
         raise BookmarkError("域名无法解析")
     for info in infos:
         ip_text = info[4][0]
-        _assert_public_ip(ipaddress.ip_address(ip_text))
+        _assert_public_ip(ipaddress.ip_address(ip_text), allow_docker_desktop_proxy=True)
 
 
-def _assert_public_ip(ip_obj: ipaddress._BaseAddress) -> None:
+def _assert_public_ip(ip_obj: ipaddress._BaseAddress, *, allow_docker_desktop_proxy: bool = False) -> None:
+    if allow_docker_desktop_proxy and isinstance(ip_obj, ipaddress.IPv4Address) and ip_obj in DOCKER_DESKTOP_PROXY_NET:
+        return
     if (
         ip_obj.is_private
         or ip_obj.is_loopback
@@ -255,7 +259,7 @@ class BookmarkService:
         self.db.refresh(document)
 
         try:
-            self._log(document, user_id, "bookmark_fetch_started", "开始抓取", commit=True)
+            self._log(document, user_id, "fetch_started", "开始抓取", commit=True)
             fetched = await fetch_bookmark(validated_url)
             final_url = fetched.final_url
             document.source_url = final_url
@@ -286,13 +290,20 @@ class BookmarkService:
                         char_end=None,
                         token_count=None,
                         metadata_json=json.dumps(
-                            {"url": final_url, "domain": fetched.site_name, "title": document.title},
+                            {
+                                "source": final_url,
+                                "url": final_url,
+                                "domain": fetched.site_name,
+                                "site_name": fetched.site_name,
+                                "title": document.title,
+                                "source_type": "bookmark",
+                            },
                             ensure_ascii=False,
                         ),
                     )
                 )
             document.chunk_count = len(chunks)
-            self._log(document, user_id, "bookmark_fetch_succeeded", "抓取完成", {"chunks": len(chunks)}, commit=False)
+            self._log(document, user_id, "fetch_succeeded", "抓取完成", {"chunks": len(chunks)}, commit=False)
             self.db.commit()
             self.db.refresh(document)
             try:
@@ -310,7 +321,7 @@ class BookmarkService:
             document.status = STATUS_FAILED
             document.error_message = str(exc)
             document.fail_reason = str(exc)
-            self._log(document, user_id, "bookmark_fetch_failed", str(exc), commit=False)
+            self._log(document, user_id, "fetch_failed", str(exc), commit=False)
             self.db.commit()
             self.db.refresh(document)
             return document
@@ -322,7 +333,7 @@ class BookmarkService:
             document.status = STATUS_FAILED
             document.error_message = "抓取失败"
             document.fail_reason = "抓取失败"
-            self._log(document, user_id, "bookmark_fetch_failed", "抓取失败", {"error": str(exc)}, commit=False)
+            self._log(document, user_id, "fetch_failed", "抓取失败", {"error": str(exc)}, commit=False)
             self.db.commit()
             self.db.refresh(document)
             return document

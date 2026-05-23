@@ -80,6 +80,10 @@ function isDone(status?: DocumentStatus) {
   return status === "done" || status === "completed";
 }
 
+function isBookmark(document?: DocumentRead) {
+  return document?.source_type === "bookmark";
+}
+
 export function DocumentDetailPage() {
   const { id } = useParams();
   const documentId = Number(id);
@@ -143,17 +147,23 @@ export function DocumentDetailPage() {
 
   useEffect(() => {
     if (!document) return;
+    if (isBookmark(document)) {
+      setFileUrl(null);
+      setFileText(undefined);
+      return;
+    }
+    const currentDocument = document;
     let cancelled = false;
     let objectUrl: string | null = null;
 
     async function loadFile() {
       try {
-        const blob = await getDocumentFileBlob(document.id);
+        const blob = await getDocumentFileBlob(currentDocument.id);
         if (cancelled) return;
         objectUrl = URL.createObjectURL(blob);
         setFileUrl(objectUrl);
-        if (isTextLike(document)) {
-          const text = await getDocumentFileText(document.id);
+        if (isTextLike(currentDocument)) {
+          const text = await getDocumentFileText(currentDocument.id);
           if (!cancelled) setFileText(text);
         }
       } catch {
@@ -166,7 +176,7 @@ export function DocumentDetailPage() {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [document?.id]);
+  }, [document?.id, document?.source_type]);
 
   useEffect(() => {
     if (!fullscreenOpen) return;
@@ -198,6 +208,10 @@ export function DocumentDetailPage() {
   }
 
   function openFile() {
+    if (isBookmark(document) && document?.source_url) {
+      window.open(document.source_url, "_blank", "noopener,noreferrer");
+      return;
+    }
     if (fileUrl) window.open(fileUrl, "_blank", "noopener,noreferrer");
   }
 
@@ -244,9 +258,11 @@ export function DocumentDetailPage() {
               {retryMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               重试
             </Button>
-            <Button type="button" variant="outline" size="sm" className="rounded-xl border-slate-100 shadow-none" onClick={downloadFile} disabled={!fileUrl}>
-              <Download className="h-4 w-4" />
-            </Button>
+            {!isBookmark(document) ? (
+              <Button type="button" variant="outline" size="sm" className="rounded-xl border-slate-100 shadow-none" onClick={downloadFile} disabled={!fileUrl}>
+                <Download className="h-4 w-4" />
+              </Button>
+            ) : null}
             <Button type="button" variant="outline" size="sm" className="rounded-xl border-slate-100 text-red-500 shadow-none" onClick={() => confirm("删除文档？") && deleteMutation.mutate(document.id)} disabled={deleteMutation.isPending}>
               <Trash2 className="h-4 w-4" />
             </Button>
@@ -300,13 +316,15 @@ export function DocumentDetailPage() {
               {isDone(document.status) ? <CheckCircle2 className="h-3.5 w-3.5" /> : document.status === "failed" ? <AlertCircle className="h-3.5 w-3.5" /> : <RefreshCw className="h-3.5 w-3.5" />}
               {statusText(document.status)}
             </span>
-            <Button type="button" variant="ghost" size="sm" className="h-8 rounded-xl px-2" onClick={openFile} disabled={!fileUrl}>
+            <Button type="button" variant="ghost" size="sm" className="h-8 rounded-xl px-2" onClick={openFile} disabled={isBookmark(document) ? !document.source_url : !fileUrl}>
               <ExternalLink className="h-4 w-4" />
             </Button>
           </div>
 
           <div className="mt-4 space-y-2 text-sm text-slate-500">
             <InfoRow label="文件" value={document.original_filename} />
+            {isBookmark(document) ? <InfoRow label="站点" value={document.site_name || "-"} /> : null}
+            {isBookmark(document) ? <InfoRow label="来源" value={document.source_url || "-"} /> : null}
             <InfoRow label="模式" value={document.processing_mode} />
             <InfoRow label="集合" value={document.collection_name || "-"} />
             <InfoRow label="解析" value={document.parsed_at ? formatChinaDateTime(document.parsed_at) : "-"} />
@@ -352,6 +370,24 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 }
 
 function PreviewPane({ document, fileUrl, fileText, onFullscreen }: { document: DocumentRead; fileUrl: string | null; fileText?: string; onFullscreen: () => void }) {
+  if (isBookmark(document)) {
+    const text = previewText(document);
+    return (
+      <div className="space-y-3">
+        <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+          <p className="text-sm font-medium text-slate-700">{document.site_name || "链接"}</p>
+          {document.source_url ? (
+            <a href={document.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700">
+              <ExternalLink className="h-4 w-4" />
+              打开原链接
+            </a>
+          ) : null}
+        </div>
+        {text ? <pre className="max-h-[68vh] overflow-y-auto whitespace-pre-wrap rounded-2xl bg-slate-50 p-5 text-sm leading-7 text-slate-700">{text}</pre> : <EmptyPane text="无文本" />}
+      </div>
+    );
+  }
+
   if (!fileUrl) return <EmptyPane text="无预览" />;
 
   if (document.source_type === "pdf") {

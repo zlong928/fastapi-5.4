@@ -52,7 +52,10 @@ export function BookmarkSaveDialog({ open, onOpenChange }: BookmarkSaveDialogPro
             <span className="text-sm text-slate-500">URL</span>
             <input
               value={url}
-              onChange={(event) => bookmarkMutation.reset() || setUrl(event.target.value)}
+              onChange={(event) => {
+                bookmarkMutation.reset();
+                setUrl(event.target.value);
+              }}
               placeholder="https://..."
               className="mt-1 h-11 w-full rounded-2xl border border-slate-100 bg-slate-50 px-3 text-sm outline-none transition focus:border-slate-200 focus:bg-white"
               autoFocus

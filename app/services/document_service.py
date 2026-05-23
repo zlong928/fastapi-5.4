@@ -365,10 +365,10 @@ class DocumentService:
 
     def _document_relative_file_paths(self, document: Document) -> list[str]:
         paths: list[str] = []
-        if document.original_file_path:
+        if self._is_cleanup_file_path(document.original_file_path, source_type=document.source_type):
             paths.append(document.original_file_path)
         for asset in document.assets:
-            if asset.file_path:
+            if self._is_cleanup_file_path(asset.file_path, source_type=document.source_type):
                 paths.append(asset.file_path)
 
         seen: set[str] = set()
@@ -380,6 +380,14 @@ class DocumentService:
             seen.add(normalized_path)
             unique_paths.append(normalized_path)
         return unique_paths
+
+    @staticmethod
+    def _is_cleanup_file_path(path: str | None, *, source_type: str | None = None) -> bool:
+        if not path:
+            return False
+        if source_type == "bookmark" or path.startswith("bookmark:"):
+            return False
+        return True
 
     def _delete_relative_file(self, relative_path: str, *, document_id: int) -> None:
         if self._relative_file_is_referenced(relative_path):

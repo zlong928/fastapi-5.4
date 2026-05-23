@@ -19,6 +19,7 @@ from app.db.session import Base, get_db
 from app.main import app
 from app.models import Document, DocumentAsset, DocumentChunk, DocumentEvent, FileCleanupJob, JobRun, User
 from app.schemas.document import DocumentProcessingMode
+from app.services.bookmark_service import BookmarkError, validate_public_url
 from app.services.document_parse_pipeline import DocumentParsePipeline
 from app.services.file_storage import FileStorageService
 from app.services.document_service import DocumentService
@@ -98,13 +99,21 @@ def create_document(
     *,
     status: str = "pending",
     filename: str = "sample.txt",
-    content: bytes = b"DocumentParser uses Redis.",
+    content: bytes | None = None,
 ) -> Document:
+    extension = filename.rsplit(".", 1)[1]
+    if content is None:
+        if extension == "pdf":
+            content = PDF_BYTES
+        elif extension == "png":
+            content = PNG_BYTES
+        else:
+            content = b"DocumentParser uses Redis."
     relative_path, stored_filename = storage.store_file(
         user_id=user.id,
         original_filename=filename,
         file_content=content,
-        file_extension=filename.rsplit(".", 1)[1],
+        file_extension=extension,
     )
     document = Document(
         user_id=user.id,
@@ -178,6 +187,60 @@ def test_delete_missing_physical_file_still_deletes_database_record(client, db, 
     cleanup_job = db.query(FileCleanupJob).one()
     assert cleanup_job.file_path == original_relative_path
     assert cleanup_job.status == "pending"
+
+
+def test_hard_delete_bookmark_does_not_create_cleanup_job(db, user):
+    document = Document(
+        user_id=user.id,
+        title="Example",
+        original_filename="example.com",
+        stored_filename="bookmark",
+        original_file_path="bookmark:https://example.com",
+        file_size=0,
+        mime_type="text/html",
+        source_type="bookmark",
+        source_url="https://example.com",
+        site_name="example.com",
+        status="done",
+    )
+    db.add(document)
+    db.commit()
+    document_id = document.id
+
+    deleted_id = DocumentService(db).hard_delete_document(document_id)
+
+    assert deleted_id == document_id
+    assert db.get(Document, document_id) is None
+    assert db.query(FileCleanupJob).count() == 0
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "ftp://example.com/file",
+        "javascript:alert(1)",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://0.0.0.0:8000",
+        "http://10.0.0.1",
+        "http://192.168.1.1",
+        "http://172.16.0.1",
+        "http://198.18.0.96",
+    ],
+)
+def test_validate_public_url_rejects_ssrf_targets(url):
+    with pytest.raises(BookmarkError):
+        validate_public_url(url)
+
+
+def test_validate_public_url_allows_docker_proxy_dns_for_hostname(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.bookmark_service.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [(None, None, None, "", ("198.18.0.96", 0))],
+    )
+
+    assert validate_public_url("https://example.com") == "https://example.com"
 
 
 def test_cleanup_missing_physical_file_marks_job_done(db, storage, user):
@@ -1312,6 +1375,42 @@ def test_get_document_chunks_returns_parsed_chunks(client, db, storage, user):
     assert payload[0]["chunk_index"] == 0
     assert payload[0]["token_count"] == 2
     assert payload[0]["metadata_json"] == '{"source":"body","section_path":["Intro"]}'
+
+
+def test_search_chunks_uses_bookmark_source_url_as_source(client, db, user):
+    document = Document(
+        user_id=user.id,
+        title="Example Article",
+        original_filename="example.com",
+        stored_filename="bookmark",
+        original_file_path="bookmark:https://example.com/article",
+        file_size=128,
+        mime_type="text/html",
+        source_type="bookmark",
+        source_url="https://example.com/article",
+        site_name="example.com",
+        status="done",
+    )
+    db.add(document)
+    db.flush()
+    db.add(
+        DocumentChunk(
+            document_id=document.id,
+            chunk_index=0,
+            chunk_type="web",
+            text="Alpha bookmark body",
+            cleaned_text="Alpha bookmark body",
+            metadata_json=json.dumps({"url": "https://example.com/article"}),
+        )
+    )
+    db.commit()
+
+    response = client.get("/documents/search/chunks?q=Alpha")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["source"] == "https://example.com/article"
 
 
 def test_get_document_chunks_pending_document_returns_empty(client, db, storage, user):

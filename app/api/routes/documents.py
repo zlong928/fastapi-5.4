@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.routing import APIRoute
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -40,6 +41,17 @@ from app.services.job_run_service import JobRunService
 from app.utils.json import json_loads_object_or_none
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+
+def explain_interface(*, responsibility: str, database: str, files: str, future: str | None = None) -> str:
+    parts = [
+        f"Responsibility: {responsibility}",
+        f"Database: {database}",
+        f"Files: {files}",
+    ]
+    if future:
+        parts.append(f"Future simplification: {future}")
+    return "\n\n".join(parts)
 
 
 def assert_document_owner(document: Document, current_user: User) -> None:
@@ -238,7 +250,20 @@ async def list_documents(
     actual_size = limit or size
     actual_skip = skip if skip is not None else (page - 1) * actual_size
     actual_page = page if skip is None else (actual_skip // actual_size) + 1
-    documents, total = service.get_user_documents(current_user.id, actual_skip, actual_size, True, keyword, tag_id, file_type, status, start_date, end_date, sort_by, sort_order)
+    documents, total = service.get_user_documents(
+        user_id=current_user.id,
+        skip=actual_skip,
+        limit=actual_size,
+        exclude_deleted=True,
+        keyword=keyword,
+        tag_id=tag_id,
+        file_type=file_type,
+        status=status,
+        start_date=start_date,
+        end_date=end_date,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
     return DocumentListResponse(total=total, page=actual_page, size=actual_size, items=[serialize_document_list_item(doc, service.get_latest_parse_job(doc.id)) for doc in documents])
 
 
@@ -445,3 +470,103 @@ async def get_document_kg(document_id: int, current_user: User = Depends(get_cur
     entities = db.query(KgEntity).filter(KgEntity.document_id == document_id).order_by(KgEntity.name).all()
     relations = db.query(KgRelation).filter(KgRelation.document_id == document_id).order_by(KgRelation.id).all()
     return DocumentKgResponse(document_id=document_id, entities=entities, relations=relations)
+
+
+def _apply_openapi_boundaries() -> None:
+    default_description = explain_interface(
+        responsibility="Operate on authenticated user-owned knowledge documents for the named route.",
+        database="Uses documents and directly related document tables scoped to the current user.",
+        files="Only touches stored upload files when the route explicitly uploads, downloads, or deletes file-backed documents.",
+    )
+    metadata_by_path_method = {
+        ("POST", "/documents/bookmarks"): (
+            "Save bookmark document",
+            explain_interface(
+                responsibility="Create a bookmark-backed document from a public HTTP/HTTPS URL and extract text chunks.",
+                database="Writes documents, document_chunks, document_events, and optional document_tags for the current user.",
+                files="none; bookmark documents store source_url/site_name metadata and do not create a stored upload file.",
+            ),
+        ),
+        ("POST", "/documents/upload"): (
+            "Upload document and queue parsing",
+            explain_interface(
+                responsibility="Accept one uploaded file, create its document record, and queue parsing.",
+                database="Writes documents, job_runs, and document_events in one upload flow.",
+                files="Writes the stored upload file before returning the queued document response.",
+            ),
+        ),
+        ("POST", "/documents/batch-upload"): (
+            "Batch upload documents",
+            explain_interface(
+                responsibility="Upload multiple files and report per-file success or failure.",
+                database="Writes documents, job_runs, and document_events for each accepted file.",
+                files="Writes one stored upload file for each accepted file.",
+            ),
+        ),
+        ("GET", "/documents"): (
+            "List documents",
+            explain_interface(
+                responsibility="Return a paginated, filtered list of current-user documents.",
+                database="Reads documents, document_tags, tags, and latest job_runs.",
+                files="none; list responses do not read stored file bytes.",
+            ),
+        ),
+        ("GET", "/documents/search"): (
+            "Search documents",
+            explain_interface(
+                responsibility="Search document titles, parsed text, cleaned text, and chunks.",
+                database="Reads documents and document_chunks for the current user.",
+                files="none; search uses indexed database text only.",
+            ),
+        ),
+        ("GET", "/documents/search/chunks"): (
+            "Search document chunks",
+            explain_interface(
+                responsibility="Return chunk-level search hits suitable for citations and chat sources.",
+                database="Reads documents and document_chunks for the current user.",
+                files="none; chunk search does not read stored file bytes.",
+            ),
+        ),
+        ("GET", "/documents/{document_id}/file"): (
+            "Download document file",
+            explain_interface(
+                responsibility="Return the original stored file for one file-backed document.",
+                database="Reads the documents row for authorization and does not write database rows.",
+                files="reads the stored file; bookmark documents are rejected because they have no stored file.",
+            ),
+        ),
+        ("GET", "/documents/{document_id}/kg"): (
+            "Read document knowledge graph",
+            explain_interface(
+                responsibility="Return extracted graph entities and relations for one document.",
+                database="Reads documents, kg_entities, and kg_relations for the current user.",
+                files="does not touch files.",
+            ),
+        ),
+        ("POST", "/documents/{document_id}/retry-parse"): (
+            "Retry parse compatibility alias",
+            explain_interface(
+                responsibility="Compatibility alias for /documents/{document_id}/retry.",
+                database="Same as /documents/{document_id}/retry: reads documents and writes job_runs/document_events.",
+                files="none; retry schedules parsing for the existing stored file.",
+                future="Prefer /documents/{document_id}/retry.",
+            ),
+        ),
+    }
+
+    for route in router.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        path = route.path_format
+        method = next(iter(route.methods or {"GET"}))
+        if method in {"HEAD", "OPTIONS"}:
+            continue
+        summary, description = metadata_by_path_method.get(
+            (method, path),
+            (route.summary or route.name.replace("_", " ").replace("-", " ").title(), default_description),
+        )
+        route.summary = summary
+        route.description = description
+
+
+_apply_openapi_boundaries()

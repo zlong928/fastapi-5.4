@@ -82,6 +82,7 @@ export function KnowledgePage() {
   const total = documentsQuery.data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const hasFilters = Boolean(query || tagId || fileType || status);
+  const documentsErrorMessage = documentsQuery.error instanceof Error ? documentsQuery.error.message : "加载失败";
 
   function chooseTab(tab: KnowledgeTab) {
     setActiveTab(tab);
@@ -186,7 +187,7 @@ export function KnowledgePage() {
               {documentsQuery.isLoading ? (
                 <div className="space-y-2">{[...Array(7)].map((_, index) => <div key={index} className="h-20 animate-pulse rounded-2xl bg-slate-50" />)}</div>
               ) : documentsQuery.isError ? (
-                <div className="flex min-h-[320px] items-center justify-center rounded-2xl border border-dashed border-slate-100 bg-slate-50 text-sm text-red-600">加载失败</div>
+                <div className="flex min-h-[320px] items-center justify-center rounded-2xl border border-dashed border-red-100 bg-red-50 px-4 text-center text-sm text-red-600">加载失败：{documentsErrorMessage}</div>
               ) : documents.length ? (
                 <>
                   <div className="space-y-2">{documents.map((document) => <DocumentCard key={document.id} document={document} />)}</div>
