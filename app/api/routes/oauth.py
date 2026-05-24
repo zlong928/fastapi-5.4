@@ -7,7 +7,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.core.config import FRONTEND_URL, normalize_url
+from app.core.config import FRONTEND_URL, is_allowed_frontend_origin, normalize_url
 from app.core.oauth import oauth
 from app.core.security import create_access_token
 from app.db.session import get_db
@@ -17,7 +17,8 @@ router = APIRouter(prefix="/auth", tags=["oauth"])
 
 
 @router.get("/github/login")
-async def github_login(request: Request):
+async def github_login(request: Request, frontend_origin: str | None = None):
+    _store_oauth_frontend_origin(request, frontend_origin)
     redirect_uri = request.url_for("github_callback")
     try:
         return await oauth.github.authorize_redirect(request, redirect_uri)
@@ -53,11 +54,12 @@ async def github_callback(request: Request, db: Session = Depends(get_db)):
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not persist GitHub account.") from exc
 
-    return _redirect_with_token(create_access_token(str(user.id)))
+    return _redirect_with_token(request, create_access_token(str(user.id)))
 
 
 @router.get("/google/login")
-async def google_login(request: Request):
+async def google_login(request: Request, frontend_origin: str | None = None):
+    _store_oauth_frontend_origin(request, frontend_origin)
     redirect_uri = request.url_for("google_callback")
     try:
         return await oauth.google.authorize_redirect(request, redirect_uri)
@@ -98,9 +100,22 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not persist Google account.") from exc
 
-    return _redirect_with_token(create_access_token(str(user.id)))
+    return _redirect_with_token(request, create_access_token(str(user.id)))
 
 
-def _redirect_with_token(access_token: str) -> RedirectResponse:
+def _store_oauth_frontend_origin(request: Request, frontend_origin: str | None) -> None:
+    origin = frontend_origin if frontend_origin and is_allowed_frontend_origin(frontend_origin) else FRONTEND_URL
+    request.session["oauth_frontend_origin"] = normalize_url(origin)
+
+
+def _get_oauth_frontend_origin(request: Request) -> str:
+    origin = request.session.pop("oauth_frontend_origin", None)
+    if origin and is_allowed_frontend_origin(origin):
+        return normalize_url(origin)
+    return normalize_url(FRONTEND_URL)
+
+
+def _redirect_with_token(request: Request, access_token: str) -> RedirectResponse:
     query = urlencode({"token": access_token})
-    return RedirectResponse(url=f"{normalize_url(FRONTEND_URL)}/oauth/callback?{query}")
+    frontend_origin = _get_oauth_frontend_origin(request)
+    return RedirectResponse(url=f"{frontend_origin}/oauth/callback?{query}")

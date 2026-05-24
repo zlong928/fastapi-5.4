@@ -33,7 +33,8 @@ export function LoginPage() {
   }
 
   function startOAuth(provider: "github" | "google") {
-    window.location.href = `${API_BASE_URL}/auth/${provider}/login`;
+    const frontendOrigin = window.location.origin;
+    window.location.href = `${API_BASE_URL}/auth/${provider}/login?frontend_origin=${encodeURIComponent(frontendOrigin)}`;
   }
 
   return (

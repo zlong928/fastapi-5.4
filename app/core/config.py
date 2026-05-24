@@ -77,6 +77,33 @@ CORS_ALLOWED_ORIGINS = parse_cors_allowed_origins(
     include_local_defaults=not IS_PRODUCTION,
 )
 CORS_ALLOWED_ORIGIN_REGEX = os.getenv("CORS_ALLOWED_ORIGIN_REGEX", r"https://.*\.vercel\.app")
+
+
+def parse_oauth_allowed_frontend_origins(
+    frontend_url: str,
+    cors_allowed_origins: list[str],
+    extra_origins: str = "",
+) -> list[str]:
+    origins: list[str] = []
+    for origin in [frontend_url, *cors_allowed_origins, *extra_origins.split(",")]:
+        normalized = normalize_url(origin)
+        if normalized and normalized not in origins:
+            origins.append(normalized)
+    return origins
+
+
+OAUTH_ALLOWED_FRONTEND_ORIGINS = parse_oauth_allowed_frontend_origins(
+    FRONTEND_URL,
+    CORS_ALLOWED_ORIGINS,
+    os.getenv("OAUTH_ALLOWED_FRONTEND_ORIGINS", ""),
+)
+
+
+def is_allowed_frontend_origin(origin: str) -> bool:
+    normalized = normalize_url(origin)
+    return normalized in OAUTH_ALLOWED_FRONTEND_ORIGINS
+
+
 SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY", "change-me-in-production")
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")

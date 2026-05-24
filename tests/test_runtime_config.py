@@ -4,7 +4,12 @@ from pathlib import Path
 import subprocess
 import sys
 
-from app.core.config import normalize_url, parse_cors_allowed_origins
+from app.core.config import (
+    is_allowed_frontend_origin,
+    normalize_url,
+    parse_cors_allowed_origins,
+    parse_oauth_allowed_frontend_origins,
+)
 from app.core.time import APP_TIMEZONE_NAME, app_now
 
 
@@ -41,6 +46,70 @@ def test_parse_cors_allowed_origins_can_skip_local_defaults_for_production():
         "https://frontend.vercel.app",
         "https://admin.vercel.app",
     ]
+
+
+def test_parse_oauth_allowed_frontend_origins_includes_frontend_cors_and_extra_origins():
+    assert parse_oauth_allowed_frontend_origins(
+        "https://fastapi-5-4.vercel.app/",
+        ["http://localhost:3000", "https://fastapi-5-4.vercel.app"],
+        "http://127.0.0.1:3000/",
+    ) == [
+        "https://fastapi-5-4.vercel.app",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+
+def test_is_allowed_frontend_origin_rejects_unconfigured_origins():
+    assert is_allowed_frontend_origin("http://localhost:3000/")
+    assert not is_allowed_frontend_origin("https://evil.com")
+    assert not is_allowed_frontend_origin("http://localhost:3000.evil.com")
+
+
+def test_oauth_redirect_uses_allowed_origin_from_session(monkeypatch):
+    from app.api.routes import oauth as oauth_routes
+
+    monkeypatch.setattr(oauth_routes, "FRONTEND_URL", "https://fastapi-5-4.vercel.app")
+    monkeypatch.setattr(
+        oauth_routes,
+        "is_allowed_frontend_origin",
+        lambda origin: origin in {"http://localhost:3000", "https://fastapi-5-4.vercel.app"},
+    )
+    request = _DummyRequest({"oauth_frontend_origin": "http://localhost:3000"})
+
+    response = oauth_routes._redirect_with_token(request, "abc123")
+
+    assert response.headers["location"] == "http://localhost:3000/oauth/callback?token=abc123"
+    assert "oauth_frontend_origin" not in request.session
+
+
+def test_oauth_redirect_falls_back_when_session_origin_is_invalid(monkeypatch):
+    from app.api.routes import oauth as oauth_routes
+
+    monkeypatch.setattr(oauth_routes, "FRONTEND_URL", "https://fastapi-5-4.vercel.app")
+    monkeypatch.setattr(
+        oauth_routes,
+        "is_allowed_frontend_origin",
+        lambda origin: origin == "https://fastapi-5-4.vercel.app",
+    )
+    request = _DummyRequest({"oauth_frontend_origin": "https://evil.com"})
+
+    response = oauth_routes._redirect_with_token(request, "abc123")
+
+    assert response.headers["location"] == "https://fastapi-5-4.vercel.app/oauth/callback?token=abc123"
+    assert "oauth_frontend_origin" not in request.session
+
+
+def test_oauth_login_stores_fallback_for_invalid_frontend_origin(monkeypatch):
+    from app.api.routes import oauth as oauth_routes
+
+    monkeypatch.setattr(oauth_routes, "FRONTEND_URL", "https://fastapi-5-4.vercel.app")
+    monkeypatch.setattr(oauth_routes, "is_allowed_frontend_origin", lambda origin: False)
+    request = _DummyRequest()
+
+    oauth_routes._store_oauth_frontend_origin(request, "https://evil.com")
+
+    assert request.session["oauth_frontend_origin"] == "https://fastapi-5-4.vercel.app"
 
 
 def test_production_runtime_requires_explicit_frontend_url():
@@ -118,3 +187,8 @@ def _is_sql_api_call(func: ast.expr) -> bool:
     if isinstance(func, ast.Attribute):
         return func.attr in {"execute", "exec_driver_sql"}
     return False
+
+
+class _DummyRequest:
+    def __init__(self, session: dict[str, str] | None = None):
+        self.session = session or {}
