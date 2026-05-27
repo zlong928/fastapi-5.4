@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.time import app_now
 from app.db.session import get_db
-from app.models import Document, DocumentAsset, ExtractionJob, ExtractionResult, PaperTable, User
+from app.models import Document, DocumentAsset, DocumentEvent, ExtractionJob, ExtractionResult, PaperTable, User
 from app.schemas.paper import ExtractionJobRead, ExtractionRunRequest
 from app.services.agent import AgentResultMapper, CoordinatorAdapter, PaperDataAdapter
 
@@ -20,6 +22,11 @@ def _paper_or_404(db: Session, paper_id: int, user: User) -> Document:
     return paper
 
 
+def _ensure_extractable(paper: Document) -> None:
+    if paper.status != "done":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="文档解析完成后才能开始提取")
+
+
 def _job_or_404(db: Session, job_id: int, user: User) -> ExtractionJob:
     job = db.get(ExtractionJob, job_id)
     if job is None:
@@ -31,7 +38,7 @@ def _job_or_404(db: Session, job_id: int, user: User) -> ExtractionJob:
 def _load_sources(db: Session, paper_id: int) -> tuple[list[DocumentAsset], list[PaperTable]]:
     figures = (
         db.query(DocumentAsset)
-        .filter(DocumentAsset.document_id == paper_id, DocumentAsset.asset_type.in_(["paper_figure", "paper_page_snapshot"]))
+        .filter(DocumentAsset.document_id == paper_id, DocumentAsset.asset_type.in_(["figure", "page_snapshot"]))
         .order_by(DocumentAsset.created_at.asc(), DocumentAsset.id.asc())
         .all()
     )
@@ -39,11 +46,23 @@ def _load_sources(db: Session, paper_id: int) -> tuple[list[DocumentAsset], list
     return figures, tables
 
 
+def _log_event(db: Session, paper: Document, event_type: str, message: str, metadata: dict | None = None) -> None:
+    db.add(
+        DocumentEvent(
+            document_id=paper.id,
+            user_id=paper.user_id,
+            event_type=event_type,
+            message=message[:500],
+            event_metadata=json.dumps(metadata or {}, ensure_ascii=False),
+        )
+    )
+
+
 def _run_job(db: Session, job: ExtractionJob, paper: Document) -> ExtractionJob:
+    _ensure_extractable(paper)
     job.status = "running"
     job.error_message = None
     job.updated_at = app_now()
-    paper.status = "extracting"
     db.commit()
     try:
         figures, tables = _load_sources(db, paper.id)
@@ -56,8 +75,7 @@ def _run_job(db: Session, job: ExtractionJob, paper: Document) -> ExtractionJob:
         job.status = "done"
         job.error_message = None
         job.updated_at = app_now()
-        paper.status = "done"
-        paper.updated_at = app_now()
+        _log_event(db, paper, "extraction_done", "论文 Agent 提取完成。", {"job_id": job.id, "result_count": len(rows), "event_count": len(events)})
         db.commit()
         db.refresh(job)
         return job
@@ -70,10 +88,7 @@ def _run_job(db: Session, job: ExtractionJob, paper: Document) -> ExtractionJob:
             job.error_message = str(exc)
             job.updated_at = app_now()
         if paper is not None:
-            paper.status = "failed"
-            paper.error_message = str(exc)
-            paper.fail_reason = str(exc)
-            paper.updated_at = app_now()
+            _log_event(db, paper, "extraction_failed", str(exc), {"job_id": job.id if job else None, "error": str(exc)})
         db.commit()
         if job is None:
             raise
@@ -83,6 +98,7 @@ def _run_job(db: Session, job: ExtractionJob, paper: Document) -> ExtractionJob:
 @router.post("/run", response_model=ExtractionJobRead, status_code=status.HTTP_201_CREATED)
 async def run_extraction(payload: ExtractionRunRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> ExtractionJobRead:
     paper = _paper_or_404(db, payload.paperId, current_user)
+    _ensure_extractable(paper)
     job = ExtractionJob(paper_id=paper.id, query=payload.query, status="pending")
     db.add(job)
     db.commit()
@@ -94,6 +110,7 @@ async def run_extraction(payload: ExtractionRunRequest, current_user: User = Dep
 async def retry_extraction(job_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> ExtractionJobRead:
     old_job = _job_or_404(db, job_id, current_user)
     paper = _paper_or_404(db, old_job.paper_id, current_user)
+    _ensure_extractable(paper)
     new_job = ExtractionJob(paper_id=paper.id, query=old_job.query, status="pending")
     db.add(new_job)
     db.commit()
