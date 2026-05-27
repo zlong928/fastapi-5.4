@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+import json
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -12,18 +14,17 @@ from app.services.file_storage import FileStorageService
 from app.services.paper_demo_service import PaperDemoService
 
 router = APIRouter(prefix="/papers", tags=["papers"])
+PAPER_ASSET_TYPES = ("figure", "page_snapshot")
 
 
 def _paper_or_404(db: Session, paper_id: int, user: User) -> Document:
     paper = db.get(Document, paper_id)
-    if paper is None or paper.user_id != user.id or paper.source_type != "pdf":
+    if paper is None or paper.user_id != user.id or paper.source_type != "pdf" or paper.status == "deleted":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paper not found.")
     return paper
 
 
 def _figure_read(asset: DocumentAsset) -> PaperFigureRead:
-    import json
-
     metadata = {}
     if asset.metadata_json:
         try:
@@ -44,7 +45,7 @@ def _figure_read(asset: DocumentAsset) -> PaperFigureRead:
 def _detail(db: Session, paper: Document) -> PaperDetailResponse:
     figures = (
         db.query(DocumentAsset)
-        .filter(DocumentAsset.document_id == paper.id, DocumentAsset.asset_type.in_(["paper_figure", "paper_page_snapshot"]))
+        .filter(DocumentAsset.document_id == paper.id, DocumentAsset.asset_type.in_(PAPER_ASSET_TYPES))
         .order_by(DocumentAsset.created_at.asc(), DocumentAsset.id.asc())
         .all()
     )
@@ -71,13 +72,9 @@ def _detail(db: Session, paper: Document) -> PaperDetailResponse:
     )
 
 
-@router.post("/upload", response_model=PaperUploadResponse, status_code=status.HTTP_201_CREATED)
-async def upload_paper(file: UploadFile = File(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> PaperUploadResponse:
-    try:
-        paper = await PaperDemoService(db).upload_pdf(file=file, user=current_user)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return PaperUploadResponse(id=paper.id, title=paper.title, status=paper.status)
+@router.post("/upload", response_model=PaperUploadResponse, status_code=status.HTTP_410_GONE)
+async def upload_paper() -> PaperUploadResponse:
+    raise HTTPException(status_code=status.HTTP_410_GONE, detail="请使用 /documents/upload 上传 PDF，论文页只是 PDF documents 的视图层。")
 
 
 @router.get("", response_model=list[PaperListItem])
@@ -99,20 +96,21 @@ async def get_paper(paper_id: int, current_user: User = Depends(get_current_user
 @router.post("/{paper_id}/parse", response_model=PaperDetailResponse)
 async def parse_paper(paper_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> PaperDetailResponse:
     paper = _paper_or_404(db, paper_id, current_user)
+    if paper.status != "done":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="文档解析完成后才能进行论文增强解析")
     try:
         parsed = PaperDemoService(db).parse(paper)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except Exception as exc:
-        failed = db.get(Document, paper_id)
-        if failed is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paper not found.") from exc
-        return _detail(db, failed)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"论文增强解析失败：{exc}") from exc
     return _detail(db, parsed)
 
 
 @router.get("/assets/{asset_id}")
 async def get_paper_asset(asset_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> FileResponse:
     asset = db.get(DocumentAsset, asset_id)
-    if asset is None:
+    if asset is None or asset.asset_type not in PAPER_ASSET_TYPES:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found.")
     paper = _paper_or_404(db, asset.document_id, current_user)
     if paper.id != asset.document_id or not asset.file_path:
