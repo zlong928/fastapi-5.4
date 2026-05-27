@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 
 import fitz
-from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
-from app.core.config import MAX_UPLOAD_SIZE_BYTES
 from app.core.time import app_now
-from app.models import Document, DocumentAsset, PaperTable, User
+from app.models import Document, DocumentAsset, DocumentEvent, PaperTable
 from app.services.file_storage import FileStorageService
 
 
@@ -23,71 +20,42 @@ class ParsedPage:
 
 
 class PaperDemoService:
-    """Small paper-demo workflow built on the existing document model."""
+    """Paper-specific enhancement built on the existing Document model.
+
+    This service intentionally does not create a separate papers table and does
+    not own the core upload/parse lifecycle. The normal document pipeline keeps
+    using documents.status = pending/processing/done/failed. This service only
+    enriches an already uploaded PDF document with demo-ready figures/snapshots
+    and table candidates for Agent extraction.
+    """
 
     def __init__(self, db: Session, file_storage: FileStorageService | None = None) -> None:
         self.db = db
         self.file_storage = file_storage or FileStorageService()
 
-    async def upload_pdf(self, *, file: UploadFile, user: User) -> Document:
-        content = await file.read()
-        if len(content) > MAX_UPLOAD_SIZE_BYTES:
-            raise ValueError(f"File is too large. Maximum size is {MAX_UPLOAD_SIZE_BYTES} bytes.")
-        if not content.startswith(b"%PDF-"):
-            raise ValueError("仅支持 PDF 文件")
-        safe_name = self.file_storage.safe_original_filename(file.filename or "paper.pdf")
-        title = Path(safe_name).stem
-        file_hash = hashlib.sha256(content).hexdigest()
-        existing = (
-            self.db.query(Document)
-            .filter(Document.user_id == user.id, Document.file_hash == file_hash, Document.status != "deleted")
-            .one_or_none()
-        )
-        if existing is not None:
-            return existing
-        relative_path, stored_filename = self.file_storage.store_file(
-            user_id=user.id,
-            original_filename=safe_name,
-            file_content=content,
-            file_extension="pdf",
-        )
-        paper = Document(
-            user_id=user.id,
-            title=title,
-            original_filename=safe_name,
-            stored_filename=stored_filename,
-            original_file_path=relative_path,
-            file_size=len(content),
-            file_hash=file_hash,
-            mime_type="application/pdf",
-            source_type="pdf",
-            processing_mode="auto",
-            status="uploaded",
-            uploaded_at=app_now(),
-        )
-        self.db.add(paper)
-        self.db.commit()
-        self.db.refresh(paper)
-        return paper
-
     def parse(self, paper: Document) -> Document:
-        paper.status = "parsing"
-        paper.error_message = None
-        paper.fail_reason = None
-        self.db.commit()
+        if paper.source_type != "pdf":
+            raise ValueError("仅支持 PDF 文档进行论文增强解析")
+        if paper.status != "done":
+            raise ValueError("文档解析完成后才能进行论文增强解析")
+
+        source_path = self.file_storage.get_file_path(paper.original_file_path)
+        if not source_path.exists():
+            raise FileNotFoundError("源 PDF 文件不存在")
+
         try:
-            source_path = self.file_storage.get_file_path(paper.original_file_path)
-            if not source_path.exists():
-                raise FileNotFoundError("源 PDF 文件不存在")
             pages = self._extract_pages(source_path)
-            page_count = len(pages)
             text = "\n\n".join(page.text for page in pages if page.text.strip()).strip()
-            if not text.strip():
-                text = "当前 PDF 未解析到可抽取正文。"
+            if text.strip():
+                paper.parsed_text = paper.parsed_text or text
+                paper.cleaned_text = paper.cleaned_text or text
+            elif not (paper.cleaned_text or paper.parsed_text):
+                paper.parsed_text = "当前 PDF 未解析到可抽取正文。"
+                paper.cleaned_text = paper.parsed_text
 
             self.db.query(DocumentAsset).filter(
                 DocumentAsset.document_id == paper.id,
-                DocumentAsset.asset_type.in_(["paper_figure", "paper_page_snapshot"]),
+                DocumentAsset.asset_type.in_(["figure", "page_snapshot"]),
             ).delete(synchronize_session=False)
             self.db.query(PaperTable).filter(PaperTable.paper_id == paper.id).delete(synchronize_session=False)
 
@@ -97,7 +65,7 @@ class PaperDemoService:
                 figure_assets.append(
                     DocumentAsset(
                         document_id=paper.id,
-                        asset_type="paper_page_snapshot",
+                        asset_type="page_snapshot",
                         page_number=1,
                         file_path=image_path,
                         mime_type="image/png",
@@ -105,7 +73,8 @@ class PaperDemoService:
                             {
                                 "figure_label": "Page 1 Snapshot",
                                 "caption": "Fallback page snapshot",
-                                "extraction_method": "page_snapshot",
+                                "context": "Fallback page snapshot generated for paper Agent extraction.",
+                                "source": "fallback_snapshot",
                             },
                             ensure_ascii=False,
                         ),
@@ -114,13 +83,20 @@ class PaperDemoService:
             for asset in figure_assets:
                 self.db.add(asset)
 
-            for table in self._table_candidates(paper.id, pages):
+            table_candidates = self._table_candidates(paper.id, pages, paper.cleaned_text or paper.parsed_text or "")
+            for table in table_candidates:
                 self.db.add(table)
-            paper.parsed_text = text
-            paper.cleaned_text = text
-            paper.status = "parsed"
-            paper.parsed_at = app_now()
+
+            paper.fail_reason = None
+            paper.error_message = None
+            paper.parsed_at = paper.parsed_at or app_now()
             paper.updated_at = app_now()
+            self._log_event(
+                paper,
+                "paper_assets_extracted",
+                f"论文增强解析完成：图片/截图 {len(figure_assets)} 个，表格候选 {len(table_candidates)} 个。",
+                {"figures": len(figure_assets), "tables": len(table_candidates)},
+            )
             self.db.commit()
             self.db.refresh(paper)
             return paper
@@ -128,10 +104,7 @@ class PaperDemoService:
             self.db.rollback()
             paper = self.db.get(Document, paper.id)
             if paper is not None:
-                paper.status = "failed"
-                paper.error_message = str(exc)
-                paper.fail_reason = str(exc)
-                paper.updated_at = app_now()
+                self._log_event(paper, "paper_parse_enhanced_failed", str(exc), {"error": str(exc)})
                 self.db.commit()
             raise
 
@@ -139,7 +112,7 @@ class PaperDemoService:
         pages: list[ParsedPage] = []
         with fitz.open(source_path) as pdf:
             for page in pdf:
-                page_text = page.get_text("text").strip()
+                page_text = page.get_text("text", sort=True).strip()
                 if page_text:
                     cleaned_lines = [re.sub(r"[ \t]+", " ", line).strip() for line in page_text.splitlines()]
                     cleaned = "\n".join(line for line in cleaned_lines if line)
@@ -171,7 +144,7 @@ class PaperDemoService:
                     assets.append(
                         DocumentAsset(
                             document_id=paper.id,
-                            asset_type="paper_figure",
+                            asset_type="figure",
                             page_number=page.number + 1,
                             file_path=image_path.relative_to(self.file_storage.upload_dir).as_posix(),
                             mime_type="image/png",
@@ -179,7 +152,8 @@ class PaperDemoService:
                                 {
                                     "figure_label": label,
                                     "caption": caption,
-                                    "extraction_method": "embedded_pdf_image",
+                                    "context": caption,
+                                    "source": "extracted_image",
                                 },
                                 ensure_ascii=False,
                             ),
@@ -202,8 +176,8 @@ class PaperDemoService:
         asset_dir.mkdir(parents=True, exist_ok=True)
         try:
             asset_dir.resolve().relative_to(self.file_storage.upload_dir.resolve())
-        except ValueError:
-            raise ValueError("Asset path must stay inside upload directory.")
+        except ValueError as exc:
+            raise ValueError("Asset path must stay inside upload directory.") from exc
         return asset_dir
 
     def _caption_for_page(self, pages: list[ParsedPage], page_number: int, image_index: int) -> str:
@@ -222,14 +196,16 @@ class PaperDemoService:
             return match.group(1).strip()
         return f"Figure {fallback_index}"
 
-    def _table_candidates(self, paper_id: int, pages: list[ParsedPage]) -> list[PaperTable]:
+    def _table_candidates(self, paper_id: int, pages: list[ParsedPage], existing_text: str) -> list[PaperTable]:
         candidates: list[tuple[int, str]] = []
         for page in pages:
             blocks = self._candidate_blocks(page.text)
             for block in blocks:
                 candidates.append((page.page_number, block))
         if not candidates:
-            fallback_text = pages[0].text[:1200] if pages else "Table fallback: 当前论文正文中未识别到明确表格，使用正文片段作为表格候选文本。"
+            fallback_text = pages[0].text[:1200] if pages else existing_text[:1200]
+            if not fallback_text.strip():
+                fallback_text = "Table fallback: 当前论文正文中未识别到明确表格，使用兜底文本作为表格候选。"
             candidates.append((pages[0].page_number if pages else 1, fallback_text))
         return [
             PaperTable(
@@ -275,3 +251,14 @@ class PaperDemoService:
             markdown_rows = [header, separator, *body]
             return "\n".join("| " + " | ".join(cell[:80] for cell in row) + " |" for row in markdown_rows)[:1600]
         return "\n".join(lines[:10])[:1600]
+
+    def _log_event(self, paper: Document, event_type: str, message: str, metadata: dict | None = None) -> None:
+        self.db.add(
+            DocumentEvent(
+                document_id=paper.id,
+                user_id=paper.user_id,
+                event_type=event_type,
+                message=message[:500],
+                event_metadata=json.dumps(metadata or {}, ensure_ascii=False),
+            )
+        )
