@@ -1,6 +1,7 @@
 import {
   BookOpen,
   Boxes,
+  FileText,
   LayoutGrid,
   Library,
   LogOut,
@@ -29,6 +30,7 @@ type NavigationItem = {
 const sidebarItems: NavigationItem[] = [
   { href: "/", label: "首页", icon: LayoutGrid },
   { href: "/knowledge", label: "知识库", icon: Library },
+  { href: "/papers", label: "论文", icon: FileText },
   { href: "/search", label: "搜索", icon: Search },
   { href: "/notes", label: "笔记", icon: NotebookText },
   { href: "/tasks", label: "任务", icon: Boxes },
@@ -55,6 +57,7 @@ function WorkspaceLink({ href, label, icon: Icon }: NavigationItem) {
 
 function actionForPath(pathname: string) {
   if (pathname.startsWith("/knowledge")) return { href: "/knowledge?upload=1", label: "上传", icon: UploadCloud };
+  if (pathname.startsWith("/papers")) return { href: "/papers", label: "上传论文", icon: UploadCloud };
   if (pathname.startsWith("/notes")) return { href: "/notes?new=1", label: "新建", icon: Plus };
   if (pathname.startsWith("/tasks")) return { href: "/tasks", label: "刷新", icon: RefreshCw };
   if (pathname.startsWith("/chat")) return { href: "/chat?new=1", label: "新对话", icon: Plus };

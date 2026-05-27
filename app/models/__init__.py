@@ -10,6 +10,8 @@ from .kg_relation import KgRelation
 from .job_run import JobRun
 from .oauth_account import OAuthAccount
 from .parse_job import ParseJob
+from .paper_table import PaperTable
+from .extraction import ExtractionJob, ExtractionResult
 from .tag import DocumentTag, Tag
 from .task import Task
 from .user import User
@@ -29,6 +31,9 @@ __all__ = [
     "JobRun",
     "OAuthAccount",
     "ParseJob",
+    "PaperTable",
+    "ExtractionJob",
+    "ExtractionResult",
     "Tag",
     "Task",
     "User",

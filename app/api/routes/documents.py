@@ -82,7 +82,17 @@ async def create_bookmark_document(payload: BookmarkCreate, current_user: User =
     return BookmarkCreateResponse(document_id=document.id, status=document.status, processing_status=document.status, source_type=document.source_type, source_url=document.source_url, message="已保存" if document.status in DONE_STATUSES else (document.fail_reason or "保存失败"))
 
 
-@router.post("/upload", response_model=DocumentUploadResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/upload",
+    response_model=DocumentUploadResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Upload document and queue parsing",
+    description=explain_interface(
+        responsibility="Validate and store one authenticated user upload, then queue document parsing.",
+        database="Writes documents, job_runs, and document_events for the uploaded document.",
+        files="Writes the stored upload file under UPLOAD_DIR.",
+    ),
+)
 async def upload_document(file: UploadFile = File(...), title: str | None = Form(None), processing_mode: DocumentProcessingMode = Form(DocumentProcessingMode.AUTO), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DocumentUploadResponse:
     try:
         result = await DocumentUploadService(db).upload_one(file=file, user=current_user, title=title, processing_mode=processing_mode)
@@ -243,7 +253,15 @@ async def process_document(document_id: int, current_user: User = Depends(get_cu
     return DocumentProcessingStatusResponse(document_id=document.id, status=document.status, processing_status=document.status, error=document.error_message, processing_error=document.fail_reason or document.error_message, collection_name=document.collection_name, source_url=document.source_url, site_name=document.site_name, hash=document.content_hash, content_summary=document.content_summary, chunk_count=document.chunk_count, created_at=document.created_at, updated_at=document.updated_at)
 
 
-@router.get("/{document_id}/file")
+@router.get(
+    "/{document_id}/file",
+    summary="Download stored document file",
+    description=explain_interface(
+        responsibility="Return the original stored file for one authenticated user-owned document.",
+        database="Reads documents for ownership and file metadata; does not write database rows.",
+        files="reads the stored file from UPLOAD_DIR.",
+    ),
+)
 async def get_document_file(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> FileResponse:
     document = DocumentService(db).get_document_by_id(document_id)
     if not document:
@@ -280,7 +298,18 @@ async def retry_document(document_id: int, current_user: User = Depends(get_curr
     return retry_document_or_raise(document_id, current_user, db)
 
 
-@router.post("/{document_id}/retry-parse", response_model=DocumentDetailResponse, deprecated=True)
+@router.post(
+    "/{document_id}/retry-parse",
+    response_model=DocumentDetailResponse,
+    deprecated=True,
+    summary="Retry document parsing compatibility alias",
+    description=explain_interface(
+        responsibility="Compatibility alias for /documents/{document_id}/retry.",
+        database="Same as /documents/{document_id}/retry: writes documents and job_runs for a retry.",
+        files="Only reads the stored upload file later when the queued parser runs.",
+        future="Prefer /documents/{document_id}/retry.",
+    ),
+)
 async def retry_parse_document(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DocumentDetailResponse:
     return retry_document_or_raise(document_id, current_user, db)
 
@@ -327,7 +356,16 @@ async def get_document_chunks(document_id: int, current_user: User = Depends(get
     return [DocumentChunkRead.model_validate(chunk) for chunk in chunks]
 
 
-@router.get("/{document_id}/kg", response_model=DocumentKgResponse)
+@router.get(
+    "/{document_id}/kg",
+    response_model=DocumentKgResponse,
+    summary="Read document knowledge graph",
+    description=explain_interface(
+        responsibility="Return extracted knowledge graph data for one authenticated user-owned document.",
+        database="Reads documents, kg_entities, and kg_relations; does not write database rows.",
+        files="does not touch files.",
+    ),
+)
 async def get_document_kg(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DocumentKgResponse:
     document = DocumentService(db).get_document_by_id(document_id)
     if not document:

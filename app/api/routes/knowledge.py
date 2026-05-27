@@ -361,7 +361,16 @@ def delete_collection(
     return MessageResponse(message="Collection deleted.")
 
 
-@router.get("/collections/{collection_id}/documents", response_model=DocumentListResponse)
+@router.get(
+    "/collections/{collection_id}/documents",
+    response_model=DocumentListResponse,
+    summary="List collection documents",
+    description=explain_interface(
+        responsibility="Return documents assigned to one authenticated user-owned collection.",
+        database="Reads collections and documents filtered by collection_name.",
+        files="none",
+    ),
+)
 def list_collection_documents(
     collection_id: int,
     page: int = Query(1, ge=1),
@@ -399,7 +408,16 @@ def list_collection_documents(
     return DocumentListResponse(total=total, page=page, size=size, items=[serialize_document_list_item(doc) for doc in documents])
 
 
-@router.post("/collections/{collection_id}/documents/{document_id}", response_model=MessageResponse)
+@router.post(
+    "/collections/{collection_id}/documents/{document_id}",
+    response_model=MessageResponse,
+    summary="Add document to collection",
+    description=explain_interface(
+        responsibility="Assign one authenticated user-owned document to a collection.",
+        database="Reads collections and documents; updates documents.collection_name.",
+        files="none",
+    ),
+)
 def add_document_to_collection(
     collection_id: int,
     document_id: int,
@@ -416,7 +434,16 @@ def add_document_to_collection(
     return MessageResponse(message="Document added to collection.")
 
 
-@router.delete("/collections/{collection_id}/documents/{document_id}", response_model=MessageResponse)
+@router.delete(
+    "/collections/{collection_id}/documents/{document_id}",
+    response_model=MessageResponse,
+    summary="Remove document from collection",
+    description=explain_interface(
+        responsibility="Remove one authenticated user-owned document from a collection.",
+        database="Reads collections and documents; clears documents.collection_name.",
+        files="none",
+    ),
+)
 def remove_document_from_collection(
     collection_id: int,
     document_id: int,

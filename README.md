@@ -203,6 +203,53 @@ docker compose run --rm api pytest
 docker compose run --rm frontend npm run build
 ```
 
+## 论文 Agent 提取最小演示
+
+本演示复用现有 `users`、JWT 鉴权、`documents` 上传文件记录、`document_assets` 图片资产和 `UPLOAD_DIR` 文件存储；新增 `paper_tables`、`extraction_jobs`、`extraction_results` 只保存表格候选、提取任务和分类结果。新增字段都直接用于详情页展示、状态流转、权限归属或 retry。
+
+环境变量：
+
+```env
+DATABASE_URL=sqlite:////app/data/app.db
+JWT_SECRET_KEY=change-me
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4o-mini
+```
+
+`OPENAI_API_KEY` 为空时会进入 fallback mock 模式，仍按 agent.py 的 `PLANNING -> MAPPING -> REFLECTION -> VISUAL_ANALYSIS -> AGGREGATION -> FINISH` 事件链路生成可展示结果。后期加入 API key 后，可在 `app/services/agent/openai_coordinator.py` 接入真实模型调用。
+
+数据库迁移：
+
+```bash
+docker compose run --rm api alembic upgrade head
+```
+
+启动：
+
+```bash
+docker compose up api frontend redis
+```
+
+演示流程：
+
+1. 登录前端 `http://localhost:3000`。
+2. 进入侧边栏“论文”。
+3. 上传 PDF。
+4. 在论文详情页点击“解析论文”。
+5. 页面展示正文预览、第一页截图和表格候选文本。
+6. 点击“开始提取”。
+7. 结果按“正文结果 / 图片结果 / 表格结果”分类展示。
+8. 如果解析或提取失败，页面展示 `parse_error` 或 `error_message`，提取任务支持“重试提取”。
+
+常见失败原因：
+
+- 上传的文件不是 PDF，或内容不以 `%PDF-` 开头。
+- `MAX_UPLOAD_SIZE` 太小导致上传被拒绝。
+- 源文件被手动删除，解析时无法读取。
+- PDF 损坏或没有页面，无法生成兜底截图。
+- 配置了 API key 但模型调用未完成接入时，会自动回退到 mock coordinator；这是当前 demo 的可接受兜底，不是生产级模型链路。
+
 ## 截图占位
 
 答辩材料建议补充以下截图：

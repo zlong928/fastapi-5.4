@@ -22,11 +22,15 @@ import {
   DocumentRead,
   DocumentSearchResponse,
   DocumentUploadResponse,
+  ExtractionJob,
   HealthResponse,
   LoginRequest,
   MessageResponse,
   PaginatedTasksResponse,
   PaginatedDocumentEvents,
+  PaperDetail,
+  PaperListItem,
+  PaperUploadResponse,
   PasswordForgotRequest,
   PasswordResetRequest,
   RegisterRequest,
@@ -190,6 +194,27 @@ export async function uploadDocument(file: File, title?: string, processingMode:
   formData.append("processing_mode", processingMode);
   if (title) formData.append("title", title);
   return uploadForm<DocumentUploadResponse>("/documents/upload", formData, onProgress);
+}
+
+export async function uploadPaper(file: File, onProgress?: (progress: number) => void): Promise<PaperUploadResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return uploadForm<PaperUploadResponse>("/papers/upload", formData, onProgress);
+}
+
+export function getPapers(): Promise<PaperListItem[]> { return request<PaperListItem[]>("/papers"); }
+export function getPaper(paperId: number): Promise<PaperDetail> { return request<PaperDetail>(`/papers/${paperId}`); }
+export function parsePaper(paperId: number): Promise<PaperDetail> { return request<PaperDetail>(`/papers/${paperId}/parse`, { method: "POST" }); }
+export function runExtraction(paperId: number, query: string): Promise<ExtractionJob> { return request<ExtractionJob>("/extractions/run", { method: "POST", body: JSON.stringify({ paperId, query }) }); }
+export function retryExtraction(jobId: number): Promise<ExtractionJob> { return request<ExtractionJob>(`/extractions/${jobId}/retry`, { method: "POST" }); }
+
+export async function getPaperAssetBlob(assetPath: string): Promise<Blob> {
+  const token = getToken();
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(`${API_BASE_URL}${assetPath}`, { headers });
+  if (!response.ok) throw new Error(response.statusText || `Request failed with ${response.status}`);
+  return response.blob();
 }
 
 export async function batchUploadDocuments(files: File[], processingMode: DocumentProcessingMode = "auto"): Promise<DocumentBatchUploadItem[]> {

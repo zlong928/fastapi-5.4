@@ -120,7 +120,7 @@ export interface TokenResponse {
   token_type: string;
 }
 
-export type DocumentStatus = "pending" | "processing" | "done" | "completed" | "failed" | "deleted";
+export type DocumentStatus = "pending" | "processing" | "done" | "completed" | "failed" | "deleted" | "uploaded" | "parsing" | "parsed" | "extracting";
 export type ParseJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "skipped";
 export type DocumentSourceType = "pdf" | "markdown" | "txt" | "image" | "epub" | "docx" | "bookmark" | "note" | "diary";
 export type DocumentProcessingMode =
@@ -518,4 +518,75 @@ export interface StreamChatCallbacks {
   onToken?: (token: string) => void;
   onDone?: () => void;
   onError?: (message: string) => void;
+}
+
+export interface PaperListItem {
+  id: number;
+  title: string;
+  status: DocumentStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PaperUploadResponse {
+  id: number;
+  title: string;
+  status: DocumentStatus;
+}
+
+export interface PaperFigure {
+  id: number;
+  paper_id: number;
+  image_path: string;
+  figure_label: string;
+  caption: string;
+  page?: number | null;
+  created_at: string;
+}
+
+export interface PaperTable {
+  id: number;
+  paper_id: number;
+  table_label: string;
+  content: string;
+  page?: number | null;
+  created_at: string;
+}
+
+export interface ExtractionResult {
+  id: number;
+  job_id: number;
+  source_type: "text" | "figure" | "table" | string;
+  source_id?: number | null;
+  field_name: string;
+  content: string;
+  evidence: string;
+  confidence?: number | null;
+  created_at: string;
+}
+
+export interface ExtractionJob {
+  id: number;
+  paper_id: number;
+  query: string;
+  status: "pending" | "running" | "done" | "failed" | string;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+  results: ExtractionResult[];
+}
+
+export interface PaperDetail {
+  id: number;
+  user_id: number;
+  title: string;
+  file_path: string;
+  status: DocumentStatus;
+  parse_error?: string | null;
+  text_content?: string | null;
+  created_at: string;
+  updated_at: string;
+  figures: PaperFigure[];
+  tables: PaperTable[];
+  latest_extraction_job?: ExtractionJob | null;
 }
