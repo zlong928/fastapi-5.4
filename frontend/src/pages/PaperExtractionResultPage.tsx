@@ -90,7 +90,7 @@ function ResultSourceDetails({ result, paper }: { result: ExtractionResult; pape
       <dl className="mb-3 grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-3">
         <DetailRow label="table_label" value={table?.table_label || (result.source_id ? `Table #${result.source_id}` : "Table")} />
         <DetailRow label="parse_status" value={table?.parse_status || "partial"} />
-        <DetailRow label="source" value={table?.source || "text candidate"} />
+        <DetailRow label="source" value={table?.source || "text_candidate"} />
       </dl>
     );
   }

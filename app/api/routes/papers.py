@@ -24,6 +24,15 @@ def _paper_or_404(db: Session, paper_id: int, user: User) -> Document:
     return paper
 
 
+def _metadata_fallback(asset: DocumentAsset, metadata: dict, source: str | None) -> bool:
+    raw_fallback = metadata.get("fallback")
+    if isinstance(raw_fallback, bool):
+        return raw_fallback
+    if raw_fallback is not None:
+        return str(raw_fallback).lower() == "true"
+    return asset.asset_type == "page_snapshot" or source == "fallback_snapshot"
+
+
 def _figure_read(asset: DocumentAsset) -> PaperFigureRead:
     metadata = {}
     if asset.metadata_json:
@@ -33,14 +42,17 @@ def _figure_read(asset: DocumentAsset) -> PaperFigureRead:
             metadata = {}
     if not isinstance(metadata, dict):
         metadata = {}
+    source = str(metadata.get("source") or "") or None
     return PaperFigureRead(
         id=asset.id,
         paper_id=asset.document_id,
+        asset_type=asset.asset_type,
         image_path=f"/papers/assets/{asset.id}",
         figure_label=str(metadata.get("figure_label") or f"Figure {asset.id}"),
         caption=str(metadata.get("caption") or ""),
         page=asset.page_number,
-        source=str(metadata.get("source") or "") or None,
+        source=source,
+        fallback=_metadata_fallback(asset, metadata, source),
         notes=str(metadata.get("notes") or metadata.get("context") or "") or None,
         created_at=asset.created_at,
     )
@@ -65,8 +77,8 @@ def _table_source(parse_status: str) -> str:
     if parse_status == "success":
         return "pdfplumber"
     if parse_status == "fallback":
-        return "fallback candidate"
-    return "text candidate"
+        return "fallback_candidate"
+    return "text_candidate"
 
 
 def _table_read(table: PaperTable) -> PaperTableRead:

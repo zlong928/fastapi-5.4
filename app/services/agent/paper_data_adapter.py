@@ -37,5 +37,6 @@ class PaperDataAdapter:
             image_path = str(self.file_storage.get_file_path(asset.file_path))
         caption = str(metadata.get("caption") or "")
         label = str(metadata.get("figure_label") or f"Figure {asset.id}")
+        context = str(metadata.get("context") or caption)
         figure_id = f"{label} [asset:{asset.id}]"
-        return FigureInfo(figure_id=figure_id, image_path=image_path, caption=caption, context=caption)
+        return FigureInfo(figure_id=figure_id, image_path=image_path, caption=caption, context=context)

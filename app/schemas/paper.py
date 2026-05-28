@@ -23,11 +23,13 @@ class PaperListItem(BaseModel):
 class PaperFigureRead(BaseModel):
     id: int
     paper_id: int
+    asset_type: str
     image_path: str
     figure_label: str
     caption: str
     page: Optional[int] = None
     source: Optional[str] = None
+    fallback: bool = False
     notes: Optional[str] = None
     created_at: datetime
 

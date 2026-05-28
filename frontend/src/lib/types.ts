@@ -537,11 +537,13 @@ export interface PaperUploadResponse {
 export interface PaperFigure {
   id: number;
   paper_id: number;
+  asset_type: "figure" | "page_snapshot" | string;
   image_path: string;
   figure_label: string;
   caption: string;
   page?: number | null;
   source?: string | null;
+  fallback: boolean;
   notes?: string | null;
   created_at: string;
 }

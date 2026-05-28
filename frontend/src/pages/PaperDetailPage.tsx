@@ -17,6 +17,10 @@ const TABLE_STATUS_LABELS: Record<string, string> = {
   partial: "partial"
 };
 
+function isFallbackVisual(figure: PaperFigure) {
+  return figure.asset_type === "page_snapshot" || figure.fallback === true;
+}
+
 function tableStatusClass(status?: string | null) {
   if (status === "success") return "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200";
   if (status === "fallback") return "bg-amber-50 text-amber-700 ring-1 ring-amber-200";
@@ -53,6 +57,7 @@ function FigureImage({ figure, active, onOpen }: { figure: PaperFigure; active?:
 
 function TableCandidate({ table }: { table: PaperTable }) {
   const parseStatus = table.parse_status ?? "partial";
+  const source = table.source ?? "text_candidate";
   return (
     <article id={`table-${table.id}`} className="scroll-mt-20 rounded-xl bg-slate-50 p-3">
       <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
@@ -60,12 +65,17 @@ function TableCandidate({ table }: { table: PaperTable }) {
           <p className="truncate text-sm font-medium text-slate-700">{table.table_label}</p>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
             <span>page {table.page ?? "-"}</span>
-            <span>{table.source ?? "text candidate"}</span>
+            <span>{source}</span>
           </div>
         </div>
-        <Badge variant="outline" className={cn("border-transparent", tableStatusClass(parseStatus))}>
-          {TABLE_STATUS_LABELS[parseStatus] ?? parseStatus}
-        </Badge>
+        <div className="flex flex-wrap gap-2">
+          {parseStatus === "fallback" ? (
+            <Badge variant="outline" className="border-transparent bg-amber-50 text-amber-700 ring-1 ring-amber-200">Fallback Table Candidate</Badge>
+          ) : null}
+          <Badge variant="outline" className={cn("border-transparent", tableStatusClass(parseStatus))}>
+            {TABLE_STATUS_LABELS[parseStatus] ?? parseStatus}
+          </Badge>
+        </div>
       </div>
       <pre className="max-h-56 overflow-auto whitespace-pre-wrap text-sm leading-6 text-slate-600">{table.content}</pre>
     </article>
@@ -95,6 +105,8 @@ export function PaperDetailPage() {
   const latestJob = paper.latest_extraction_job;
   const latestDoneJob = latestJob?.status === "done" ? latestJob : null;
   const busy = parseMutation.isPending || paper.status === "processing" || paper.status === "parsing";
+  const realFigures = paper.figures.filter((figure) => !isFallbackVisual(figure));
+  const pageSnapshots = paper.figures.filter(isFallbackVisual);
 
   return (
     <div className="mx-auto max-w-7xl space-y-4">
@@ -134,17 +146,21 @@ export function PaperDetailPage() {
           </Alert>
         ) : null}
 
-        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-2xl bg-slate-50 p-4">
             <div className="flex items-center gap-2 text-xs font-medium text-slate-500"><FileText className="h-4 w-4" />正文字符</div>
             <p className="mt-2 text-2xl font-semibold text-slate-950">{paper.text_content?.length ?? 0}</p>
           </div>
           <div className="rounded-2xl bg-slate-50 p-4">
-            <div className="flex items-center gap-2 text-xs font-medium text-slate-500"><Images className="h-4 w-4" />图片</div>
-            <p className="mt-2 text-2xl font-semibold text-slate-950">{paper.figures.length}</p>
+            <div className="flex items-center gap-2 text-xs font-medium text-slate-500"><Images className="h-4 w-4" />真实图片</div>
+            <p className="mt-2 text-2xl font-semibold text-slate-950">{realFigures.length}</p>
           </div>
           <div className="rounded-2xl bg-slate-50 p-4">
-            <div className="flex items-center gap-2 text-xs font-medium text-slate-500"><Table2 className="h-4 w-4" />表格候选</div>
+            <div className="flex items-center gap-2 text-xs font-medium text-slate-500"><Eye className="h-4 w-4" />页面截图</div>
+            <p className="mt-2 text-2xl font-semibold text-slate-950">{pageSnapshots.length}</p>
+          </div>
+          <div className="rounded-2xl bg-slate-50 p-4">
+            <div className="flex items-center gap-2 text-xs font-medium text-slate-500"><Table2 className="h-4 w-4" />表格</div>
             <p className="mt-2 text-2xl font-semibold text-slate-950">{paper.tables.length}</p>
           </div>
         </div>
@@ -157,7 +173,10 @@ export function PaperDetailPage() {
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.85fr)]">
         <section className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-          <h2 className="mb-3 text-sm font-semibold text-slate-800">图片区域</h2>
+          <h2 className="mb-3 text-sm font-semibold text-slate-800">图片与视觉证据</h2>
+          {!realFigures.length ? (
+            <div className="mb-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-800">当前论文未提取到真实图片对象。</div>
+          ) : null}
           <div className="grid gap-3 md:grid-cols-2">
             {paper.figures.map((figure) => (
               <article id={`figure-${figure.id}`} key={figure.id} className="scroll-mt-20 rounded-xl border border-slate-100 p-3">
@@ -167,10 +186,15 @@ export function PaperDetailPage() {
                     <p className="truncate text-sm font-medium text-slate-700">{figure.figure_label}</p>
                     <p className="mt-1 text-xs text-slate-500">page {figure.page ?? "-"}</p>
                   </div>
-                  {figure.source === "fallback_snapshot" ? (
+                  {isFallbackVisual(figure) ? (
                     <Badge variant="outline" className="border-transparent bg-amber-50 text-amber-700 ring-1 ring-amber-200">Fallback Snapshot</Badge>
                   ) : null}
                 </div>
+                {isFallbackVisual(figure) ? (
+                  <div className="mt-2 rounded-xl bg-amber-50 p-2 text-xs leading-5 text-amber-800">
+                    未检测到可抽取 PDF 图片，该截图仅作为视觉证据 fallback。
+                  </div>
+                ) : null}
                 <dl className="mt-2 space-y-1 text-xs leading-5 text-slate-500">
                   <div>
                     <dt className="inline font-medium text-slate-600">caption: </dt>
