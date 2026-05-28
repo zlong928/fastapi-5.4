@@ -541,6 +541,8 @@ export interface PaperFigure {
   figure_label: string;
   caption: string;
   page?: number | null;
+  source?: string | null;
+  notes?: string | null;
   created_at: string;
 }
 
@@ -550,6 +552,9 @@ export interface PaperTable {
   table_label: string;
   content: string;
   page?: number | null;
+  parse_status?: "success" | "fallback" | "partial" | string;
+  source?: string | null;
+  error_message?: string | null;
   created_at: string;
 }
 

@@ -5,7 +5,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { getExtraction, getPaper, retryExtraction } from "@/lib/api";
 import { formatChinaDateTime } from "@/lib/time";
-import { ExtractionJob, ExtractionResult } from "@/lib/types";
+import { ExtractionJob, ExtractionResult, PaperDetail, PaperFigure, PaperTable } from "@/lib/types";
 import {
   ExtractionStatusBadge,
   SourceBadge,
@@ -25,7 +25,79 @@ function sourceIcon(sourceType: string) {
   return <FileText className="h-4 w-4" />;
 }
 
-function ResultCard({ result, paperId }: { result: ExtractionResult; paperId: number }) {
+function lookupFigure(paper: PaperDetail, result: ExtractionResult): PaperFigure | undefined {
+  return result.source_type === "figure" && result.source_id
+    ? paper.figures.find((figure) => figure.id === result.source_id)
+    : undefined;
+}
+
+function lookupTable(paper: PaperDetail, result: ExtractionResult): PaperTable | undefined {
+  return result.source_type === "table" && result.source_id
+    ? paper.tables.find((table) => table.id === result.source_id)
+    : undefined;
+}
+
+function flattenContentValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(flattenContentValue).filter(Boolean).join("\n");
+  if (typeof value === "object") {
+    return Object.entries(value)
+      .map(([key, entry]) => {
+        const flattened = flattenContentValue(entry);
+        return flattened ? `${key}: ${flattened}` : "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return String(value);
+}
+
+function readableContent(content: string) {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return content;
+  try {
+    return flattenContentValue(JSON.parse(trimmed)) || content;
+  } catch {
+    return content;
+  }
+}
+
+function DetailRow({ label, value }: { label: string; value?: string | number | null }) {
+  if (value === null || value === undefined || value === "") return null;
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs font-medium text-slate-500">{label}</dt>
+      <dd className="mt-1 break-words text-sm text-slate-800">{value}</dd>
+    </div>
+  );
+}
+
+function ResultSourceDetails({ result, paper }: { result: ExtractionResult; paper: PaperDetail }) {
+  const figure = lookupFigure(paper, result);
+  const table = lookupTable(paper, result);
+  if (result.source_type === "figure") {
+    return (
+      <dl className="mb-3 grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-3">
+        <DetailRow label="figure_id" value={figure ? `${figure.figure_label} (#${figure.id})` : result.source_id ? `#${result.source_id}` : "-"} />
+        <DetailRow label="caption" value={figure?.caption || readableContent(result.content)} />
+        <DetailRow label="source" value={figure?.source || "figure"} />
+      </dl>
+    );
+  }
+  if (result.source_type === "table") {
+    return (
+      <dl className="mb-3 grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-3">
+        <DetailRow label="table_label" value={table?.table_label || (result.source_id ? `Table #${result.source_id}` : "Table")} />
+        <DetailRow label="parse_status" value={table?.parse_status || "partial"} />
+        <DetailRow label="source" value={table?.source || "text candidate"} />
+      </dl>
+    );
+  }
+  return null;
+}
+
+function ResultCard({ result, paper }: { result: ExtractionResult; paper: PaperDetail }) {
   const confidence = confidencePercent(result.confidence);
   const sourceHash = result.source_type === "figure" && result.source_id
     ? `figure-${result.source_id}`
@@ -38,7 +110,7 @@ function ResultCard({ result, paperId }: { result: ExtractionResult; paperId: nu
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <SourceBadge sourceType={result.source_type} sourceId={result.source_id} />
-          {sourceHash ? <Link to={`/papers/${paperId}#${sourceHash}`} className="text-xs font-medium text-slate-500 hover:text-slate-900">查看来源</Link> : null}
+          {sourceHash ? <Link to={`/papers/${paper.id}#${sourceHash}`} className="text-xs font-medium text-slate-500 hover:text-slate-900">查看来源</Link> : null}
         </div>
         {confidence !== null ? <span className="text-xs font-medium text-slate-500">{confidence}%</span> : null}
       </div>
@@ -47,7 +119,8 @@ function ResultCard({ result, paperId }: { result: ExtractionResult; paperId: nu
           <div className="h-full rounded-full bg-slate-900" style={{ width: `${confidence}%` }} />
         </div>
       ) : null}
-      <p className="whitespace-pre-wrap text-sm leading-7 text-slate-800">{result.content}</p>
+      <ResultSourceDetails result={result} paper={paper} />
+      <p className="whitespace-pre-wrap text-sm leading-7 text-slate-800">{readableContent(result.content)}</p>
       {result.evidence ? (
         <div className="mt-3 rounded-xl bg-slate-50 p-3">
           <p className="mb-1 text-xs font-medium text-slate-500">证据</p>
@@ -58,7 +131,7 @@ function ResultCard({ result, paperId }: { result: ExtractionResult; paperId: nu
   );
 }
 
-function ResultBody({ job, paperId }: { job: ExtractionJob; paperId: number }) {
+function ResultBody({ job, paper }: { job: ExtractionJob; paper: PaperDetail }) {
   const results = job.results ?? [];
   const grouped = resultsByMetric(results);
   const metricKeys = resultMetricKeys(results);
@@ -98,7 +171,7 @@ function ResultBody({ job, paperId }: { job: ExtractionJob; paperId: number }) {
               <span className="text-xs text-slate-400">{grouped[metric].length} 条</span>
             </div>
             <div className="space-y-3">
-              {grouped[metric].map((result) => <ResultCard key={result.id} result={result} paperId={paperId} />)}
+              {grouped[metric].map((result) => <ResultCard key={result.id} result={result} paper={paper} />)}
             </div>
           </section>
         ))}
@@ -197,7 +270,7 @@ export function PaperExtractionResultPage() {
         </Alert>
       ) : null}
 
-      {job?.status === "done" ? <ResultBody job={job} paperId={paper.id} /> : null}
+      {job?.status === "done" ? <ResultBody job={job} paper={paper} /> : null}
     </div>
   );
 }

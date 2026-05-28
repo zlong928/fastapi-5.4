@@ -3,12 +3,25 @@ import { ArrowLeft, BarChart3, Eye, FileText, Images, Loader2, RefreshCw, Table2
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getPaper, getPaperAssetBlob, parsePaper } from "@/lib/api";
 import { formatChinaDateTime } from "@/lib/time";
 import { PaperDetail, PaperFigure, PaperTable } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { PaperStatusBadge, canExtractPaper, shouldPollPaper } from "@/pages/paperShared";
+
+const TABLE_STATUS_LABELS: Record<string, string> = {
+  success: "success",
+  fallback: "fallback",
+  partial: "partial"
+};
+
+function tableStatusClass(status?: string | null) {
+  if (status === "success") return "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200";
+  if (status === "fallback") return "bg-amber-50 text-amber-700 ring-1 ring-amber-200";
+  return "bg-slate-100 text-slate-600";
+}
 
 function FigureImage({ figure, active, onOpen }: { figure: PaperFigure; active?: boolean; onOpen: (src: string) => void }) {
   const [src, setSrc] = useState("");
@@ -39,11 +52,20 @@ function FigureImage({ figure, active, onOpen }: { figure: PaperFigure; active?:
 }
 
 function TableCandidate({ table }: { table: PaperTable }) {
+  const parseStatus = table.parse_status ?? "partial";
   return (
     <article id={`table-${table.id}`} className="scroll-mt-20 rounded-xl bg-slate-50 p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="text-sm font-medium text-slate-700">{table.table_label}</p>
-        <span className="text-xs text-slate-400">page {table.page ?? "-"}</span>
+      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-slate-700">{table.table_label}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <span>page {table.page ?? "-"}</span>
+            <span>{table.source ?? "text candidate"}</span>
+          </div>
+        </div>
+        <Badge variant="outline" className={cn("border-transparent", tableStatusClass(parseStatus))}>
+          {TABLE_STATUS_LABELS[parseStatus] ?? parseStatus}
+        </Badge>
       </div>
       <pre className="max-h-56 overflow-auto whitespace-pre-wrap text-sm leading-6 text-slate-600">{table.content}</pre>
     </article>
@@ -140,8 +162,31 @@ export function PaperDetailPage() {
             {paper.figures.map((figure) => (
               <article id={`figure-${figure.id}`} key={figure.id} className="scroll-mt-20 rounded-xl border border-slate-100 p-3">
                 <FigureImage figure={figure} onOpen={setPreviewImage} />
-                <p className="mt-2 text-sm font-medium text-slate-700">{figure.figure_label}</p>
-                <p className="mt-1 line-clamp-3 text-xs leading-5 text-slate-500">page {figure.page ?? "-"} · {figure.caption || "无图注"}</p>
+                <div className="mt-3 flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-slate-700">{figure.figure_label}</p>
+                    <p className="mt-1 text-xs text-slate-500">page {figure.page ?? "-"}</p>
+                  </div>
+                  {figure.source === "fallback_snapshot" ? (
+                    <Badge variant="outline" className="border-transparent bg-amber-50 text-amber-700 ring-1 ring-amber-200">Fallback Snapshot</Badge>
+                  ) : null}
+                </div>
+                <dl className="mt-2 space-y-1 text-xs leading-5 text-slate-500">
+                  <div>
+                    <dt className="inline font-medium text-slate-600">caption: </dt>
+                    <dd className="inline break-words">{figure.caption || "无图注"}</dd>
+                  </div>
+                  <div>
+                    <dt className="inline font-medium text-slate-600">source: </dt>
+                    <dd className="inline break-words">{figure.source || "extracted_image"}</dd>
+                  </div>
+                  {figure.notes ? (
+                    <div>
+                      <dt className="inline font-medium text-slate-600">notes: </dt>
+                      <dd className="inline break-words">{figure.notes}</dd>
+                    </div>
+                  ) : null}
+                </dl>
               </article>
             ))}
           </div>

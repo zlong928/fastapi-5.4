@@ -209,6 +209,7 @@ export function parsePaper(paperId: number): Promise<PaperDetail> { return reque
 export function runExtraction(paperId: number, query: string): Promise<ExtractionJob> { return request<ExtractionJob>("/extractions/run", { method: "POST", body: JSON.stringify({ paperId, query }) }); }
 export function retryExtraction(jobId: number): Promise<ExtractionJob> { return request<ExtractionJob>(`/extractions/${jobId}/retry`, { method: "POST" }); }
 export function getExtraction(jobId: number): Promise<ExtractionJob> { return request<ExtractionJob>(`/extractions/${jobId}`); }
+export function getExtractions(): Promise<ExtractionJobListItem[]> { return request<ExtractionJobListItem[]>("/extractions"); }
 export function getPaperExtractions(paperId: number): Promise<ExtractionJobListItem[]> { return request<ExtractionJobListItem[]>(`/extractions?paper_id=${paperId}`); }
 
 export async function getPaperAssetBlob(assetPath: string): Promise<Blob> {

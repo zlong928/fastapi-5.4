@@ -31,6 +31,8 @@ def _figure_read(asset: DocumentAsset) -> PaperFigureRead:
             metadata = json.loads(asset.metadata_json)
         except Exception:
             metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
     return PaperFigureRead(
         id=asset.id,
         paper_id=asset.document_id,
@@ -38,8 +40,53 @@ def _figure_read(asset: DocumentAsset) -> PaperFigureRead:
         figure_label=str(metadata.get("figure_label") or f"Figure {asset.id}"),
         caption=str(metadata.get("caption") or ""),
         page=asset.page_number,
+        source=str(metadata.get("source") or "") or None,
+        notes=str(metadata.get("notes") or metadata.get("context") or "") or None,
         created_at=asset.created_at,
     )
+
+
+def _content_is_markdown_table(content: str | None) -> bool:
+    if not content:
+        return False
+    lines = [line.strip() for line in content.splitlines() if line.strip()]
+    return len(lines) >= 2 and lines[0].startswith("|") and lines[1].startswith("|") and "---" in lines[1]
+
+
+def _table_parse_status(table: PaperTable) -> str:
+    if "Table Candidate" in (table.table_label or ""):
+        return "fallback"
+    if _content_is_markdown_table(table.content):
+        return "success"
+    return "partial"
+
+
+def _table_source(parse_status: str) -> str:
+    if parse_status == "success":
+        return "pdfplumber"
+    if parse_status == "fallback":
+        return "fallback candidate"
+    return "text candidate"
+
+
+def _table_read(table: PaperTable) -> PaperTableRead:
+    parse_status = _table_parse_status(table)
+    return PaperTableRead(
+        id=table.id,
+        paper_id=table.paper_id,
+        table_label=table.table_label,
+        content=table.content,
+        page=table.page,
+        parse_status=parse_status,
+        source=_table_source(parse_status),
+        created_at=table.created_at,
+    )
+
+
+def _parse_error(paper: Document) -> str | None:
+    if paper.status != "failed":
+        return None
+    return paper.fail_reason or paper.error_message
 
 
 def _detail(db: Session, paper: Document) -> PaperDetailResponse:
@@ -62,12 +109,12 @@ def _detail(db: Session, paper: Document) -> PaperDetailResponse:
         title=paper.title,
         file_path=paper.original_file_path,
         status=paper.status,
-        parse_error=paper.fail_reason or paper.error_message,
+        parse_error=_parse_error(paper),
         text_content=paper.cleaned_text or paper.parsed_text,
         created_at=paper.created_at,
         updated_at=paper.updated_at,
         figures=[_figure_read(asset) for asset in figures],
-        tables=[PaperTableRead.model_validate(table) for table in tables],
+        tables=[_table_read(table) for table in tables],
         latest_extraction_job=latest_job,
     )
 

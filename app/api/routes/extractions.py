@@ -142,14 +142,17 @@ async def retry_extraction(job_id: int, background_tasks: BackgroundTasks, curre
 
 
 @router.get("", response_model=list[ExtractionJobListItem])
-async def list_extractions(paper_id: int = Query(..., ge=1), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[ExtractionJobListItem]:
-    paper = _paper_or_404(db, paper_id, current_user)
-    jobs = (
-        db.query(ExtractionJob)
-        .filter(ExtractionJob.paper_id == paper.id)
-        .order_by(ExtractionJob.created_at.desc(), ExtractionJob.id.desc())
-        .all()
+async def list_extractions(paper_id: int | None = Query(None, ge=1), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[ExtractionJobListItem]:
+    if paper_id is not None:
+        _paper_or_404(db, paper_id, current_user)
+    query = (
+        db.query(ExtractionJob, Document)
+        .join(Document, ExtractionJob.paper_id == Document.id)
+        .filter(Document.user_id == current_user.id, Document.source_type == "pdf", Document.status != "deleted")
     )
+    if paper_id is not None:
+        query = query.filter(ExtractionJob.paper_id == paper_id)
+    rows = query.order_by(ExtractionJob.created_at.desc(), ExtractionJob.id.desc()).all()
     return [
         ExtractionJobListItem(
             id=job.id,
@@ -162,7 +165,7 @@ async def list_extractions(paper_id: int = Query(..., ge=1), current_user: User 
             updated_at=job.updated_at,
             result_count=len(job.results),
         )
-        for job in jobs
+        for job, paper in rows
     ]
 
 

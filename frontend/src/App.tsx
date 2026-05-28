@@ -7,6 +7,7 @@ import { DashboardPage } from "@/pages/DashboardPage";
 import { DocumentDetailPage } from "@/pages/DocumentDetailPage";
 import { BookReaderPage } from "@/pages/BookReaderPage";
 import { ChatPage } from "@/pages/ChatPage";
+import { ExtractionsPage } from "@/pages/ExtractionsPage";
 import { ForgotPasswordPage } from "@/pages/ForgotPasswordPage";
 import { KnowledgePage } from "@/pages/KnowledgePage";
 import { LoginPage } from "@/pages/LoginPage";
@@ -43,6 +44,7 @@ export function App() {
           <Route path="/papers/:id" element={<ProtectedRoute><PaperDetailPage /></ProtectedRoute>} />
           <Route path="/papers/:id/extraction" element={<ProtectedRoute><PaperExtractionTaskPage /></ProtectedRoute>} />
           <Route path="/papers/:id/results" element={<ProtectedRoute><PaperExtractionResultPage /></ProtectedRoute>} />
+          <Route path="/extractions" element={<ProtectedRoute><ExtractionsPage /></ProtectedRoute>} />
           <Route path="/documents/:id" element={<ProtectedRoute><DocumentDetailPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="/notes" element={<ProtectedRoute><NotesPage /></ProtectedRoute>} />

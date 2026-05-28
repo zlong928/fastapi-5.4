@@ -79,8 +79,8 @@ class PaperDemoService:
                             {
                                 "figure_label": "Page 1 Snapshot",
                                 "caption": "Fallback page snapshot",
-                                "context": "Fallback page snapshot generated for paper Agent extraction.",
                                 "source": "fallback_snapshot",
+                                "context": "Generated because no extractable PDF figure was found",
                             },
                             ensure_ascii=False,
                         ),
