@@ -27,6 +27,8 @@ class PaperFigureRead(BaseModel):
     figure_label: str
     caption: str
     page: Optional[int] = None
+    source: Optional[str] = None
+    notes: Optional[str] = None
     created_at: datetime
 
 
@@ -36,6 +38,9 @@ class PaperTableRead(BaseModel):
     table_label: str
     content: str
     page: Optional[int] = None
+    parse_status: str = "partial"
+    source: str = "text_candidate"
+    error_message: Optional[str] = None
     created_at: datetime
 
     class Config:
@@ -69,6 +74,18 @@ class ExtractionJobRead(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ExtractionJobListItem(BaseModel):
+    id: int
+    paper_id: int
+    paper_title: str
+    query: str
+    status: str
+    error_message: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    result_count: int = 0
 
 
 class PaperDetailResponse(BaseModel):
