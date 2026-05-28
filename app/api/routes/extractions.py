@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.time import app_now
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.models import Document, DocumentAsset, DocumentEvent, ExtractionJob, ExtractionResult, PaperTable, User
-from app.schemas.paper import ExtractionJobRead, ExtractionRunRequest
+from app.schemas.paper import ExtractionJobListItem, ExtractionJobRead, ExtractionRunRequest
 from app.services.agent import AgentResultMapper, CoordinatorAdapter, PaperDataAdapter
 
 router = APIRouter(prefix="/extractions", tags=["extractions"])
+logger = logging.getLogger(__name__)
 
 
 def _paper_or_404(db: Session, paper_id: int, user: User) -> Document:
@@ -67,6 +69,7 @@ def _run_job(db: Session, job: ExtractionJob, paper: Document) -> ExtractionJob:
     try:
         figures, tables = _load_sources(db, paper.id)
         paper_data = PaperDataAdapter().build(paper=paper, figures=figures, tables=tables)
+        db.commit()
         final_results, events = CoordinatorAdapter().run(paper=paper_data, user_query=job.query)
         rows = AgentResultMapper().map_results(job_id=job.id, final_results=final_results, figures=figures, tables=tables)
         db.query(ExtractionResult).filter(ExtractionResult.job_id == job.id).delete(synchronize_session=False)
@@ -80,6 +83,7 @@ def _run_job(db: Session, job: ExtractionJob, paper: Document) -> ExtractionJob:
         db.refresh(job)
         return job
     except Exception as exc:
+        logger.exception("Extraction job %s failed", job.id)
         db.rollback()
         job = db.get(ExtractionJob, job.id)
         paper = db.get(Document, paper.id)
@@ -95,19 +99,37 @@ def _run_job(db: Session, job: ExtractionJob, paper: Document) -> ExtractionJob:
         return job
 
 
+def _run_job_by_id(job_id: int) -> None:
+    with SessionLocal() as db:
+        job = db.get(ExtractionJob, job_id)
+        if job is None:
+            logger.warning("Extraction job %s disappeared before it could run", job_id)
+            return
+        paper = db.get(Document, job.paper_id)
+        if paper is None:
+            logger.warning("Extraction job %s has no paper %s", job_id, job.paper_id)
+            return
+        _run_job(db, job, paper)
+
+
+def _schedule_job(background_tasks: BackgroundTasks, job_id: int) -> None:
+    background_tasks.add_task(_run_job_by_id, job_id)
+
+
 @router.post("/run", response_model=ExtractionJobRead, status_code=status.HTTP_201_CREATED)
-async def run_extraction(payload: ExtractionRunRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> ExtractionJobRead:
+async def run_extraction(payload: ExtractionRunRequest, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> ExtractionJobRead:
     paper = _paper_or_404(db, payload.paperId, current_user)
     _ensure_extractable(paper)
     job = ExtractionJob(paper_id=paper.id, query=payload.query, status="pending")
     db.add(job)
     db.commit()
     db.refresh(job)
-    return _run_job(db, job, paper)
+    _schedule_job(background_tasks, job.id)
+    return job
 
 
 @router.post("/{job_id}/retry", response_model=ExtractionJobRead, status_code=status.HTTP_201_CREATED)
-async def retry_extraction(job_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> ExtractionJobRead:
+async def retry_extraction(job_id: int, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> ExtractionJobRead:
     old_job = _job_or_404(db, job_id, current_user)
     paper = _paper_or_404(db, old_job.paper_id, current_user)
     _ensure_extractable(paper)
@@ -115,7 +137,33 @@ async def retry_extraction(job_id: int, current_user: User = Depends(get_current
     db.add(new_job)
     db.commit()
     db.refresh(new_job)
-    return _run_job(db, new_job, paper)
+    _schedule_job(background_tasks, new_job.id)
+    return new_job
+
+
+@router.get("", response_model=list[ExtractionJobListItem])
+async def list_extractions(paper_id: int = Query(..., ge=1), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[ExtractionJobListItem]:
+    paper = _paper_or_404(db, paper_id, current_user)
+    jobs = (
+        db.query(ExtractionJob)
+        .filter(ExtractionJob.paper_id == paper.id)
+        .order_by(ExtractionJob.created_at.desc(), ExtractionJob.id.desc())
+        .all()
+    )
+    return [
+        ExtractionJobListItem(
+            id=job.id,
+            paper_id=paper.id,
+            paper_title=paper.title,
+            query=job.query,
+            status=job.status,
+            error_message=job.error_message,
+            created_at=job.created_at,
+            updated_at=job.updated_at,
+            result_count=len(job.results),
+        )
+        for job in jobs
+    ]
 
 
 @router.get("/{job_id}", response_model=ExtractionJobRead)

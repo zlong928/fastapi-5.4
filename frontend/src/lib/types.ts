@@ -576,6 +576,18 @@ export interface ExtractionJob {
   results: ExtractionResult[];
 }
 
+export interface ExtractionJobListItem {
+  id: number;
+  paper_id: number;
+  paper_title: string;
+  query: string;
+  status: "pending" | "running" | "done" | "failed" | string;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+  result_count: number;
+}
+
 export interface PaperDetail {
   id: number;
   user_id: number;

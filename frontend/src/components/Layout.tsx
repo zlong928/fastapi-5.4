@@ -57,7 +57,8 @@ function WorkspaceLink({ href, label, icon: Icon }: NavigationItem) {
 
 function actionForPath(pathname: string) {
   if (pathname.startsWith("/knowledge")) return { href: "/knowledge?upload=1", label: "上传", icon: UploadCloud };
-  if (pathname.startsWith("/papers")) return { href: "/papers", label: "上传论文", icon: UploadCloud };
+  if (pathname === "/papers/upload") return { href: "/papers", label: "论文列表", icon: FileText };
+  if (pathname.startsWith("/papers")) return { href: "/papers/upload", label: "上传论文", icon: UploadCloud };
   if (pathname.startsWith("/notes")) return { href: "/notes?new=1", label: "新建", icon: Plus };
   if (pathname.startsWith("/tasks")) return { href: "/tasks", label: "刷新", icon: RefreshCw };
   if (pathname.startsWith("/chat")) return { href: "/chat?new=1", label: "新对话", icon: Plus };

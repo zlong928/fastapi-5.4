@@ -13,6 +13,9 @@ import { LoginPage } from "@/pages/LoginPage";
 import { NotesPage } from "@/pages/NotesPage";
 import { OAuthCallbackPage } from "@/pages/OAuthCallbackPage";
 import { PaperDetailPage } from "@/pages/PaperDetailPage";
+import { PaperExtractionResultPage } from "@/pages/PaperExtractionResultPage";
+import { PaperExtractionTaskPage } from "@/pages/PaperExtractionTaskPage";
+import { PaperUploadPage } from "@/pages/PaperUploadPage";
 import { PapersPage } from "@/pages/PapersPage";
 import { RegisterPage } from "@/pages/RegisterPage";
 import { ResetPasswordPage } from "@/pages/ResetPasswordPage";
@@ -36,7 +39,10 @@ export function App() {
           <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
           <Route path="/knowledge" element={<ProtectedRoute><KnowledgePage /></ProtectedRoute>} />
           <Route path="/papers" element={<ProtectedRoute><PapersPage /></ProtectedRoute>} />
+          <Route path="/papers/upload" element={<ProtectedRoute><PaperUploadPage /></ProtectedRoute>} />
           <Route path="/papers/:id" element={<ProtectedRoute><PaperDetailPage /></ProtectedRoute>} />
+          <Route path="/papers/:id/extraction" element={<ProtectedRoute><PaperExtractionTaskPage /></ProtectedRoute>} />
+          <Route path="/papers/:id/results" element={<ProtectedRoute><PaperExtractionResultPage /></ProtectedRoute>} />
           <Route path="/documents/:id" element={<ProtectedRoute><DocumentDetailPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="/notes" element={<ProtectedRoute><NotesPage /></ProtectedRoute>} />
