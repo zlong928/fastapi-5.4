@@ -4,6 +4,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import fitz
 from sqlalchemy.orm import Session
@@ -11,6 +12,11 @@ from sqlalchemy.orm import Session
 from app.core.time import app_now
 from app.models import Document, DocumentAsset, DocumentEvent, PaperTable
 from app.services.file_storage import FileStorageService
+
+try:  # pdfplumber is preferred for table extraction, but the demo must degrade safely.
+    import pdfplumber
+except Exception:  # pragma: no cover - optional dependency guard for old deployments
+    pdfplumber = None  # type: ignore[assignment]
 
 
 @dataclass(slots=True)
@@ -83,7 +89,9 @@ class PaperDemoService:
             for asset in figure_assets:
                 self.db.add(asset)
 
-            table_candidates = self._table_candidates(paper.id, pages, paper.cleaned_text or paper.parsed_text or "")
+            table_candidates = self._extract_tables_with_pdfplumber(paper.id, source_path)
+            if not table_candidates:
+                table_candidates = self._table_candidates(paper.id, pages, paper.cleaned_text or paper.parsed_text or "")
             for table in table_candidates:
                 self.db.add(table)
 
@@ -195,6 +203,66 @@ class PaperDemoService:
         if match:
             return match.group(1).strip()
         return f"Figure {fallback_index}"
+
+    def _extract_tables_with_pdfplumber(self, paper_id: int, source_path: Path) -> list[PaperTable]:
+        """Extract real PDF tables with pdfplumber and store them as Markdown.
+
+        Complex tables are intentionally normalized to Markdown TEXT instead of
+        a rigid JSON schema so the front end and Agent can consume them safely.
+        Any failure returns an empty list and lets the text-candidate fallback run.
+        """
+        if pdfplumber is None:
+            return []
+        tables: list[PaperTable] = []
+        try:
+            with pdfplumber.open(source_path) as pdf:
+                for page_index, page in enumerate(pdf.pages, start=1):
+                    extracted_tables = page.extract_tables() or []
+                    for table_index, rows in enumerate(extracted_tables, start=1):
+                        markdown = self._rows_to_markdown(rows)
+                        if not markdown:
+                            continue
+                        tables.append(
+                            PaperTable(
+                                paper_id=paper_id,
+                                table_label=f"Table {len(tables) + 1}",
+                                content=markdown,
+                                page=page_index,
+                            )
+                        )
+                        if len(tables) >= 3:
+                            return tables
+        except Exception:
+            return []
+        return tables
+
+    def _rows_to_markdown(self, rows: list[list[Any]] | None) -> str:
+        if not rows:
+            return ""
+        cleaned_rows: list[list[str]] = []
+        width = 0
+        for row in rows:
+            cells = [self._clean_cell(cell) for cell in (row or [])]
+            if not any(cells):
+                continue
+            cleaned_rows.append(cells)
+            width = max(width, len(cells))
+        if not cleaned_rows or width < 2:
+            return ""
+        normalized = [row + [""] * (width - len(row)) for row in cleaned_rows[:40]]
+        header = normalized[0]
+        separator = ["---"] * width
+        body = normalized[1:]
+        markdown_rows = [header, separator, *body]
+        return "\n".join("| " + " | ".join(self._escape_markdown_cell(cell[:160]) for cell in row) + " |" for row in markdown_rows)[:4000]
+
+    def _clean_cell(self, cell: Any) -> str:
+        if cell is None:
+            return ""
+        return re.sub(r"\s+", " ", str(cell)).strip()
+
+    def _escape_markdown_cell(self, cell: str) -> str:
+        return cell.replace("|", "\\|")
 
     def _table_candidates(self, paper_id: int, pages: list[ParsedPage], existing_text: str) -> list[PaperTable]:
         candidates: list[tuple[int, str]] = []
