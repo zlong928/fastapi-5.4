@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 
 from app.models import Document, DocumentAsset
-from app.services.agent.types import FigureInfo, PaperData
+from app.services.agent.types import FigureInfo, PaperData, TableInfo
 from app.services.file_storage import FileStorageService
 
 
@@ -13,6 +14,7 @@ class PaperDataAdapter:
 
     def build(self, *, paper: Document, figures: list[DocumentAsset], tables: list[DocumentAsset]) -> PaperData:
         content = paper.cleaned_text or paper.parsed_text or ""
+        structured_tables = [self._table_info(table) for table in tables]
         if tables:
             table_blocks = ["\n\n[Extracted Tables]"]
             for table in tables:
@@ -24,7 +26,44 @@ class PaperDataAdapter:
             title=paper.title,
             content=content,
             figures=[self._figure_info(asset) for asset in figures],
+            tables=structured_tables,
         )
+
+    def _table_info(self, asset: DocumentAsset) -> TableInfo:
+        markdown = asset.markdown or asset.text_content or asset.ocr_text or ""
+        label = asset.label or f"Table {asset.asset_index + 1 if asset.asset_index is not None else asset.id}"
+        headers = self._parse_table_headers(markdown)
+        row_count = self._count_table_rows(markdown)
+        caption = asset.caption or ""
+        return TableInfo(
+            table_id=f"{label} [asset:{asset.id}]",
+            label=label,
+            page_number=asset.page_number,
+            headers=headers,
+            row_count=row_count,
+            markdown=markdown,
+            caption=caption,
+        )
+
+    def _parse_table_headers(self, markdown: str) -> list[str]:
+        for line in markdown.splitlines():
+            line = line.strip()
+            if line.startswith("|"):
+                cells = [cell.strip() for cell in line.strip("|").split("|")]
+                if cells and not all(re.fullmatch(r":?-{3,}:?", cell or "") for cell in cells):
+                    return [cell for cell in cells if cell]
+        return []
+
+    def _count_table_rows(self, markdown: str) -> int:
+        count = 0
+        for line in markdown.splitlines():
+            line = line.strip()
+            if not line.startswith("|"):
+                continue
+            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            if not all(re.fullmatch(r":?-{3,}:?", cell or "") for cell in cells):
+                count += 1
+        return max(0, count - 1)
 
     def _figure_info(self, asset: DocumentAsset) -> FigureInfo:
         metadata = {}

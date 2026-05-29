@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Check, Eye, FileText, Loader2, Play, RefreshCw, RotateCcw, Search } from "lucide-react";
+import { AlertCircle, Check, Eye, FileText, Loader2, Play, RefreshCw, RotateCcw, Search, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -8,7 +8,7 @@ import { getExtractions, getPapers, retryExtraction, runExtraction } from "@/lib
 import { formatChinaDateTime } from "@/lib/time";
 import { ExtractionJobListItem, PaperListItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { DEFAULT_EXTRACTION_QUERY, ExtractionStatusBadge, canExtractPaperListItem, extractionStatusLabel, isExtractionBusy } from "@/pages/paperShared";
+import { DEFAULT_EXTRACTION_QUERY, EXTRACTION_PRESETS, ExtractionStatusBadge, canExtractPaperListItem, extractionStatusLabel, isExtractionBusy } from "@/pages/paperShared";
 
 function ExtractionJobCard({ job, onRetry, retrying }: { job: ExtractionJobListItem; onRetry: (jobId: number) => void; retrying: boolean }) {
   return (
@@ -76,6 +76,7 @@ function PaperOption({ paper, selected, onToggle }: { paper: PaperListItem; sele
 export function ExtractionsPage() {
   const queryClient = useQueryClient();
   const [query, setQuery] = useState(DEFAULT_EXTRACTION_QUERY);
+  const [activePreset, setActivePreset] = useState(0);
   const [keyword, setKeyword] = useState("");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
 
@@ -133,11 +134,25 @@ export function ExtractionsPage() {
       <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_420px]">
         <div className="rounded-md border border-slate-200 bg-white p-4">
           <h2 className="text-sm font-semibold text-slate-950">提取目标</h2>
+          <div className="mt-3 mb-3">
+            <div className="flex flex-wrap gap-1.5">
+              {EXTRACTION_PRESETS.map((preset, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => { setActivePreset(i); setQuery(preset.query); }}
+                  className={`rounded-md px-2.5 py-1.5 text-xs transition ${activePreset === i ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <textarea
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            className="mt-3 min-h-36 w-full rounded-md border border-slate-200 p-3 text-sm leading-6 outline-none transition focus:ring-2 focus:ring-slate-200"
-            placeholder="例如：提取材料组成、实验分组、关键指标和主要结论"
+            onChange={(event) => { setQuery(event.target.value); setActivePreset(-1); }}
+            className="min-h-36 w-full rounded-md border border-slate-200 p-3 text-sm leading-6 outline-none transition focus:ring-2 focus:ring-slate-200"
+            placeholder="描述你想从论文中提取的具体信息..."
           />
           {runMutation.error ? (
             <Alert variant="destructive" className="mt-3">
@@ -145,7 +160,10 @@ export function ExtractionsPage() {
             </Alert>
           ) : null}
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-            <p className="text-xs text-slate-500">已选择 {selectedIds.length} 篇 · {query.trim().length}/2000</p>
+            <div className="flex items-center gap-3">
+              <Sparkles className="h-3.5 w-3.5 text-slate-400" />
+              <p className="text-xs text-slate-400">已选择 {selectedIds.length} 篇 · {query.trim().length}/2000</p>
+            </div>
             <Button type="button" className="rounded-md" onClick={() => runMutation.mutate()} disabled={!canStart}>
               {runMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               开始提取

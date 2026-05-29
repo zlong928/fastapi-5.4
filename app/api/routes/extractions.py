@@ -68,10 +68,11 @@ def _result_read(result: ExtractionResult, assets_by_id: dict[int, DocumentAsset
     metadata = asset_metadata(asset)
     evidence_type = normalize_evidence_type(source_type=result.source_type, asset=asset, metadata=metadata)
     image_url = asset_image_url(asset)
-    caption = None
+    caption = result.caption
     source = None
     if asset is not None:
-        caption = asset.caption or str(metadata.get("caption") or metadata.get("figure_label") or metadata.get("table_label") or "") or None
+        if not caption:
+            caption = asset.caption or str(metadata.get("caption") or metadata.get("figure_label") or metadata.get("table_label") or "") or None
         source = str(metadata.get("source") or asset.asset_type) or None
     return ExtractionResultRead(
         id=result.id,
@@ -89,6 +90,11 @@ def _result_read(result: ExtractionResult, assets_by_id: dict[int, DocumentAsset
         bbox=asset_bbox(metadata),
         caption=caption,
         source=source,
+        figure_id=result.figure_id,
+        notes=result.notes,
+        structured_data=result.structured_data,
+        parse_status=result.parse_status,
+        extraction_mode=result.extraction_mode,
         created_at=result.created_at,
     )
 
@@ -120,6 +126,46 @@ def _log_event(db: Session, paper: Document, event_type: str, message: str, meta
     )
 
 
+def _backwrite_visual_findings(db: Session, final_results: dict, figures: list[DocumentAsset]) -> None:
+    """Write agent's visual analysis findings back to DocumentAsset.metadata_json."""
+    by_figure = final_results.get("by_figure") or {}
+    if not by_figure:
+        return
+    figure_map: dict[str, DocumentAsset] = {}
+    for asset in figures:
+        metadata = asset_metadata(asset)
+        label = str(metadata.get("figure_label") or f"Figure {asset.id}")
+        figure_map[f"{label} [asset:{asset.id}]"] = asset
+        figure_map[label] = asset
+        figure_map[str(asset.id)] = asset
+
+    for figure_id, payload in by_figure.items():
+        if str(payload.get("mode", "")).startswith("fallback"):
+            continue
+        asset = figure_map.get(str(figure_id))
+        if asset is None:
+            continue
+        metadata = asset_metadata(asset)
+        agent_figure_type = payload.get("figure_type")
+        if agent_figure_type and agent_figure_type != "unknown":
+            metadata["figure_type"] = agent_figure_type
+            metadata["figure_type_source"] = "agent_visual"
+        description = payload.get("overall_description")
+        if description:
+            metadata["agent_description"] = str(description)[:500]
+        extractions = payload.get("extractions") or []
+        precise_values = []
+        for ext in extractions:
+            if ext.get("data") and ext.get("confidence") in ("high", "medium"):
+                precise_values.append({"metric": ext.get("metric"), "data": ext["data"], "confidence": ext["confidence"]})
+        if precise_values:
+            metadata["precise_values_extracted"] = True
+            metadata["agent_extracted_values"] = precise_values[:10]
+        metadata["agent_analyzed"] = True
+        metadata["agent_analysis_model"] = str(final_results.get("model_info", {}).get("model") or "unknown")
+        asset.metadata_json = json.dumps(metadata, ensure_ascii=False)
+
+
 def _run_job(db: Session, job: ExtractionJob, paper: Document) -> ExtractionJob:
     _ensure_extractable(paper)
     job.status = "running"
@@ -131,6 +177,7 @@ def _run_job(db: Session, job: ExtractionJob, paper: Document) -> ExtractionJob:
         paper_data = PaperDataAdapter().build(paper=paper, figures=figures, tables=tables)
         db.commit()
         final_results, events = CoordinatorAdapter().run(paper=paper_data, user_query=job.query)
+        _backwrite_visual_findings(db, final_results, figures)
         rows = AgentResultMapper().map_results(job_id=job.id, final_results=final_results, figures=figures, tables=tables)
         db.query(ExtractionResult).filter(ExtractionResult.job_id == job.id).delete(synchronize_session=False)
         for row in rows:

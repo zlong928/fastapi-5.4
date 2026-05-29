@@ -1,23 +1,36 @@
 import { Badge } from "@/components/ui/badge";
-import { DocumentStatus, ExtractionJob, ExtractionResult, PaperDetail, PaperListItem } from "@/lib/types";
+import { DocumentStatus, ExtractionJob, PaperDetail, PaperListItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-export const DEFAULT_EXTRACTION_QUERY = "提取材料组成、实验分组、关键指标和主要结论";
+export const DEFAULT_EXTRACTION_QUERY = "提取研究目的、材料与方法、实验分组、关键性能指标（含具体数值）、图表数据、主要结论";
+
+export const EXTRACTION_PRESETS: Array<{ label: string; query: string }> = [
+  { label: "综合提取", query: "提取研究目的、材料与方法、实验分组、关键性能指标（含具体数值）、图表数据、主要结论" },
+  { label: "材料科学", query: "提取材料组成配方、制备工艺参数（温度、时间、浓度）、表征结果（XRD/SEM/力学性能数值）、对比实验分组、图表中的定量数据" },
+  { label: "生物医学", query: "提取实验菌株/细胞系、培养条件、药物浓度梯度、统计学指标（IC50/MIC/存活率）、图表中的柱状图和折线图数值" },
+  { label: "机器学习", query: "提取模型架构、数据集规模与划分、超参数设置、评估指标（Accuracy/F1/AUC及具体数值）、与baseline的对比结果、消融实验数据" },
+  { label: "仅图表数据", query: "只提取论文中所有图片和表格的定量数据，包括坐标轴数值、柱状图高度、折线图趋势、表格中的实验结果数值" },
+];
 
 export const FIELD_LABELS: Record<string, string> = {
   materials: "材料组成",
   experiment_groups: "实验分组",
   key_metrics: "关键指标",
-  conclusion: "主要结论"
+  conclusion: "主要结论",
+  research_purpose: "研究目的",
+  methods: "材料与方法",
+  figure_data: "图表数据",
+  parameters: "工艺参数",
+  model_architecture: "模型架构",
+  dataset: "数据集",
+  hyperparameters: "超参数",
+  evaluation_metrics: "评估指标",
+  ablation: "消融实验",
+  characterization: "表征结果",
+  statistical_results: "统计结果",
 };
 
-export const METRIC_ORDER = ["materials", "experiment_groups", "key_metrics", "conclusion"];
-
-export const SOURCE_LABELS: Record<string, string> = {
-  text: "正文",
-  figure: "图片",
-  table: "表格"
-};
+export const METRIC_ORDER = ["research_purpose", "materials", "methods", "experiment_groups", "parameters", "key_metrics", "figure_data", "conclusion"];
 
 const PAPER_STATUS_LABELS: Record<string, string> = {
   pending: "等待解析",
@@ -75,40 +88,9 @@ export function fieldLabel(fieldName: string) {
   return FIELD_LABELS[fieldName] ?? fieldName;
 }
 
-export function sourceLabel(sourceType: string) {
-  return SOURCE_LABELS[sourceType] ?? sourceType;
-}
-
 export function confidencePercent(confidence?: number | null) {
   if (confidence === null || confidence === undefined) return null;
   return Math.round(confidence * 100);
-}
-
-export function resultMetricKeys(results: ExtractionResult[]) {
-  const keys = Array.from(new Set(results.map((result) => result.field_name)));
-  return keys.sort((left, right) => {
-    const leftIndex = METRIC_ORDER.indexOf(left);
-    const rightIndex = METRIC_ORDER.indexOf(right);
-    if (leftIndex === -1 && rightIndex === -1) return fieldLabel(left).localeCompare(fieldLabel(right), "zh-CN");
-    if (leftIndex === -1) return 1;
-    if (rightIndex === -1) return -1;
-    return leftIndex - rightIndex;
-  });
-}
-
-export function resultsByMetric(results: ExtractionResult[]) {
-  return results.reduce<Record<string, ExtractionResult[]>>((groups, result) => {
-    groups[result.field_name] = groups[result.field_name] ?? [];
-    groups[result.field_name].push(result);
-    return groups;
-  }, {});
-}
-
-export function resultSourceCounts(results: ExtractionResult[]) {
-  return results.reduce<Record<string, number>>((counts, result) => {
-    counts[result.source_type] = (counts[result.source_type] ?? 0) + 1;
-    return counts;
-  }, {});
 }
 
 export function PaperStatusBadge({ status }: { status: DocumentStatus | string }) {
@@ -144,14 +126,5 @@ export function ExtractionStatusBadge({ status }: { status: ExtractionJob["statu
     >
       {extractionStatusLabel(status)}
     </Badge>
-  );
-}
-
-export function SourceBadge({ sourceType, sourceId }: { sourceType: string; sourceId?: number | null }) {
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
-      {sourceLabel(sourceType)}
-      {sourceId ? <span className="text-slate-400">#{sourceId}</span> : null}
-    </span>
   );
 }

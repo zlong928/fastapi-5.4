@@ -6,7 +6,7 @@ from app.services.agent.types import ExtractionMap, ExtractionTask, FigureExtrac
 
 
 class FallbackExtractionCoordinator:
-    DEFAULT_METRICS = ["materials", "experiment_groups", "key_metrics", "conclusion"]
+    DEFAULT_METRICS = ["research_purpose", "materials", "experiment_groups", "key_metrics", "figure_data", "conclusion"]
     MAX_VISUAL_RETRIES = 1
 
     def extract(self, paper: PaperData, user_query: str | None = None, preset_metrics: list[str] | None = None):
@@ -46,8 +46,9 @@ class FallbackExtractionCoordinator:
         content = paper.content
         table_content = self._table_content(content)
         text_metrics = []
+        figure_metrics = {"conclusion", "key_metrics", "figure_data"}
         for metric in metrics:
-            if metric in {"conclusion", "key_metrics"} and paper.figures:
+            if metric in figure_metrics and paper.figures:
                 figure = paper.figures[0]
                 plan = extraction_map.figures.setdefault(
                     figure.figure_id,
@@ -55,10 +56,10 @@ class FallbackExtractionCoordinator:
                 )
                 plan.tasks.append(ExtractionTask(metric_name=metric, text_context=figure.context or figure.caption, specific_instruction="fallback caption/context analysis"))
                 if metric == "key_metrics" and table_content:
-                    text_metrics.append({"metric": metric, "value": table_content[:700], "evidence": table_content[:240]})
+                    text_metrics.append({"metric": metric, "value": table_content[:700], "evidence": table_content[:240], "mode": "fallback_caption_only"})
             else:
                 source = table_content if metric == "key_metrics" and table_content else content
-                text_metrics.append({"metric": metric, "value": self._snippet(source, metric), "evidence": self._snippet(source, metric, limit=240)})
+                text_metrics.append({"metric": metric, "value": self._snippet(source, metric), "evidence": self._snippet(source, metric, limit=240), "mode": "fallback_caption_only"})
         extraction_map.text_only_metrics = text_metrics
         return extraction_map, []
 
@@ -68,14 +69,16 @@ class FallbackExtractionCoordinator:
             "image_path": plan.image_path,
             "figure_type": "unknown",
             "overall_description": plan.caption or "Fallback figure analysis",
+            "mode": "fallback_caption_only",
             "extractions": [
                 {
                     "metric": task.metric_name,
-                    "success": True,
+                    "success": False,
                     "data": {},
-                    "qualitative": plan.caption or task.text_context or "Fallback figure analysis",
-                    "confidence": "low",
-                    "notes": "No multimodal API key configured; used caption/context fallback.",
+                    "qualitative": plan.caption or task.text_context or "无法分析：未配置视觉模型",
+                    "confidence": "none",
+                    "notes": "No multimodal API key configured; caption-only fallback, not a real extraction.",
+                    "mode": "fallback_caption_only",
                 }
                 for task in plan.tasks
             ],

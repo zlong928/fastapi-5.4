@@ -45,6 +45,9 @@ VALUE_OR_UNIT_RE = re.compile(
 class TableExtractor:
     """Extract structured tables first, then use conservative table candidates."""
 
+    def __init__(self, *, max_tables: int = 10) -> None:
+        self.max_tables = max_tables
+
     def extract(self, *, paper_id: int, source_path: Path, pages: list[ParsedPage], existing_text: str) -> TableExtractionReport:
         tables = self._extract_with_pdfplumber(paper_id, source_path, pages)
         if tables:
@@ -101,7 +104,7 @@ class TableExtractor:
                                 page=page_index,
                             )
                         )
-                        if len(tables) >= 3:
+                        if len(tables) >= self.max_tables:
                             return tables
         except Exception:
             return []
@@ -232,7 +235,7 @@ class TableExtractor:
                 content=self._format_table_candidate(content),
                 page=page_number,
             )
-            for page_number, label, content in candidates[:3]
+            for page_number, label, content in candidates[: self.max_tables]
         ]
 
     def _explicit_table_blocks(self, text: str) -> list[tuple[str, str]]:
@@ -278,7 +281,7 @@ class TableExtractor:
                 content=content,
                 page=page_number,
             )
-            for index, (page_number, content) in enumerate(candidates[:2], start=1)
+            for index, (page_number, content) in enumerate(candidates[: self.max_tables], start=1)
         ]
 
     def _stable_table_blocks(self, text: str, page_number: int) -> list[str]:

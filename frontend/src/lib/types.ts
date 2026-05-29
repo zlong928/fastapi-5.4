@@ -620,6 +620,11 @@ export interface ExtractionResult {
   bbox?: number[] | null;
   caption?: string | null;
   source?: string | null;
+  figure_id?: string | null;
+  notes?: string | null;
+  structured_data?: string | null;
+  parse_status?: "success" | "partial" | "failed" | string | null;
+  extraction_mode?: "visual_analysis" | "text_extraction" | "fallback_caption_only" | "not_found" | string | null;
   created_at: string;
 }
 

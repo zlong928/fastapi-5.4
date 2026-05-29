@@ -1,13 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, BarChart3, Clock3, Eye, Loader2, Play, RefreshCw, RotateCcw } from "lucide-react";
+import { ArrowLeft, BarChart3, Clock3, Eye, Loader2, Play, RefreshCw, RotateCcw, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getPaper, getPaperExtractions, retryExtraction, runExtraction } from "@/lib/api";
 import { formatChinaDateTime } from "@/lib/time";
 import {
   DEFAULT_EXTRACTION_QUERY,
+  EXTRACTION_PRESETS,
   ExtractionStatusBadge,
   PaperStatusBadge,
   canExtractPaper,
@@ -19,6 +21,7 @@ import {
 export function PaperExtractionTaskPage() {
   const paperId = Number(useParams().id);
   const [query, setQuery] = useState(DEFAULT_EXTRACTION_QUERY);
+  const [activePreset, setActivePreset] = useState(0);
   const queryClient = useQueryClient();
 
   const paperQuery = useQuery({
@@ -55,6 +58,11 @@ export function PaperExtractionTaskPage() {
   const isStarting = runMutation.isPending || retryMutation.isPending;
   const canStart = canExtractPaper(paper) && query.trim().length > 0 && !isStarting && !isExtractionBusy(currentJob?.status);
 
+  function selectPreset(index: number) {
+    setActivePreset(index);
+    setQuery(EXTRACTION_PRESETS[index].query);
+  }
+
   if (paperQuery.isLoading) return <div className="flex min-h-[420px] items-center justify-center text-sm text-slate-400">加载中</div>;
   if (!paper) return <Alert variant="destructive"><AlertDescription>论文不存在</AlertDescription></Alert>;
 
@@ -90,6 +98,23 @@ export function PaperExtractionTaskPage() {
             <BarChart3 className="h-4 w-4" />
             提取任务
           </div>
+
+          <div className="mb-3">
+            <p className="mb-2 text-xs text-slate-500">选择提取模板，或直接编辑下方指令</p>
+            <div className="flex flex-wrap gap-1.5">
+              {EXTRACTION_PRESETS.map((preset, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => selectPreset(i)}
+                  className={`rounded-lg px-2.5 py-1.5 text-xs transition ${activePreset === i ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {!canExtractPaper(paper) ? (
             <Alert className="mb-4 rounded-xl">
               <AlertDescription>当前论文还没有可提取的正文、图片或表格，请先完成解析。</AlertDescription>
@@ -102,15 +127,22 @@ export function PaperExtractionTaskPage() {
           ) : null}
           <textarea
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => { setQuery(event.target.value); setActivePreset(-1); }}
+            placeholder="描述你想从这篇论文中提取的具体信息..."
             className="min-h-36 w-full rounded-xl border border-slate-200 p-3 text-sm leading-6 outline-none transition focus:ring-2 focus:ring-slate-200"
           />
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-            <p className="text-xs text-slate-500">{query.trim().length}/2000</p>
-            <Button type="button" className="rounded-xl" onClick={() => runMutation.mutate()} disabled={!canStart}>
-              {runMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-              开始提取
-            </Button>
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-3.5 w-3.5 text-slate-400" />
+              <p className="text-xs text-slate-400">AI 将根据指令规划提取指标，分析图表和正文</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <p className="text-xs text-slate-500">{query.trim().length}/2000</p>
+              <Button type="button" className="rounded-xl" onClick={() => runMutation.mutate()} disabled={!canStart}>
+                {runMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                开始提取
+              </Button>
+            </div>
           </div>
         </section>
 
@@ -131,7 +163,7 @@ export function PaperExtractionTaskPage() {
               </div>
               {currentJob.status === "failed" && currentJob.error_message ? (
                 <Alert variant="destructive" className="rounded-xl">
-                  <AlertDescription>{currentJob.error_message}</AlertDescription>
+                  <AlertDescription className="text-xs">{currentJob.error_message}</AlertDescription>
                 </Alert>
               ) : null}
               {currentJob.status === "failed" ? (
@@ -161,7 +193,7 @@ export function PaperExtractionTaskPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <ExtractionStatusBadge status={job.status} />
                   <span className="text-xs text-slate-400">#{job.id} · {formatChinaDateTime(job.created_at)}</span>
-                  <span className="text-xs text-slate-400">{job.result_count} 条结果</span>
+                  <Badge variant="outline" className="text-[10px]">{job.result_count} 条</Badge>
                 </div>
                 <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-700">{job.query}</p>
                 {job.status === "failed" && job.error_message ? <p className="mt-1 line-clamp-2 text-xs text-red-600">{job.error_message}</p> : null}

@@ -4,6 +4,17 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class TableInfo:
+    table_id: str
+    label: str
+    page_number: int | None
+    headers: list[str]
+    row_count: int
+    markdown: str
+    caption: str = ""
+
+
+@dataclass
 class FigureInfo:
     figure_id: str
     image_path: str
@@ -39,6 +50,7 @@ class PaperData:
     title: str
     content: str
     figures: list[FigureInfo] = field(default_factory=list)
+    tables: list[TableInfo] = field(default_factory=list)
 
 
 @dataclass

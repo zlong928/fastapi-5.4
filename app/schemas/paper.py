@@ -75,6 +75,11 @@ class ExtractionResultRead(BaseModel):
     bbox: Optional[list[float]] = None
     caption: Optional[str] = None
     source: Optional[str] = None
+    figure_id: Optional[str] = None
+    notes: Optional[str] = None
+    structured_data: Optional[str] = None
+    parse_status: Optional[str] = None
+    extraction_mode: Optional[str] = None
     created_at: datetime
 
     class Config:

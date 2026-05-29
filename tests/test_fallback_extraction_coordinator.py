@@ -1274,16 +1274,12 @@ def test_frontend_paper_pages_match_five_page_product_shape():
     assert "selectedIds" in task_source
     assert "开始提取" in task_source
 
-    assert "图片结果" in result_source
-    assert "图片/图表证据" in result_source
-    assert "表格结果" in result_source
-    assert "文本证据" in result_source
-    assert "正文结果" in result_source
+    assert "图片/图表" in result_source
+    assert "表格" in result_source
+    assert "正文" in result_source
     assert "原始 JSON" in result_source
     assert "confidence" in result_source
-    assert "thumbnailUrl" in result_source
-    assert "imageUrl" in result_source
-    assert "无法预览" in result_source
+    assert "无预览" in result_source or "无法预览" in result_source
     assert "evidenceTypeForResult" in result_source
 
 

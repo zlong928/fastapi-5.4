@@ -48,6 +48,12 @@ class ExtractionResult(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     evidence: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    figure_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    caption: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    structured_data: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parse_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    extraction_mode: Mapped[str | None] = mapped_column(String(60), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: app_now(), nullable=False)
 
     job: Mapped[ExtractionJob] = relationship("ExtractionJob", back_populates="results")

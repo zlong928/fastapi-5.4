@@ -291,15 +291,6 @@ class FigureExtractor:
                 return 2
         return None
 
-    def _should_create_page_visual_snapshot(
-        self,
-        page: fitz.Page,
-        caption_candidates: list[tuple[str, str]],
-        visual_rects: list[fitz.Rect],
-        has_existing_asset: bool,
-    ) -> bool:
-        return self._page_visual_snapshot_priority(page, caption_candidates, visual_rects, has_existing_asset) is not None
-
     def _snapshot_asset(self, source_path: Path, paper: Document) -> DocumentAsset:
         asset_dir = self._asset_dir(paper)
         image_path = asset_dir / "page-1-snapshot.png"
