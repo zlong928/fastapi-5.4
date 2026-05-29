@@ -184,29 +184,7 @@ class OpenAIExtractionCoordinator(FallbackExtractionCoordinator):
 
     def _chat_json(self, messages: list[dict], *, phase: str) -> dict:
         request_body = {"model": self.model, "messages": messages, "temperature": 0.1, "response_format": {"type": "json_object"}}
-        try:
-            content = self._stream_chat_content({**request_body, "stream": True}, phase=phase)
-            return self._parse_json_content(content)
-        except Exception:
-            pass
-
-        response = self._post_chat(request_body)
-        if response.status_code == 400 and "response_format" in response.text:
-            request_body.pop("response_format", None)
-            response = self._post_chat(request_body)
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            body = exc.response.text[:500] if exc.response is not None else ""
-            raise RuntimeError(f"模型调用失败 phase={phase} model={self.model}: HTTP {exc.response.status_code if exc.response else 'unknown'} {body}") from exc
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            content_type = response.headers.get("content-type", "")
-            body = response.text[:300]
-            raise RuntimeError(f"模型网关返回非 JSON 响应 phase={phase} model={self.model} content_type={content_type}: {body}") from exc
-        self._merge_usage(phase, payload.get("usage") or {})
-        content = payload["choices"][0]["message"]["content"]
+        content = self._stream_chat_content({**request_body, "stream": True}, phase=phase)
         return self._parse_json_content(content)
 
     def _stream_chat_content(self, body: dict, *, phase: str) -> str:
@@ -253,33 +231,6 @@ class OpenAIExtractionCoordinator(FallbackExtractionCoordinator):
                 last_error = exc
                 continue
         raise RuntimeError(f"模型流式调用失败 phase={phase} model={self.model}: {last_error}")
-
-    def _post_chat(self, body: dict) -> httpx.Response:
-        last_response: httpx.Response | None = None
-        last_error: Exception | None = None
-        for attempt in range(3):
-            for url in self._chat_urls():
-                try:
-                    response = httpx.post(
-                        url,
-                        headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-                        json=body,
-                        timeout=self.timeout,
-                    )
-                except httpx.HTTPError as exc:
-                    last_error = exc
-                    continue
-                last_response = response
-                content_type = response.headers.get("content-type", "")
-                if response.status_code < 400 and "application/json" in content_type:
-                    return response
-                if response.status_code not in {200, 404, 405, 429, 500, 502, 503, 504}:
-                    return response
-            if attempt < 2:
-                time.sleep(0.8 * (attempt + 1))
-        if last_response is None:
-            raise RuntimeError(f"模型网关连接失败: {last_error}")
-        return last_response
 
     def _chat_urls(self) -> list[str]:
         base = self.base_url.rstrip("/")

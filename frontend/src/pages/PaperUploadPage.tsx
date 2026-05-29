@@ -4,7 +4,9 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { uploadDocument } from "@/lib/api";
+import { getToken, uploadDocument } from "@/lib/api";
+
+const MAX_PDF_SIZE_BYTES = 100 * 1024 * 1024;
 
 function fileSizeLabel(size: number) {
   if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
@@ -46,8 +48,16 @@ export function PaperUploadPage() {
       setError("请选择 PDF 文件");
       return;
     }
+    if (!getToken()) {
+      setError("请先登录后再上传论文。");
+      return;
+    }
     if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
       setError("仅支持 PDF 文件");
+      return;
+    }
+    if (file.size > MAX_PDF_SIZE_BYTES) {
+      setError(`文件过大，当前前端限制为 ${fileSizeLabel(MAX_PDF_SIZE_BYTES)}。`);
       return;
     }
     uploadMutation.mutate(file);

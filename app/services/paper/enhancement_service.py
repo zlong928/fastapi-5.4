@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.time import app_now
 from app.models import Document, DocumentAsset, DocumentEvent, PaperTable
 from app.services.file_storage import FileStorageService
+from app.services.paper.asset_understanding_service import AssetUnderstandingService
 from app.services.paper.figure_extractor import FigureExtractor
 from app.services.paper.table_extractor import TableExtractor
 from app.services.paper.text_extractor import TextExtractor
@@ -28,6 +29,7 @@ class PaperEnhancementService:
         self.text_extractor = text_extractor or TextExtractor()
         self.figure_extractor = figure_extractor or FigureExtractor(self.file_storage)
         self.table_extractor = table_extractor or TableExtractor()
+        self.asset_understanding = AssetUnderstandingService()
 
     def parse(self, paper: Document) -> Document:
         return self.enhance(paper)
@@ -67,9 +69,12 @@ class PaperEnhancementService:
                 paper.cleaned_text = paper.parsed_text
 
             for asset in figure_report.assets:
+                self.asset_understanding.understand(asset)
                 self.db.add(asset)
-            for table in table_report.tables:
-                self.db.add(table)
+            table_assets = [self._table_asset_from_legacy_table(table, index) for index, table in enumerate(table_report.tables)]
+            for asset in table_assets:
+                self.asset_understanding.understand(asset)
+                self.db.add(asset)
 
             paper.parsed_at = paper.parsed_at or app_now()
             paper.updated_at = app_now()
@@ -77,7 +82,7 @@ class PaperEnhancementService:
                 "figure_count": figure_report.figure_count,
                 "snapshot_count": figure_report.snapshot_count,
                 "figure_status": figure_report.status,
-                "table_count": len(table_report.tables),
+                "table_count": len(table_assets),
                 "table_status": table_report.status,
                 "table_source": table_report.source,
             }
@@ -89,7 +94,7 @@ class PaperEnhancementService:
                     paper,
                     "paper_tables_fallback",
                     table_report.message,
-                    {"table_count": len(table_report.tables), "table_status": table_report.status, "table_source": table_report.source},
+                    {"table_count": len(table_assets), "table_status": table_report.status, "table_source": table_report.source},
                 )
             self.db.commit()
             self.db.refresh(paper)
@@ -111,9 +116,28 @@ class PaperEnhancementService:
     def _delete_previous_enhancement(self, paper: Document) -> None:
         self.db.query(DocumentAsset).filter(
             DocumentAsset.document_id == paper.id,
-            DocumentAsset.asset_type.in_(["figure", "page_snapshot"]),
+            DocumentAsset.asset_type.in_(["table", "figure", "page_snapshot"]),
         ).delete(synchronize_session=False)
         self.db.query(PaperTable).filter(PaperTable.paper_id == paper.id).delete(synchronize_session=False)
+
+    def _table_asset_from_legacy_table(self, table: PaperTable, index: int) -> DocumentAsset:
+        metadata = {
+            "source": "paper_table_intermediate",
+            "legacy_table_id": table.id,
+            "table_label": table.table_label,
+        }
+        return DocumentAsset(
+            document_id=table.paper_id,
+            asset_type="table",
+            asset_index=index,
+            label=table.table_label,
+            caption=table.table_label,
+            page_number=table.page,
+            markdown=table.content,
+            text_content=table.content,
+            mime_type="text/markdown",
+            metadata_json=json.dumps(metadata, ensure_ascii=False),
+        )
 
     def _log_event(self, paper: Document, event_type: str, message: str, metadata: dict | None = None) -> None:
         self.db.add(

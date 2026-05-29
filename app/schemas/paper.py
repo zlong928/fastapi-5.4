@@ -16,6 +16,10 @@ class PaperListItem(BaseModel):
     id: int
     title: str
     status: str
+    parse_error: Optional[str] = None
+    progress_label: str = "等待"
+    asset_counts: dict[str, int] = Field(default_factory=dict)
+    uploaded_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -30,6 +34,12 @@ class PaperFigureRead(BaseModel):
     page: Optional[int] = None
     source: Optional[str] = None
     fallback: bool = False
+    visual_role: Optional[str] = None
+    evidence_type: str = "unknown"
+    image_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    bbox: Optional[list[float]] = None
+    confidence: Optional[float] = None
     notes: Optional[str] = None
     created_at: datetime
 
@@ -58,6 +68,13 @@ class ExtractionResultRead(BaseModel):
     content: str
     evidence: str
     confidence: Optional[float] = None
+    evidence_type: str = "unknown"
+    image_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    page: Optional[int] = None
+    bbox: Optional[list[float]] = None
+    caption: Optional[str] = None
+    source: Optional[str] = None
     created_at: datetime
 
     class Config:
@@ -88,6 +105,28 @@ class ExtractionJobListItem(BaseModel):
     created_at: datetime
     updated_at: datetime
     result_count: int = 0
+
+
+class PaperAskRequest(BaseModel):
+    document_ids: list[int] = Field(min_length=1, max_length=20)
+    question: str = Field(min_length=1, max_length=2000)
+
+
+class PaperAskEvidence(BaseModel):
+    document_id: int
+    source_type: str
+    source_id: int
+    asset_type: Optional[str] = None
+    asset_id: Optional[int] = None
+    label: Optional[str] = None
+    page_number: Optional[int] = None
+    reason: str
+
+
+class PaperAskResponse(BaseModel):
+    answer: str
+    evidence: list[PaperAskEvidence] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
 
 
 class PaperDetailResponse(BaseModel):

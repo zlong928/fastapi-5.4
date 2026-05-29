@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import json
 
-from app.models import DocumentAsset, ExtractionResult, PaperTable
+from app.models import DocumentAsset, ExtractionResult
 
 
 CONFIDENCE_MAP = {"high": 0.85, "medium": 0.65, "low": 0.4}
 
 
 class AgentResultMapper:
-    def map_results(self, *, job_id: int, final_results: dict, figures: list[DocumentAsset], tables: list[PaperTable]) -> list[ExtractionResult]:
+    def map_results(self, *, job_id: int, final_results: dict, figures: list[DocumentAsset], tables: list[DocumentAsset]) -> list[ExtractionResult]:
         rows: list[ExtractionResult] = []
         figure_ids = self._figure_ids(figures)
 
@@ -29,7 +29,7 @@ class AgentResultMapper:
                 rows.append(
                     ExtractionResult(
                         job_id=job_id,
-                        source_type="figure",
+                        source_type="asset",
                         source_id=figure_db_id,
                         field_name=str(extraction.get("metric") or "unknown"),
                         content=content or "未在当前图片解析内容中找到明确证据",
@@ -69,15 +69,15 @@ class AgentResultMapper:
             out[str(figure.id)] = figure.id
         return out
 
-    def _detect_table_source(self, metric: str, value: str, evidence: str, tables: list[PaperTable]) -> tuple[str, int | None]:
+    def _detect_table_source(self, metric: str, value: str, evidence: str, tables: list[DocumentAsset]) -> tuple[str, int | None]:
         for table in tables:
-            content = table.content or ""
+            content = table.markdown or table.text_content or table.ocr_text or ""
             for candidate in (evidence, value):
                 snippet = self._long_snippet(candidate)
                 if snippet and snippet in content:
-                    return "table", table.id
+                    return "asset", table.id
             if metric and metric.lower() in content.lower():
-                return "table", table.id
+                return "asset", table.id
         return "text", None
 
     def _long_snippet(self, text: str) -> str:

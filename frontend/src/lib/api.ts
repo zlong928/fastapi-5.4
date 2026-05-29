@@ -13,6 +13,8 @@ import {
   CollectionRead,
   DashboardStatsResponse,
   DocumentBatchUploadItem,
+  DocumentAsset,
+  DocumentClaim,
   DocumentChunk,
   DocumentKgResponse,
   DocumentListParams,
@@ -30,6 +32,7 @@ import {
   PaginatedTasksResponse,
   PaginatedDocumentEvents,
   PaperDetail,
+  PaperAskResponse,
   PaperListItem,
   PaperUploadResponse,
   PasswordForgotRequest,
@@ -274,6 +277,14 @@ export function searchDocumentChunks(query: string, limit: number = 20, document
 export function reEmbedDocument(documentId: number): Promise<{ document_id: number; chunks_embedded: number; message: string }> { return request<{ document_id: number; chunks_embedded: number; message: string }>(`/documents/${documentId}/re-embed`, { method: "POST" }); }
 export function reEmbedAllDocuments(): Promise<{ user_id: number; documents_processed: number; chunks_embedded: number }> { return request<{ user_id: number; documents_processed: number; chunks_embedded: number }>("/documents/re-embed-all", { method: "POST" }); }
 export function getDocumentChunks(documentId: number): Promise<DocumentChunk[]> { return request<DocumentChunk[]>(`/documents/${documentId}/chunks`); }
+export function getDocumentAssets(documentId: number, assetType?: string): Promise<DocumentAsset[]> {
+  const query = assetType ? `?asset_type=${encodeURIComponent(assetType)}` : "";
+  return request<DocumentAsset[]>(`/documents/${documentId}/assets${query}`);
+}
+export function getDocumentClaims(documentId: number): Promise<DocumentClaim[]> { return request<DocumentClaim[]>(`/documents/${documentId}/claims`); }
+export function askPapers(documentIds: number[], question: string): Promise<PaperAskResponse> {
+  return request<PaperAskResponse>("/papers/ask", { method: "POST", body: JSON.stringify({ document_ids: documentIds, question }) });
+}
 export function retryDocumentParse(documentId: number): Promise<DocumentRead> { return request<DocumentRead>(`/documents/${documentId}/retry`, { method: "POST" }); }
 export function deleteDocument(documentId: number): Promise<MessageResponse> { return request<MessageResponse>(`/documents/${documentId}`, { method: "DELETE" }); }
 export function updateDocument(documentId: number, payload: { title?: string; collection_name?: string | null }): Promise<DocumentRead> { return request<DocumentRead>(`/documents/${documentId}`, { method: "PATCH", body: JSON.stringify(payload) }); }

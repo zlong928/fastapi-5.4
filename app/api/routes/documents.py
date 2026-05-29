@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.models import Document, DocumentChunk, DocumentEvent, JobRun, KgEntity, KgRelation, User
+from app.models import Document, DocumentAsset, DocumentChunk, DocumentClaim, DocumentEvent, JobRun, KgEntity, KgRelation, User
 from app.schemas.document import (
     BatchDeleteRequest,
     BatchDeleteResponse,
@@ -17,7 +17,9 @@ from app.schemas.document import (
     BookmarkCreateResponse,
     ChunkSearchHit,
     ChunkSearchResponse,
+    DocumentAssetRead,
     DocumentBatchUploadItem,
+    DocumentClaimRead,
     DocumentChunkRead,
     DocumentDetailResponse,
     DocumentEventRead,
@@ -38,9 +40,11 @@ from app.services.document_service import DONE_STATUSES, DocumentService
 from app.services.document_search_service import DocumentSearchService
 from app.services.document_upload_service import DocumentUploadService, DuplicateUploadError
 from app.services.job_run_service import JobRunService
+from app.services.paper.evidence import asset_image_url, asset_metadata, normalize_evidence_type
 from app.utils.json import json_loads_object_or_none
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+asset_router = APIRouter(tags=["document-assets"])
 SOURCE_TYPE_PATTERN = "^(pdf|markdown|txt|image|docx|epub|bookmark|note|diary)$"
 
 
@@ -63,14 +67,82 @@ def serialize_latest_parse_job(job_run: JobRun | None) -> ParseJobRead | None:
     return ParseJobRead(id=job_run.id, job_id=job_run.job_id, document_id=job_run.document_id or 0, user_id=job_run.user_id, status=job_run.status, job_type=str(metadata.get("job_type") or job_run.kind), metadata_json=job_run.metadata_json, error_message=job_run.error_message, started_at=job_run.started_at, finished_at=job_run.finished_at, created_at=job_run.created_at, updated_at=job_run.updated_at)
 
 
+def _json_object(value: str | None) -> dict:
+    parsed = json_loads_object_or_none(value)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _asset_counts(document: Document) -> dict[str, int]:
+    counts = {"table": 0, "figure": 0, "page_snapshot": 0}
+    for asset in document.assets:
+        if asset.asset_type in counts:
+            counts[asset.asset_type] += 1
+    return counts
+
+
+def _evidence_counts(document: Document) -> dict[str, int]:
+    asset_counts = _asset_counts(document)
+    return {
+        "chunks": len(document.document_chunks),
+        "tables": asset_counts["table"],
+        "figures": asset_counts["figure"],
+        "page_snapshots": asset_counts["page_snapshot"],
+        "claims": len(document.claims),
+    }
+
+
 def serialize_document_detail(document: Document, latest_parse_job=None) -> DocumentDetailResponse:
     events = sorted(document.events, key=lambda event: event.created_at)
     tags = [TagRead.model_validate(link.tag) for link in document.tag_links]
-    return DocumentDetailResponse(id=document.id, user_id=document.user_id, title=document.title, original_filename=document.original_filename, source_type=document.source_type, source_url=document.source_url, site_name=document.site_name, processing_mode=document.processing_mode, processing_strategy=document.processing_strategy, status=document.status, processing_status=document.status, file_size=document.file_size, mime_type=document.mime_type, parsed_text=document.parsed_text, cleaned_text=document.cleaned_text, parse_quality_json=document.parse_quality_json, references_text=document.references_text, collection_name=document.collection_name, content_hash=document.content_hash, content_summary=document.content_summary, chunk_count=document.chunk_count, error_message=document.error_message, fail_reason=document.fail_reason, processing_error=document.fail_reason or document.error_message, created_at=document.created_at, updated_at=document.updated_at, uploaded_at=document.uploaded_at, parsed_at=document.parsed_at, latest_parse_job=serialize_latest_parse_job(latest_parse_job), events=[DocumentEventRead.model_validate(event) for event in events], tags=tags)
+    return DocumentDetailResponse(id=document.id, user_id=document.user_id, title=document.title, original_filename=document.original_filename, source_type=document.source_type, source_url=document.source_url, site_name=document.site_name, processing_mode=document.processing_mode, processing_strategy=document.processing_strategy, status=document.status, processing_status=document.status, file_size=document.file_size, mime_type=document.mime_type, parsed_text=document.parsed_text, cleaned_text=document.cleaned_text, parse_quality_json=document.parse_quality_json, references_text=document.references_text, collection_name=document.collection_name, content_hash=document.content_hash, content_summary=document.content_summary, chunk_count=document.chunk_count, page_count=document.page_count, metadata=_json_object(document.metadata_json), evidence_counts=_evidence_counts(document), error_message=document.error_message, fail_reason=document.fail_reason, processing_error=document.fail_reason or document.error_message, created_at=document.created_at, updated_at=document.updated_at, uploaded_at=document.uploaded_at, parsed_at=document.parsed_at, latest_parse_job=serialize_latest_parse_job(latest_parse_job), events=[DocumentEventRead.model_validate(event) for event in events], tags=tags)
 
 
 def serialize_document_list_item(document: Document, latest_job=None) -> dict:
-    return {"id": document.id, "title": document.title, "original_filename": document.original_filename, "source_type": document.source_type, "source_url": document.source_url, "site_name": document.site_name, "processing_mode": document.processing_mode, "processing_strategy": document.processing_strategy, "status": document.status, "processing_status": document.status, "file_size": document.file_size, "error_message": document.error_message, "fail_reason": document.fail_reason, "processing_error": document.fail_reason or document.error_message, "latest_parse_job_status": latest_job.status if latest_job else None, "collection_name": document.collection_name, "content_hash": document.content_hash, "content_summary": document.content_summary, "chunk_count": document.chunk_count, "created_at": document.created_at, "updated_at": document.updated_at, "uploaded_at": document.uploaded_at, "parsed_at": document.parsed_at, "tags": [TagRead.model_validate(link.tag) for link in document.tag_links]}
+    return {"id": document.id, "title": document.title, "original_filename": document.original_filename, "source_type": document.source_type, "source_url": document.source_url, "site_name": document.site_name, "processing_mode": document.processing_mode, "processing_strategy": document.processing_strategy, "status": document.status, "processing_status": document.status, "file_size": document.file_size, "error_message": document.error_message, "fail_reason": document.fail_reason, "processing_error": document.fail_reason or document.error_message, "latest_parse_job_status": latest_job.status if latest_job else None, "collection_name": document.collection_name, "content_hash": document.content_hash, "content_summary": document.content_summary, "chunk_count": document.chunk_count, "page_count": document.page_count, "asset_counts": _asset_counts(document), "claim_count": len(document.claims), "created_at": document.created_at, "updated_at": document.updated_at, "uploaded_at": document.uploaded_at, "parsed_at": document.parsed_at, "tags": [TagRead.model_validate(link.tag) for link in document.tag_links]}
+
+
+def serialize_document_asset(asset: DocumentAsset) -> DocumentAssetRead:
+    metadata = asset_metadata(asset)
+    evidence_type = normalize_evidence_type(asset=asset, metadata=metadata)
+    metadata = {**metadata, "evidence_type": evidence_type, "evidenceType": evidence_type}
+    image_url = asset_image_url(asset)
+    if image_url:
+        metadata.setdefault("imageUrl", image_url)
+        metadata.setdefault("thumbnailUrl", image_url)
+    return DocumentAssetRead(
+        id=asset.id,
+        document_id=asset.document_id,
+        parse_job_id=asset.parse_job_id,
+        asset_type=asset.asset_type,
+        asset_index=asset.asset_index,
+        label=asset.label,
+        caption=asset.caption,
+        page_number=asset.page_number,
+        file_path=asset.file_path,
+        mime_type=asset.mime_type,
+        ocr_text=asset.ocr_text,
+        markdown=asset.markdown,
+        text_content=asset.text_content,
+        summary=asset.summary,
+        metadata=metadata,
+        created_at=asset.created_at,
+    )
+
+
+def serialize_document_claim(claim: DocumentClaim) -> DocumentClaimRead:
+    return DocumentClaimRead(
+        id=claim.id,
+        document_id=claim.document_id,
+        claim_text=claim.claim_text,
+        claim_type=claim.claim_type,
+        source_type=claim.source_type,
+        source_id=claim.source_id,
+        page_number=claim.page_number,
+        evidence_text=claim.evidence_text,
+        confidence=claim.confidence,
+        metadata=_json_object(claim.metadata_json),
+        created_at=claim.created_at,
+    )
 
 
 @router.post("/bookmarks", response_model=BookmarkCreateResponse, status_code=status.HTTP_201_CREATED)
@@ -354,6 +426,55 @@ async def get_document_chunks(document_id: int, current_user: User = Depends(get
     assert_document_owner(document, current_user)
     chunks = db.query(DocumentChunk).filter(DocumentChunk.document_id == document.id).order_by(DocumentChunk.chunk_index).all()
     return [DocumentChunkRead.model_validate(chunk) for chunk in chunks]
+
+
+@router.get("/{document_id}/assets", response_model=list[DocumentAssetRead])
+async def get_document_assets(
+    document_id: int,
+    asset_type: str | None = Query(None, pattern="^(table|figure|page_snapshot|equation|unknown)$"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[DocumentAssetRead]:
+    document = DocumentService(db).get_document_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    assert_document_owner(document, current_user)
+    query = db.query(DocumentAsset).filter(DocumentAsset.document_id == document.id)
+    if asset_type:
+        query = query.filter(DocumentAsset.asset_type == asset_type)
+    assets = query.order_by(DocumentAsset.asset_index.asc().nullslast(), DocumentAsset.created_at.asc(), DocumentAsset.id.asc()).all()
+    return [serialize_document_asset(asset) for asset in assets]
+
+
+@router.get("/{document_id}/claims", response_model=list[DocumentClaimRead])
+async def get_document_claims(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[DocumentClaimRead]:
+    document = DocumentService(db).get_document_by_id(document_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    assert_document_owner(document, current_user)
+    claims = (
+        db.query(DocumentClaim)
+        .filter(DocumentClaim.document_id == document.id)
+        .order_by(DocumentClaim.page_number.asc().nullslast(), DocumentClaim.created_at.asc(), DocumentClaim.id.asc())
+        .all()
+    )
+    return [serialize_document_claim(claim) for claim in claims]
+
+
+@asset_router.get("/assets/{asset_id}", response_model=DocumentAssetRead)
+async def get_asset_detail(asset_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DocumentAssetRead:
+    asset = db.get(DocumentAsset, asset_id)
+    if asset is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found.")
+    document = DocumentService(db).get_document_by_id(asset.document_id)
+    if not document or document.status == "deleted":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found.")
+    assert_document_owner(document, current_user)
+    return serialize_document_asset(asset)
 
 
 @router.get(

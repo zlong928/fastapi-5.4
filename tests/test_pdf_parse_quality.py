@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db.session import Base
-from app.models import Document, DocumentChunk
+from app.models import Document, DocumentAsset, DocumentChunk, DocumentClaim, DocumentEvent
 from app.models import User
 from app.services.document_parse_pipeline import DocumentParsePipeline
 from app.services import document_parser
@@ -295,6 +295,10 @@ def test_digital_pdf_page_chunks_with_pdf_text_metadata(db_session_factory, db, 
     assert metadata["bbox"] == [1, 2, 3, 4]
     assert metadata["ocr_used"] is False
     assert metadata["source_type"] == "pdf"
+    db.refresh(document)
+    quality = json.loads(document.parse_quality_json)
+    assert quality["docling_enabled"] is False
+    assert quality["docling_used"] is False
 
 
 def test_low_text_pdf_page_uses_per_page_ocr_fallback(db_session_factory, db, storage, user):
@@ -383,6 +387,51 @@ def test_table_element_is_written_as_table_chunk(db_session_factory, db, storage
     assert metadata["row_count"] == 2
     assert metadata["column_count"] == 2
     assert quality["table_count"] == 1
+
+
+def test_pdf_parse_writes_table_assets_and_claims_for_evidence_system(db_session_factory, db, storage, user):
+    document = create_pdf_document(db, storage, user)
+    parsed_document = parsed_pdf(
+        [
+            ParsedPage(
+                page_number=1,
+                profile=profile(1, "Results. Method Alpha achieved 91% accuracy on the held-out test set."),
+                elements=[
+                    ParsedElement(
+                        element_type="paragraph",
+                        text="Results. Method Alpha achieved 91% accuracy on the held-out test set.",
+                        page_number=1,
+                        extractor="pymupdf",
+                        metadata={"source_type": "pdf", "section_title": "Results"},
+                    ),
+                    ParsedElement(
+                        element_type="table",
+                        text="| Method | Accuracy |\n| --- | --- |\n| Alpha | 91% |",
+                        page_number=2,
+                        extractor="table",
+                        metadata={"source_type": "pdf", "row_count": 2, "column_count": 2, "caption": "Main benchmark results"},
+                    ),
+                ],
+            )
+        ]
+    )
+
+    run_stubbed_pipeline(db_session_factory, storage, document, parsed_document, StubOcrService())
+
+    table_asset = db.query(DocumentAsset).filter_by(document_id=document.id, asset_type="table").one()
+    assert table_asset.label == "Table 1"
+    assert table_asset.caption == "Main benchmark results"
+    assert table_asset.page_number == 2
+    assert table_asset.markdown.startswith("| Method | Accuracy |")
+    assert table_asset.summary
+
+    claims = db.query(DocumentClaim).filter_by(document_id=document.id).order_by(DocumentClaim.id).all()
+    assert any("91% accuracy" in claim.claim_text for claim in claims)
+    assert any(claim.source_type == "table" and claim.source_id == table_asset.id for claim in claims)
+
+    event_types = [event.event_type for event in db.query(DocumentEvent).filter_by(document_id=document.id).all()]
+    assert "asset_summary_finished" in event_types
+    assert "claim_extraction_finished" in event_types
 
 
 def test_ocr_failure_records_warning_without_silent_loss(db_session_factory, db, storage, user):

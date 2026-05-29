@@ -153,6 +153,9 @@ class DocumentListItem(BaseModel):
     content_hash: Optional[str] = None
     content_summary: Optional[str] = None
     chunk_count: int = 0
+    page_count: Optional[int] = None
+    asset_counts: dict[str, int] = Field(default_factory=dict)
+    claim_count: int = 0
     created_at: datetime
     updated_at: datetime
     uploaded_at: datetime
@@ -253,6 +256,39 @@ class DocumentChunkRead(BaseModel):
         from_attributes = True
 
 
+class DocumentAssetRead(BaseModel):
+    id: int
+    document_id: int
+    parse_job_id: Optional[int] = None
+    asset_type: str
+    asset_index: Optional[int] = None
+    label: Optional[str] = None
+    caption: Optional[str] = None
+    page_number: Optional[int] = None
+    file_path: Optional[str] = None
+    mime_type: Optional[str] = None
+    ocr_text: Optional[str] = None
+    markdown: Optional[str] = None
+    text_content: Optional[str] = None
+    summary: Optional[str] = None
+    metadata: dict = Field(default_factory=dict)
+    created_at: datetime
+
+
+class DocumentClaimRead(BaseModel):
+    id: int
+    document_id: int
+    claim_text: str
+    claim_type: str
+    source_type: str
+    source_id: Optional[int] = None
+    page_number: Optional[int] = None
+    evidence_text: str
+    confidence: str
+    metadata: dict = Field(default_factory=dict)
+    created_at: datetime
+
+
 class DocumentListResponse(BaseModel):
     """文档列表响应模式。"""
     total: int
@@ -284,6 +320,9 @@ class DocumentDetailResponse(BaseModel):
     content_hash: Optional[str] = None
     content_summary: Optional[str] = None
     chunk_count: int = 0
+    page_count: Optional[int] = None
+    metadata: dict = Field(default_factory=dict)
+    evidence_counts: dict[str, int] = Field(default_factory=dict)
     error_message: Optional[str] = None
     fail_reason: Optional[str] = None
     processing_error: Optional[str] = None

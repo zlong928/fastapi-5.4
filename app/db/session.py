@@ -2,7 +2,7 @@ from collections.abc import Generator
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from sqlalchemy import Column, String, create_engine, inspect
+from sqlalchemy import Column, Integer, String, Text, create_engine, inspect
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import DATABASE_URL
@@ -26,7 +26,7 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def create_db_and_tables() -> None:
-    from app.models import Book, BookProgress, Collection, Document, DocumentAsset, DocumentChunk, DocumentEvent, DocumentTag, ExtractionJob, ExtractionResult, FileCleanupJob, JobRun, KgEntity, KgRelation, OAuthAccount, PaperTable, ParseJob, Tag, Task, User  # noqa: F401
+    from app.models import Book, BookProgress, Collection, Document, DocumentAsset, DocumentChunk, DocumentClaim, DocumentEvent, DocumentTag, ExtractionJob, ExtractionResult, FileCleanupJob, JobRun, KgEntity, KgRelation, OAuthAccount, PaperTable, ParseJob, Tag, Task, User  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     ensure_sqlite_compat_columns()
@@ -47,6 +47,16 @@ def ensure_sqlite_compat_columns() -> None:
         pending_operations.append(("add_column", Column("source_url", String(2048), nullable=True)))
     if "site_name" not in columns:
         pending_operations.append(("add_column", Column("site_name", String(255), nullable=True)))
+    if "page_count" not in columns:
+        pending_operations.append(("add_column", Column("page_count", Integer(), nullable=True)))
+    if "metadata_json" not in columns:
+        pending_operations.append(("add_column", Column("metadata_json", Text(), nullable=True)))
+
+    if "document_assets" in inspector.get_table_names():
+        asset_columns = {column["name"] for column in inspector.get_columns("document_assets")}
+        for column_name in ["asset_index", "label", "caption", "markdown", "text_content", "summary"]:
+            if column_name not in asset_columns:
+                pending_operations.append(("add_asset_column", column_name))
 
     index_names = {index["name"] for index in inspector.get_indexes("documents")}
     if "ix_documents_site_name" not in index_names:
@@ -60,5 +70,9 @@ def ensure_sqlite_compat_columns() -> None:
         for operation_name, payload in pending_operations:
             if operation_name == "add_column":
                 operations.add_column("documents", payload)
+            elif operation_name == "add_asset_column":
+                column_name = str(payload)
+                column_type = Integer() if column_name == "asset_index" else String(120) if column_name == "label" else Text()
+                operations.add_column("document_assets", Column(column_name, column_type, nullable=True))
             elif operation_name == "create_site_name_index":
                 operations.create_index("ix_documents_site_name", "documents", ["site_name"], unique=False)

@@ -78,7 +78,7 @@ def select_parser_strategy(processing_mode: str | DocumentProcessingMode, detect
     source_type = detected_source_type.lower()
     if mode == DocumentProcessingMode.AUTO:
         if source_type == "pdf":
-            return ProcessingStrategy(name="pdf_text_with_ocr_fallback")
+            return ProcessingStrategy(name="pdf_text_with_ocr_fallback", preserve_structure=True)
         if source_type == "image":
             return ProcessingStrategy(name="image_ocr", used_ocr=True)
         if source_type in {"markdown", "md"}:
@@ -91,7 +91,7 @@ def select_parser_strategy(processing_mode: str | DocumentProcessingMode, detect
     if mode == DocumentProcessingMode.PLAIN_TEXT:
         return ProcessingStrategy(name="plain_text")
     if mode == DocumentProcessingMode.PDF_TEXT:
-        return ProcessingStrategy(name="pdf_text_with_ocr_fallback")
+        return ProcessingStrategy(name="pdf_text_with_ocr_fallback", preserve_structure=True)
     if mode == DocumentProcessingMode.SCANNED_PDF_OCR:
         return ProcessingStrategy(name="ocr_first_pdf", used_ocr=True, ocr_first=True)
     if mode == DocumentProcessingMode.IMAGE_OCR:

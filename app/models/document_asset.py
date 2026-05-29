@@ -21,10 +21,16 @@ class DocumentAsset(Base):
     document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"), index=True, nullable=False)
     parse_job_id: Mapped[Optional[int]] = mapped_column(ForeignKey("parse_jobs.id"), index=True, nullable=True)
     asset_type: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
+    asset_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    label: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    caption: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     page_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     file_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     mime_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     ocr_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    markdown: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    text_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

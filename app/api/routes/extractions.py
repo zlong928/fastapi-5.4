@@ -9,9 +9,10 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.time import app_now
 from app.db.session import SessionLocal, get_db
-from app.models import Document, DocumentAsset, DocumentEvent, ExtractionJob, ExtractionResult, PaperTable, User
-from app.schemas.paper import ExtractionJobListItem, ExtractionJobRead, ExtractionRunRequest
+from app.models import Document, DocumentAsset, DocumentEvent, ExtractionJob, ExtractionResult, User
+from app.schemas.paper import ExtractionJobListItem, ExtractionJobRead, ExtractionResultRead, ExtractionRunRequest
 from app.services.agent import AgentResultMapper, CoordinatorAdapter, PaperDataAdapter
+from app.services.paper.evidence import asset_bbox, asset_image_url, asset_metadata, is_visual_evidence, normalize_evidence_type
 
 router = APIRouter(prefix="/extractions", tags=["extractions"])
 logger = logging.getLogger(__name__)
@@ -37,15 +38,74 @@ def _job_or_404(db: Session, job_id: int, user: User) -> ExtractionJob:
     return job
 
 
-def _load_sources(db: Session, paper_id: int) -> tuple[list[DocumentAsset], list[PaperTable]]:
-    figures = (
+def _load_sources(db: Session, paper_id: int) -> tuple[list[DocumentAsset], list[DocumentAsset]]:
+    figure_candidates = (
         db.query(DocumentAsset)
         .filter(DocumentAsset.document_id == paper_id, DocumentAsset.asset_type.in_(["figure", "page_snapshot"]))
         .order_by(DocumentAsset.created_at.asc(), DocumentAsset.id.asc())
         .all()
     )
-    tables = db.query(PaperTable).filter(PaperTable.paper_id == paper_id).order_by(PaperTable.created_at.asc(), PaperTable.id.asc()).all()
+    figures = [asset for asset in figure_candidates if is_visual_evidence(asset)]
+    tables = (
+        db.query(DocumentAsset)
+        .filter(DocumentAsset.document_id == paper_id, DocumentAsset.asset_type == "table")
+        .order_by(DocumentAsset.asset_index.asc().nullslast(), DocumentAsset.created_at.asc(), DocumentAsset.id.asc())
+        .all()
+    )
     return figures, tables
+
+
+def _assets_by_id(db: Session, results: list[ExtractionResult]) -> dict[int, DocumentAsset]:
+    asset_ids = sorted({result.source_id for result in results if result.source_id is not None and result.source_type in {"asset", "figure", "table"}})
+    if not asset_ids:
+        return {}
+    assets = db.query(DocumentAsset).filter(DocumentAsset.id.in_(asset_ids)).all()
+    return {asset.id: asset for asset in assets}
+
+
+def _result_read(result: ExtractionResult, assets_by_id: dict[int, DocumentAsset]) -> ExtractionResultRead:
+    asset = assets_by_id.get(result.source_id) if result.source_id is not None else None
+    metadata = asset_metadata(asset)
+    evidence_type = normalize_evidence_type(source_type=result.source_type, asset=asset, metadata=metadata)
+    image_url = asset_image_url(asset)
+    caption = None
+    source = None
+    if asset is not None:
+        caption = asset.caption or str(metadata.get("caption") or metadata.get("figure_label") or metadata.get("table_label") or "") or None
+        source = str(metadata.get("source") or asset.asset_type) or None
+    return ExtractionResultRead(
+        id=result.id,
+        job_id=result.job_id,
+        source_type=result.source_type,
+        source_id=result.source_id,
+        field_name=result.field_name,
+        content=result.content,
+        evidence=result.evidence,
+        confidence=result.confidence,
+        evidence_type=evidence_type,
+        image_url=image_url,
+        thumbnail_url=image_url,
+        page=asset.page_number if asset is not None else None,
+        bbox=asset_bbox(metadata),
+        caption=caption,
+        source=source,
+        created_at=result.created_at,
+    )
+
+
+def _job_read(db: Session, job: ExtractionJob) -> ExtractionJobRead:
+    results = sorted(job.results, key=lambda result: result.id)
+    assets_by_id = _assets_by_id(db, results)
+    return ExtractionJobRead(
+        id=job.id,
+        paper_id=job.paper_id,
+        query=job.query,
+        status=job.status,
+        error_message=job.error_message,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+        results=[_result_read(result, assets_by_id) for result in results],
+    )
 
 
 def _log_event(db: Session, paper: Document, event_type: str, message: str, metadata: dict | None = None) -> None:
@@ -171,4 +231,4 @@ async def list_extractions(paper_id: int | None = Query(None, ge=1), current_use
 
 @router.get("/{job_id}", response_model=ExtractionJobRead)
 async def get_extraction(job_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> ExtractionJobRead:
-    return _job_or_404(db, job_id, current_user)
+    return _job_read(db, _job_or_404(db, job_id, current_user))

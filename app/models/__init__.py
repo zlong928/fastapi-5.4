@@ -3,6 +3,7 @@ from .collection import Collection
 from .document import Document
 from .document_asset import DocumentAsset
 from .document_chunk import DocumentChunk
+from .document_claim import DocumentClaim
 from .document_event import DocumentEvent
 from .file_cleanup_job import FileCleanupJob
 from .kg_entity import KgEntity
@@ -23,6 +24,7 @@ __all__ = [
     "Document",
     "DocumentAsset",
     "DocumentChunk",
+    "DocumentClaim",
     "DocumentEvent",
     "FileCleanupJob",
     "DocumentTag",

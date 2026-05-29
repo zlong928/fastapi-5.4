@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from app.models.document_event import DocumentEvent
     from app.models.document_asset import DocumentAsset
     from app.models.document_chunk import DocumentChunk
+    from app.models.document_claim import DocumentClaim
     from app.models.kg_entity import KgEntity
     from app.models.kg_relation import KgRelation
     from app.models.job_run import JobRun
@@ -57,6 +58,8 @@ class Document(Base):
     content_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     content_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    page_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    metadata_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # 状态管理
     status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False, index=True)
@@ -110,6 +113,11 @@ class Document(Base):
     )
     assets: Mapped[list[DocumentAsset]] = relationship(
         "DocumentAsset",
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )
+    claims: Mapped[list[DocumentClaim]] = relationship(
+        "DocumentClaim",
         back_populates="document",
         cascade="all, delete-orphan",
     )

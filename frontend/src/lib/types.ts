@@ -278,6 +278,9 @@ export interface DocumentRead {
   content_hash?: string | null;
   content_summary?: string | null;
   chunk_count: number;
+  page_count?: number | null;
+  metadata?: Record<string, unknown>;
+  evidence_counts?: Record<string, number>;
   events: DocumentEventRead[];
   tags: TagRead[];
 }
@@ -333,6 +336,9 @@ export interface DocumentListItem {
   content_hash?: string | null;
   content_summary?: string | null;
   chunk_count: number;
+  page_count?: number | null;
+  asset_counts?: Record<string, number>;
+  claim_count?: number;
   created_at: string;
   updated_at: string;
   uploaded_at: string;
@@ -438,6 +444,39 @@ export interface DocumentChunk {
   [key: string]: unknown;
 }
 
+export interface DocumentAsset {
+  id: number;
+  document_id: number;
+  parse_job_id?: number | null;
+  asset_type: "table" | "figure" | "page_snapshot" | "equation" | "unknown" | string;
+  asset_index?: number | null;
+  label?: string | null;
+  caption?: string | null;
+  page_number?: number | null;
+  file_path?: string | null;
+  mime_type?: string | null;
+  ocr_text?: string | null;
+  markdown?: string | null;
+  text_content?: string | null;
+  summary?: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface DocumentClaim {
+  id: number;
+  document_id: number;
+  claim_text: string;
+  claim_type: string;
+  source_type: "chunk" | "table" | "figure" | string;
+  source_id?: number | null;
+  page_number?: number | null;
+  evidence_text: string;
+  confidence: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface DocumentUploadResponse {
   document_id: number;
   status: DocumentStatus;
@@ -524,6 +563,10 @@ export interface PaperListItem {
   id: number;
   title: string;
   status: DocumentStatus;
+  parse_error?: string | null;
+  progress_label?: string;
+  asset_counts?: Record<string, number>;
+  uploaded_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -544,6 +587,7 @@ export interface PaperFigure {
   page?: number | null;
   source?: string | null;
   fallback: boolean;
+  visual_role?: string | null;
   notes?: string | null;
   created_at: string;
 }
@@ -563,12 +607,19 @@ export interface PaperTable {
 export interface ExtractionResult {
   id: number;
   job_id: number;
-  source_type: "text" | "figure" | "table" | string;
+  source_type: "text" | "asset" | "figure" | "table" | string;
   source_id?: number | null;
   field_name: string;
   content: string;
   evidence: string;
   confidence?: number | null;
+  evidence_type?: "text" | "table" | "figure" | "chart" | "equation" | "page_region" | "unknown" | string;
+  image_url?: string | null;
+  thumbnail_url?: string | null;
+  page?: number | null;
+  bbox?: number[] | null;
+  caption?: string | null;
+  source?: string | null;
   created_at: string;
 }
 
@@ -608,4 +659,21 @@ export interface PaperDetail {
   figures: PaperFigure[];
   tables: PaperTable[];
   latest_extraction_job?: ExtractionJob | null;
+}
+
+export interface PaperAskEvidence {
+  document_id: number;
+  source_type: string;
+  source_id: number;
+  asset_type?: string | null;
+  asset_id?: number | null;
+  label?: string | null;
+  page_number?: number | null;
+  reason: string;
+}
+
+export interface PaperAskResponse {
+  answer: string;
+  evidence: PaperAskEvidence[];
+  uncertainties: string[];
 }

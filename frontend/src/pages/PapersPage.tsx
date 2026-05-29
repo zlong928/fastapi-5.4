@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Eye, FileText, Loader2, Plus, Search } from "lucide-react";
+import { AlertCircle, Eye, FileText, Loader2, Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -73,7 +73,8 @@ export function PapersPage() {
               <tr>
                 <th className="px-4 py-3">标题</th>
                 <th className="px-4 py-3">状态</th>
-                <th className="hidden px-4 py-3 md:table-cell">创建时间</th>
+                <th className="hidden px-4 py-3 md:table-cell">上传时间</th>
+                <th className="hidden px-4 py-3 lg:table-cell">解析进度</th>
                 <th className="px-4 py-3 text-right">操作</th>
               </tr>
             </thead>
@@ -88,11 +89,25 @@ export function PapersPage() {
                       <div className="min-w-0">
                         <Link to={`/papers/${paper.id}`} className="line-clamp-2 font-medium text-slate-900 hover:text-slate-600">{paper.title}</Link>
                         <p className="mt-1 text-xs text-slate-400">更新：{formatChinaDateTime(paper.updated_at)}</p>
+                        {paper.parse_error ? (
+                          <p className="mt-2 inline-flex max-w-full items-center gap-1 rounded-md bg-red-50 px-2 py-1 text-xs text-red-700">
+                            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                            <span className="truncate">{paper.parse_error}</span>
+                          </p>
+                        ) : null}
                       </div>
                     </div>
                   </td>
                   <td className="px-4 py-3"><PaperStatusBadge status={paper.status} /></td>
-                  <td className="hidden px-4 py-3 text-slate-500 md:table-cell">{formatChinaDateTime(paper.created_at)}</td>
+                  <td className="hidden px-4 py-3 text-slate-500 md:table-cell">{formatChinaDateTime(paper.uploaded_at || paper.created_at)}</td>
+                  <td className="hidden px-4 py-3 text-slate-500 lg:table-cell">
+                    <div>{paper.progress_label || paperStatusLabel(paper.status)}</div>
+                    {paper.asset_counts ? (
+                      <div className="mt-1 text-xs text-slate-400">
+                        表 {paper.asset_counts.table ?? 0} · 图 {paper.asset_counts.figure ?? 0} · 截图 {paper.asset_counts.page_snapshot ?? 0}
+                      </div>
+                    ) : null}
+                  </td>
                   <td className="px-4 py-3 text-right">
                     <Button asChild size="sm" variant="outline" className="rounded-xl border-slate-200 shadow-none">
                       <Link to={`/papers/${paper.id}`}><Eye className="h-4 w-4" />详情</Link>
@@ -102,12 +117,12 @@ export function PapersPage() {
               ))}
               {!papersQuery.isLoading && !filteredPapers.length ? (
                 <tr>
-                  <td colSpan={4} className="px-4 py-12 text-center text-sm text-slate-400">暂无论文</td>
+                  <td colSpan={5} className="px-4 py-12 text-center text-sm text-slate-400">暂无论文</td>
                 </tr>
               ) : null}
               {papersQuery.isLoading ? (
                 <tr>
-                  <td colSpan={4} className="px-4 py-12 text-center text-sm text-slate-400">加载中</td>
+                  <td colSpan={5} className="px-4 py-12 text-center text-sm text-slate-400">加载中</td>
                 </tr>
               ) : null}
             </tbody>

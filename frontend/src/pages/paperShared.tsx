@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-import { DocumentStatus, ExtractionJob, ExtractionResult, PaperDetail } from "@/lib/types";
+import { DocumentStatus, ExtractionJob, ExtractionResult, PaperDetail, PaperListItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export const DEFAULT_EXTRACTION_QUERY = "提取材料组成、实验分组、关键指标和主要结论";
@@ -58,6 +58,13 @@ export function isExtractionBusy(status?: string) {
 export function canExtractPaper(paper?: PaperDetail | null) {
   if (!paper) return false;
   return paper.status === "done" || paper.status === "parsed" || paper.figures.length > 0 || paper.tables.length > 0 || Boolean(paper.text_content?.trim());
+}
+
+export function canExtractPaperListItem(paper?: PaperListItem | null) {
+  if (!paper) return false;
+  if (paper.status === "done" || paper.status === "parsed" || paper.status === "completed") return true;
+  const counts = paper.asset_counts ?? {};
+  return Boolean((counts.table ?? 0) || (counts.figure ?? 0) || (counts.page_snapshot ?? 0));
 }
 
 export function shouldPollPaper(paper?: PaperDetail | null) {

@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,6 +16,24 @@ from app.services.agent.paper_data_adapter import PaperDataAdapter
 from app.services.paper_demo_service import PaperDemoService
 from app.services.agent.fallback_agent import FallbackExtractionCoordinator
 from app.services.agent.types import FigureInfo, PaperData
+
+
+class _FakeStreamResponse:
+    def __init__(self, lines: list[str], content_type: str = "text/event-stream") -> None:
+        self.lines = lines
+        self.headers = {"content-type": content_type}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def iter_lines(self):
+        return iter(self.lines)
 
 
 @pytest.fixture()
@@ -93,6 +112,52 @@ def test_fallback_coordinator_aggregates_with_not_found_metrics_argument():
     assert "by_metric" in finish["results"]
 
 
+def test_openai_coordinator_uses_streaming_chat_only(monkeypatch):
+    from app.services.agent.openai_coordinator import OpenAIExtractionCoordinator
+
+    requests = []
+
+    def fake_stream(method, url, headers, json, timeout):
+        requests.append({"method": method, "url": url, "json": json, "timeout": timeout})
+        return _FakeStreamResponse(
+            [
+                'data: {"choices":[{"delta":{"content":"{\\"metrics\\":["}}]}',
+                'data: {"choices":[{"delta":{"content":"\\"materials\\"]}"}}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}',
+                "data: [DONE]",
+            ]
+        )
+
+    def fail_post(*args, **kwargs):
+        raise AssertionError("synchronous chat completion should not be used")
+
+    monkeypatch.setattr("app.services.agent.openai_coordinator.httpx.stream", fake_stream)
+    monkeypatch.setattr("app.services.agent.openai_coordinator.httpx.post", fail_post)
+
+    coordinator = OpenAIExtractionCoordinator({"base_url": "https://api.example.test/v1", "api_key": "test-key", "model": "test-model"})
+
+    assert coordinator._chat_json([{"role": "user", "content": "plan"}], phase="planning") == {"metrics": ["materials"]}
+    assert requests[0]["json"]["stream"] is True
+    assert coordinator.token_stats["planning"]["total_tokens"] == 5
+
+
+def test_openai_coordinator_does_not_fallback_to_sync_when_streaming_fails(monkeypatch):
+    from app.services.agent.openai_coordinator import OpenAIExtractionCoordinator
+
+    def fail_stream(*args, **kwargs):
+        raise RuntimeError("stream unavailable")
+
+    def fail_post(*args, **kwargs):
+        raise AssertionError("synchronous chat completion should not be used")
+
+    monkeypatch.setattr("app.services.agent.openai_coordinator.httpx.stream", fail_stream)
+    monkeypatch.setattr("app.services.agent.openai_coordinator.httpx.post", fail_post)
+
+    coordinator = OpenAIExtractionCoordinator({"base_url": "https://api.example.test/v1", "api_key": "test-key", "model": "test-model"})
+
+    with pytest.raises(RuntimeError, match="模型流式调用失败"):
+        coordinator._chat_json([{"role": "user", "content": "plan"}], phase="planning")
+
+
 def test_parse_generates_page_snapshot_when_pdf_has_no_figures(db, user, tmp_path, monkeypatch):
     fitz = pytest.importorskip("fitz")
     from app.core import config
@@ -140,13 +205,12 @@ def test_parse_generates_page_snapshot_when_pdf_has_no_figures(db, user, tmp_pat
     metadata = json.loads(snapshot.metadata_json)
     assert snapshot.page_number == 1
     assert snapshot.mime_type == "image/png"
-    assert metadata == {
-        "figure_label": "Page 1 Snapshot",
-        "caption": "Fallback page snapshot",
-        "source": "fallback_snapshot",
-        "fallback": True,
-        "context": "Generated because no extractable PDF figure was found",
-    }
+    assert metadata["figure_label"] == "Page 1 Snapshot"
+    assert metadata["caption"] == "Fallback page snapshot"
+    assert metadata["source"] == "fallback_snapshot"
+    assert metadata["fallback"] is True
+    assert metadata["visual_role"] == "page_evidence"
+    assert metadata["context"] == "Generated because no extractable PDF figure was found"
     assert (tmp_path / snapshot.file_path).exists()
     assert parsed.status == "done"
     assert parsed.error_message == "old extraction error"
@@ -156,13 +220,14 @@ def test_parse_generates_page_snapshot_when_pdf_has_no_figures(db, user, tmp_pat
     event_types = [event.event_type for event in events]
     assert "paper_enhancement_done" in event_types
     assert "paper_figures_partial" in event_types
-    assert "paper_tables_fallback" in event_types
+    assert "paper_tables_fallback" not in event_types
     done_event = next(event for event in events if event.event_type == "paper_enhancement_done")
     done_metadata = json.loads(done_event.event_metadata)
     assert done_metadata["figure_count"] == 0
     assert done_metadata["snapshot_count"] == 1
     assert done_metadata["figure_status"] == "partial"
-    assert done_metadata["table_status"] == "partial"
+    assert done_metadata["table_status"] == "failed"
+    assert done_metadata["table_source"] == "none"
 
 
 def test_parse_failure_records_event_without_document_lifecycle_mutation(db, user, tmp_path, monkeypatch):
@@ -219,8 +284,628 @@ def test_table_extractor_reports_fallback_candidate_when_pdfplumber_has_no_table
 
     assert report.status == "fallback"
     assert report.source == "fallback_candidate"
-    assert report.tables[0].table_label == "Table Candidate 1"
+    assert report.tables[0].table_label == "Table 1"
     assert report.tables[0].page == 3
+
+
+def test_table_extractor_rejects_inline_table_reference_as_fallback_candidate(tmp_path):
+    from app.services.paper.models import ParsedPage
+    from app.services.paper.table_extractor import TableExtractor
+
+    page_text = """
+    Table 1), and were spiked with tetracycline to simulate wastewater conditions.
+    The surrounding paragraph continues as ordinary body text with 2 ppm and 20 ppm values.
+    """
+
+    report = TableExtractor().extract(
+        paper_id=42,
+        source_path=tmp_path / "missing.pdf",
+        pages=[ParsedPage(page_number=6, text=page_text)],
+        existing_text=page_text,
+    )
+
+    assert report.tables == []
+    assert report.status == "failed"
+    assert report.source == "none"
+
+
+def test_table_extractor_rejects_first_page_metadata_as_fake_table(tmp_path):
+    from app.services.paper.models import ParsedPage
+    from app.services.paper.table_extractor import TableExtractor
+
+    page_text = """
+    Nature Communications | (2026) 17:1234
+    Received: 12 July 2025
+    Accepted: 3 February 2026
+    Check for updates
+    DOI: 10.1038/s41467-026-12345-6
+    Author information
+    Affiliations
+    1 Department of Chemical Engineering, Example University, Shanghai 200000, China
+    2 Institute of Biology, Example University, Beijing 100000, China
+    Correspondence and requests for materials should be addressed to A.B.
+    Abstract
+    This study reports continuous microbial production over 120 h and 3 cycles.
+    """
+
+    report = TableExtractor().extract(
+        paper_id=42,
+        source_path=tmp_path / "missing.pdf",
+        pages=[ParsedPage(page_number=1, text=page_text)],
+        existing_text=page_text,
+    )
+
+    assert report.tables == []
+    assert report.status == "failed"
+    assert report.source == "none"
+    assert report.message == "No reliable table found in this PDF."
+
+
+def test_table_extractor_rejects_pdfplumber_body_fragments_without_caption(tmp_path, monkeypatch):
+    from app.services.paper import table_extractor as table_module
+    from app.services.paper.models import ParsedPage
+    from app.services.paper.table_extractor import TableExtractor
+
+    page_text = """
+    Nature Communications | (2026) 17:1234
+    Received: 12 July 2025
+    Accepted: 3 February 2026
+    Check for updates
+    DOI: 10.1038/s41467-026-12345-6
+    Author information and affiliations
+    This study reports microbial production across long operating windows.
+    The method uses hydrogel chambers and mixed microbial consortia.
+    """
+    fake_rows = [
+        ["Nature Communications", "2026", "17"],
+        ["Received:", "Accepted:", "DOI"],
+        ["Author information", "Affiliations", "Correspondence"],
+        ["This study", "reports microbial", "production"],
+    ]
+
+    class FakePage:
+        def extract_tables(self, table_settings=None):
+            return [fake_rows]
+
+        def extract_text(self):
+            return page_text
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(_source_path):
+            return FakePdf()
+
+    monkeypatch.setattr(table_module, "pdfplumber", FakePdfPlumber)
+
+    report = TableExtractor().extract(
+        paper_id=42,
+        source_path=tmp_path / "body-fragments.pdf",
+        pages=[ParsedPage(page_number=1, text=page_text)],
+        existing_text=page_text,
+    )
+
+    assert report.tables == []
+    assert report.status == "failed"
+    assert report.source == "none"
+    assert report.message == "No reliable table found in this PDF."
+
+
+def test_table_extractor_rejects_pdfplumber_article_headers_and_figure_captions(tmp_path, monkeypatch):
+    from app.services.paper import table_extractor as table_module
+    from app.services.paper.models import ParsedPage
+    from app.services.paper.table_extractor import TableExtractor
+
+    page_text = """
+    Article
+    https://doi.org/10.1038/s41467-025-58761-y
+    The primer sequences are provided in Supplementary Table 1 for reference.
+    Fig. 2 | Dual carbon sequestration in photosynthetic living materials.
+    d An increase in cell concentration was observed during the experiment.
+    """
+    fake_rows = [
+        ["Article", "https://doi.org/10.1038/s41467-025-58761-y"],
+        ["Fig.2|Dualcarbonsequestrationinphotosyntheticlivingmaterials.", "dAnincreaseincellconcentrationwasobserved"],
+        ["Downloaded from", "www.nature.com/naturecommunications"],
+    ]
+
+    class FakePage:
+        def extract_tables(self, table_settings=None):
+            return [fake_rows]
+
+        def extract_text(self):
+            return page_text
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(_source_path):
+            return FakePdf()
+
+    monkeypatch.setattr(table_module, "pdfplumber", FakePdfPlumber)
+
+    report = TableExtractor().extract(
+        paper_id=42,
+        source_path=tmp_path / "article-header-fragments.pdf",
+        pages=[ParsedPage(page_number=2, text=page_text)],
+        existing_text=page_text,
+    )
+
+    assert report.tables == []
+    assert report.status == "failed"
+    assert report.source == "none"
+
+
+def test_table_extractor_rejects_pdfplumber_reference_list_columns(tmp_path, monkeypatch):
+    from app.services.paper import table_extractor as table_module
+    from app.services.paper.models import ParsedPage
+    from app.services.paper.table_extractor import TableExtractor
+
+    page_text = """
+    References
+    13. Bottan, S. et al. 3D printing of Flinks for biomedical applications.
+    35. Lewis, J. A. Direct ink writing of 3D functional materials. Adv. Funct. Mater.
+    Data availability
+    Data supporting the findings of this work are available from the corresponding author.
+    """
+    fake_rows = [
+        ["13.", "S. Bottan, F. Robotti, P. Jayathissa, A. Hegglin", "35.", "J. A. Lewis, Direct ink writing of 3D functional materials. Adv. Funct. Mater."],
+        ["14.", "A. H. Example et al. Biofabrication of hydrogel networks.", "36.", "K. Sample et al. Nature Materials study."],
+        ["15.", "Data availability", "37.", "Data supporting the findings of this work are available."],
+    ]
+
+    class FakePage:
+        def extract_tables(self, table_settings=None):
+            return [fake_rows]
+
+        def extract_text(self):
+            return page_text
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(_source_path):
+            return FakePdf()
+
+    monkeypatch.setattr(table_module, "pdfplumber", FakePdfPlumber)
+
+    report = TableExtractor().extract(
+        paper_id=42,
+        source_path=tmp_path / "reference-list.pdf",
+        pages=[ParsedPage(page_number=9, text=page_text)],
+        existing_text=page_text,
+    )
+
+    assert report.tables == []
+    assert report.status == "failed"
+    assert report.source == "none"
+
+
+def test_table_extractor_accepts_stable_pdfplumber_table_with_numeric_structure(tmp_path, monkeypatch):
+    from app.services.paper import table_extractor as table_module
+    from app.services.paper.models import ParsedPage
+    from app.services.paper.table_extractor import TableExtractor
+
+    page_text = """
+    Results
+    Table 1. Reactor performance under three operating modes.
+    Mode Yield (%) Rate (g/L/day) Duration (day)
+    A 65 1.4 10
+    B 72 1.8 12
+    C 69 1.6 11
+    """
+    fake_rows = [
+        ["Mode", "Yield (%)", "Rate (g/L/day)", "Duration (day)"],
+        ["A", "65", "1.4", "10"],
+        ["B", "72", "1.8", "12"],
+        ["C", "69", "1.6", "11"],
+    ]
+
+    class FakePage:
+        def extract_tables(self, table_settings=None):
+            return [fake_rows]
+
+        def extract_text(self):
+            return page_text
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    class FakePdfPlumber:
+        @staticmethod
+        def open(_source_path):
+            return FakePdf()
+
+    monkeypatch.setattr(table_module, "pdfplumber", FakePdfPlumber)
+
+    report = TableExtractor().extract(
+        paper_id=42,
+        source_path=tmp_path / "real-table.pdf",
+        pages=[ParsedPage(page_number=2, text=page_text)],
+        existing_text=page_text,
+    )
+
+    assert report.status == "success"
+    assert report.source == "pdfplumber"
+    assert len(report.tables) == 1
+    assert report.tables[0].table_label == "Table 1"
+    assert "Yield (%)" in report.tables[0].content
+
+
+def test_table_extractor_reports_weak_partial_only_for_stable_numeric_columns(tmp_path):
+    from app.services.paper.models import ParsedPage
+    from app.services.paper.table_extractor import TableExtractor
+
+    page_text = """
+    Results
+    Group      Yield (%)      Rate (g/L/day)
+    Control    52             1.1
+    Hydrogel   78             2.4
+    Reused     73             2.0
+    The next paragraph returns to normal prose and should stop the block.
+    """
+
+    report = TableExtractor().extract(
+        paper_id=42,
+        source_path=tmp_path / "missing.pdf",
+        pages=[ParsedPage(page_number=3, text=page_text)],
+        existing_text=page_text,
+    )
+
+    assert report.status == "partial"
+    assert report.source == "weak_table_candidate"
+    assert len(report.tables) == 1
+    assert report.tables[0].table_label == "Detected Table-like Block 1"
+    assert "Hydrogel" in report.tables[0].content
+
+
+def test_figure_extractor_prefers_caption_block_over_body_reference(tmp_path):
+    fitz = pytest.importorskip("fitz")
+    from app.services.file_storage import FileStorageService
+    from app.services.paper.figure_extractor import FigureExtractor
+    from app.services.paper.models import ParsedPage
+
+    upload_dir = tmp_path / "uploads"
+    source_path = upload_dir / "3" / "paper.pdf"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+
+    pdf = fitz.open()
+    page = pdf.new_page(width=612, height=792)
+    page.insert_text((72, 80), "As shown in Fig. 2A, the reactor response increased after startup.")
+    page.draw_rect(fitz.Rect(96, 190, 500, 330), color=(0, 0, 0), width=1)
+    page.draw_line((120, 310), (470, 225), color=(0.1, 0.3, 0.8), width=2)
+    page.draw_line((120, 280), (470, 250), color=(0.8, 0.2, 0.2), width=2)
+    page.insert_text((72, 360), "Fig. 2A Vector kinetics of production rate across operating time.")
+    page_text = page.get_text()
+    pdf.save(str(source_path))
+    pdf.close()
+
+    paper = Document(
+        id=77,
+        user_id=3,
+        title="vector figure paper",
+        original_filename="paper.pdf",
+        stored_filename="paper.pdf",
+        original_file_path="3/paper.pdf",
+        file_size=source_path.stat().st_size,
+        mime_type="application/pdf",
+        source_type="pdf",
+        processing_mode="auto",
+        status="done",
+    )
+
+    report = FigureExtractor(FileStorageService(str(upload_dir))).extract(
+        source_path=source_path,
+        paper=paper,
+        pages=[ParsedPage(page_number=1, text=page_text)],
+    )
+
+    assert report.status == "success"
+    assert report.figure_count == 1
+    assert report.snapshot_count == 1
+    asset = next(item for item in report.assets if item.asset_type == "figure")
+    metadata = json.loads(asset.metadata_json)
+    assert asset.asset_type == "figure"
+    assert asset.page_number == 1
+    assert metadata["figure_label"] == "Fig. 2A"
+    assert metadata["source"] == "rendered_figure_region"
+    assert metadata["fallback"] is False
+    assert metadata["visual_role"] == "figure_candidate"
+    assert (upload_dir / asset.file_path).exists()
+    page_evidence = next(item for item in report.assets if item.asset_type == "page_snapshot")
+    page_metadata = json.loads(page_evidence.metadata_json)
+    assert page_metadata["source"] == "page_visual_snapshot"
+    assert page_metadata["fallback"] is False
+    assert page_metadata["visual_role"] == "page_evidence"
+
+
+def test_figure_extractor_uses_page_visual_snapshot_when_caption_crop_is_text_polluted(tmp_path):
+    fitz = pytest.importorskip("fitz")
+    from app.services.file_storage import FileStorageService
+    from app.services.paper.figure_extractor import FigureExtractor
+    from app.services.paper.models import ParsedPage
+
+    upload_dir = tmp_path / "uploads"
+    source_path = upload_dir / "4" / "polluted.pdf"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+
+    pdf = fitz.open()
+    page = pdf.new_page(width=612, height=792)
+    y = 72
+    for index in range(18):
+        page.insert_text(
+            (72, y),
+            f"Body paragraph line {index + 1} describing methods, results, controls, and discussion text.",
+            fontsize=9,
+        )
+        y += 18
+    page.insert_text((72, 470), "Fig. 4 Long caption for a figure-like page where a local crop would mostly contain body text.")
+    page_text = page.get_text()
+    pdf.save(str(source_path))
+    pdf.close()
+
+    paper = Document(
+        id=78,
+        user_id=4,
+        title="text polluted crop paper",
+        original_filename="polluted.pdf",
+        stored_filename="polluted.pdf",
+        original_file_path="4/polluted.pdf",
+        file_size=source_path.stat().st_size,
+        mime_type="application/pdf",
+        source_type="pdf",
+        processing_mode="auto",
+        status="done",
+    )
+
+    report = FigureExtractor(FileStorageService(str(upload_dir))).extract(
+        source_path=source_path,
+        paper=paper,
+        pages=[ParsedPage(page_number=1, text=page_text)],
+    )
+
+    assert report.status == "partial"
+    assert report.figure_count == 0
+    assert report.snapshot_count == 1
+    assert [asset.asset_type for asset in report.assets] == ["page_snapshot"]
+    metadata = json.loads(report.assets[0].metadata_json)
+    assert metadata["figure_label"] == "Page 1 Visual Evidence"
+    assert metadata["source"] == "page_visual_snapshot"
+    assert metadata["fallback"] is False
+    assert metadata["visual_role"] == "page_evidence"
+    assert "fallback_snapshot" not in metadata["source"]
+
+
+def test_figure_extractor_keeps_extracted_image_objects_on_rendered_pages(tmp_path):
+    fitz = pytest.importorskip("fitz")
+    Image = pytest.importorskip("PIL.Image")
+    from app.services.file_storage import FileStorageService
+    from app.services.paper.figure_extractor import FigureExtractor
+    from app.services.paper.models import ParsedPage
+
+    upload_dir = tmp_path / "uploads"
+    source_path = upload_dir / "5" / "image-and-rendered.pdf"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path = tmp_path / "embedded.png"
+    Image.new("RGB", (220, 220), color=(50, 120, 200)).save(image_path)
+
+    pdf = fitz.open()
+    page = pdf.new_page(width=612, height=792)
+    page.insert_image(fitz.Rect(90, 110, 310, 330), filename=str(image_path))
+    page.draw_rect(fitz.Rect(340, 150, 510, 300), color=(0, 0, 0), width=1)
+    page.draw_line((360, 280), (490, 185), color=(0.1, 0.2, 0.8), width=2)
+    page.insert_text((72, 360), "Fig. 1 Combined raster image and vector line plot on the same PDF page.")
+    page_text = page.get_text()
+    pdf.save(str(source_path))
+    pdf.close()
+
+    paper = Document(
+        id=79,
+        user_id=5,
+        title="image and rendered paper",
+        original_filename="image-and-rendered.pdf",
+        stored_filename="image-and-rendered.pdf",
+        original_file_path="5/image-and-rendered.pdf",
+        file_size=source_path.stat().st_size,
+        mime_type="application/pdf",
+        source_type="pdf",
+        processing_mode="auto",
+        status="done",
+    )
+
+    report = FigureExtractor(FileStorageService(str(upload_dir))).extract(
+        source_path=source_path,
+        paper=paper,
+        pages=[ParsedPage(page_number=1, text=page_text)],
+    )
+
+    sources = [json.loads(asset.metadata_json)["source"] for asset in report.assets]
+    assert "rendered_figure_region" in sources
+    assert "extracted_image" in sources
+    assert "page_visual_snapshot" in sources
+    assert report.figure_count == 2
+    assert report.snapshot_count == 1
+    image_object = next(asset for asset in report.assets if json.loads(asset.metadata_json)["source"] == "extracted_image")
+    assert json.loads(image_object.metadata_json)["visual_role"] == "image_object"
+
+
+def test_figure_extractor_classifies_rendered_visual_evidence(tmp_path):
+    fitz = pytest.importorskip("fitz")
+    from app.services.file_storage import FileStorageService
+    from app.services.paper.figure_extractor import FigureExtractor
+    from app.services.paper.models import ParsedPage
+
+    upload_dir = tmp_path / "uploads"
+    source_path = upload_dir / "9" / "chart-region.pdf"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+
+    pdf = fitz.open()
+    page = pdf.new_page(width=612, height=792)
+    page.draw_line((120, 330), (120, 160), color=(0, 0, 0), width=1)
+    page.draw_line((120, 330), (480, 330), color=(0, 0, 0), width=1)
+    page.draw_line((140, 300), (230, 250), color=(0.1, 0.3, 0.8), width=2)
+    page.draw_line((230, 250), (360, 210), color=(0.1, 0.3, 0.8), width=2)
+    page.draw_line((360, 210), (460, 180), color=(0.1, 0.3, 0.8), width=2)
+    page.insert_text((72, 370), "Fig. 9 Growth chart with axes and time-series trend.")
+    page_text = page.get_text()
+    pdf.save(str(source_path))
+    pdf.close()
+
+    paper = Document(
+        id=91,
+        user_id=9,
+        title="chart region paper",
+        original_filename="chart-region.pdf",
+        stored_filename="chart-region.pdf",
+        original_file_path="9/chart-region.pdf",
+        file_size=source_path.stat().st_size,
+        mime_type="application/pdf",
+        source_type="pdf",
+        processing_mode="auto",
+        status="done",
+    )
+
+    report = FigureExtractor(FileStorageService(str(upload_dir))).extract(
+        source_path=source_path,
+        paper=paper,
+        pages=[ParsedPage(page_number=1, text=page_text)],
+    )
+
+    asset = next(item for item in report.assets if item.asset_type == "figure")
+    metadata = json.loads(asset.metadata_json)
+    assert metadata["source"] == "rendered_figure_region"
+    assert metadata["evidence_type"] == "chart"
+    assert metadata["bbox"]
+    assert 0 <= metadata["text_density"] <= 1
+    assert metadata["image_density"] > 0
+    assert metadata["has_caption"] is True
+    assert metadata["has_axis_or_chart_shapes"] is True
+    assert metadata["confidence"] >= 0.7
+
+
+def test_figure_extractor_does_not_promote_captioned_text_region_to_figure(tmp_path):
+    fitz = pytest.importorskip("fitz")
+    from app.services.file_storage import FileStorageService
+    from app.services.paper.figure_extractor import FigureExtractor
+    from app.services.paper.models import ParsedPage
+
+    upload_dir = tmp_path / "uploads"
+    source_path = upload_dir / "10" / "text-region.pdf"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+
+    pdf = fitz.open()
+    page = pdf.new_page(width=612, height=792)
+    y = 90
+    for index in range(14):
+        page.insert_text((72, y), f"Dense body text line {index} with methods, values, controls, and discussion.", fontsize=9)
+        y += 18
+    page.insert_text((72, 390), "Fig. 10 Mentioned in text but no visual figure exists in this region.")
+    page_text = page.get_text()
+    pdf.save(str(source_path))
+    pdf.close()
+
+    paper = Document(
+        id=92,
+        user_id=10,
+        title="text region paper",
+        original_filename="text-region.pdf",
+        stored_filename="text-region.pdf",
+        original_file_path="10/text-region.pdf",
+        file_size=source_path.stat().st_size,
+        mime_type="application/pdf",
+        source_type="pdf",
+        processing_mode="auto",
+        status="done",
+    )
+
+    report = FigureExtractor(FileStorageService(str(upload_dir))).extract(
+        source_path=source_path,
+        paper=paper,
+        pages=[ParsedPage(page_number=1, text=page_text)],
+    )
+
+    assert not [asset for asset in report.assets if asset.asset_type == "figure"]
+    assert all(json.loads(asset.metadata_json)["evidence_type"] != "figure" for asset in report.assets)
+
+
+def test_figure_extractor_limits_page_visual_snapshots_to_six_pages(tmp_path):
+    fitz = pytest.importorskip("fitz")
+    from app.services.file_storage import FileStorageService
+    from app.services.paper.figure_extractor import FigureExtractor
+    from app.services.paper.models import ParsedPage
+
+    upload_dir = tmp_path / "uploads"
+    source_path = upload_dir / "6" / "many-visual-pages.pdf"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+
+    pdf = fitz.open()
+    parsed_pages: list[ParsedPage] = []
+    for page_index in range(8):
+        page = pdf.new_page(width=612, height=792)
+        y = 72
+        for line_index in range(18):
+            page.insert_text((72, y), f"Body line {page_index}-{line_index} with methods and discussion text.", fontsize=9)
+            y += 18
+        page.insert_text((72, 470), f"Fig. {page_index + 1} Caption for a figure-like page that needs page evidence.")
+        parsed_pages.append(ParsedPage(page_number=page_index + 1, text=page.get_text()))
+    pdf.save(str(source_path))
+    pdf.close()
+
+    paper = Document(
+        id=80,
+        user_id=6,
+        title="many visual pages",
+        original_filename="many-visual-pages.pdf",
+        stored_filename="many-visual-pages.pdf",
+        original_file_path="6/many-visual-pages.pdf",
+        file_size=source_path.stat().st_size,
+        mime_type="application/pdf",
+        source_type="pdf",
+        processing_mode="auto",
+        status="done",
+    )
+
+    report = FigureExtractor(FileStorageService(str(upload_dir))).extract(
+        source_path=source_path,
+        paper=paper,
+        pages=parsed_pages,
+    )
+
+    assert report.status == "partial"
+    assert report.figure_count == 0
+    assert report.snapshot_count == 6
+    assert len(report.assets) == 6
+    assert all(json.loads(asset.metadata_json)["source"] == "page_visual_snapshot" for asset in report.assets)
 
 
 def test_run_extraction_returns_pending_job_for_polling(client, db, user, monkeypatch):
@@ -314,27 +999,55 @@ def test_paper_detail_returns_snapshot_asset_and_table_metadata(client, db, user
                     '"source":"fallback_snapshot","fallback":true,"context":"Generated because no extractable PDF figure was found"}'
                 ),
             ),
+            DocumentAsset(
+                document_id=paper.id,
+                asset_type="page_snapshot",
+                page_number=2,
+                file_path="1/paper_agent/asset/page_2_visual_snapshot.png",
+                mime_type="image/png",
+                metadata_json=(
+                    '{"figure_label":"Page 2 Visual Evidence",'
+                    '"caption":"Page-level visual evidence generated from a page containing figure-like content.",'
+                    '"source":"page_visual_snapshot","fallback":false,"visual_role":"page_evidence",'
+                    '"context":"Fig. 2 Page-level visual context"}'
+                ),
+            ),
         ]
     )
     db.add_all(
         [
-            PaperTable(
-                paper_id=paper.id,
-                table_label="Table 1",
-                content="| A | B |\n| --- | --- |\n| 1 | 2 |",
-                page=2,
+            DocumentAsset(
+                document_id=paper.id,
+                asset_type="table",
+                asset_index=0,
+                label="Table 1",
+                caption="Table 1",
+                markdown="| A | B |\n| --- | --- |\n| 1 | 2 |",
+                page_number=2,
+                summary="A/B values.",
+                metadata_json='{"key_findings":["1 | 2"]}',
             ),
-            PaperTable(
-                paper_id=paper.id,
-                table_label="Table Candidate 1",
-                content="| A | B |\n| --- | --- |\n| fallback | row |",
-                page=3,
+            DocumentAsset(
+                document_id=paper.id,
+                asset_type="table",
+                asset_index=1,
+                label="Table 2",
+                caption="Table 2",
+                markdown="Table 2\nA  B\nfallback  row",
+                page_number=3,
+                summary="Fallback table text.",
+                metadata_json='{"key_findings":["fallback row"]}',
             ),
-            PaperTable(
-                paper_id=paper.id,
-                table_label="Detected block",
-                content="plain text candidate",
-                page=4,
+            DocumentAsset(
+                document_id=paper.id,
+                asset_type="table",
+                asset_index=2,
+                label="Detected block",
+                caption="Detected block",
+                markdown="plain text candidate",
+                page_number=4,
+                summary="Plain text candidate.",
+                metadata_json='{"key_findings":[]}',
             ),
         ]
     )
@@ -345,24 +1058,26 @@ def test_paper_detail_returns_snapshot_asset_and_table_metadata(client, db, user
     assert response.status_code == 200
     payload = response.json()
     assert payload["parse_error"] is None
-    figures = {figure["asset_type"]: figure for figure in payload["figures"]}
-    assert figures["figure"]["figure_label"] == "Figure 1"
-    assert figures["figure"]["source"] == "extracted_image"
-    assert figures["figure"]["fallback"] is False
-    assert figures["page_snapshot"]["figure_label"] == "Page 1 Snapshot"
-    assert figures["page_snapshot"]["caption"] == "Fallback page snapshot"
-    assert figures["page_snapshot"]["source"] == "fallback_snapshot"
-    assert figures["page_snapshot"]["fallback"] is True
-    assert figures["page_snapshot"]["notes"] == "Generated because no extractable PDF figure was found"
-    assert figures["page_snapshot"]["image_path"].startswith("/papers/assets/")
+    figures = {figure["source"]: figure for figure in payload["figures"]}
+    assert figures["extracted_image"]["figure_label"] == "Figure 1"
+    assert figures["extracted_image"]["fallback"] is False
+    assert figures["extracted_image"]["visual_role"] == "image_object"
+    assert figures["fallback_snapshot"]["figure_label"] == "Page 1 Snapshot"
+    assert figures["fallback_snapshot"]["caption"] == "Fallback page snapshot"
+    assert figures["fallback_snapshot"]["fallback"] is True
+    assert figures["fallback_snapshot"]["notes"] == "Generated because no extractable PDF figure was found"
+    assert figures["fallback_snapshot"]["image_path"].startswith("/papers/assets/")
+    assert figures["page_visual_snapshot"]["figure_label"] == "Page 2 Visual Evidence"
+    assert figures["page_visual_snapshot"]["fallback"] is False
+    assert figures["page_visual_snapshot"]["visual_role"] == "page_evidence"
 
     tables = {table["table_label"]: table for table in payload["tables"]}
     assert tables["Table 1"]["parse_status"] == "success"
-    assert tables["Table 1"]["source"] == "pdfplumber"
-    assert tables["Table Candidate 1"]["parse_status"] == "fallback"
-    assert tables["Table Candidate 1"]["source"] == "fallback_candidate"
+    assert tables["Table 1"]["source"] == "document_asset"
+    assert tables["Table 2"]["parse_status"] == "partial"
+    assert tables["Table 2"]["source"] == "document_asset"
     assert tables["Detected block"]["parse_status"] == "partial"
-    assert tables["Detected block"]["source"] == "text_candidate"
+    assert tables["Detected block"]["source"] == "document_asset"
 
 
 def test_paper_data_adapter_keeps_page_snapshot_as_fallback_visual_evidence(db, user, tmp_path, monkeypatch):
@@ -399,7 +1114,8 @@ def test_paper_data_adapter_keeps_page_snapshot_as_fallback_visual_evidence(db, 
         mime_type="image/png",
         metadata_json=(
             '{"figure_label":"Page 1 Snapshot","caption":"Fallback page snapshot",'
-            '"source":"fallback_snapshot","fallback":true,"context":"Generated because no extractable PDF figure was found"}'
+            '"source":"fallback_snapshot","fallback":true,"visual_role":"fallback_snapshot",'
+            '"context":"Generated because no extractable PDF figure was found"}'
         ),
     )
     db.add(asset)
@@ -410,7 +1126,165 @@ def test_paper_data_adapter_keeps_page_snapshot_as_fallback_visual_evidence(db, 
 
     assert paper_data.figures[0].figure_id == f"Page 1 Snapshot [asset:{asset.id}]"
     assert paper_data.figures[0].caption == "Fallback page snapshot"
-    assert paper_data.figures[0].context == "Generated because no extractable PDF figure was found"
+    assert paper_data.figures[0].context == (
+        "Generated because no extractable PDF figure was found\n"
+        "Fallback snapshot; lowest-priority visual evidence.\n"
+        "asset_type=page_snapshot; source=fallback_snapshot; fallback=True; visual_role=fallback_snapshot; "
+        "page_number=1; figure_label=Page 1 Snapshot; caption=Fallback page snapshot"
+    )
+
+
+def test_paper_data_adapter_explains_page_evidence_and_image_object_roles(db, user, tmp_path, monkeypatch):
+    from app.core import config
+
+    monkeypatch.setattr(config, "UPLOAD_DIR", str(tmp_path))
+    now = datetime.now(timezone.utc)
+    paper = Document(
+        user_id=user.id,
+        title="visual role paper",
+        original_filename="visual.pdf",
+        stored_filename="visual.pdf",
+        original_file_path="1/2026/05/visual.pdf",
+        file_size=100,
+        mime_type="application/pdf",
+        source_type="pdf",
+        processing_mode="auto",
+        processing_strategy="pdf_text",
+        status="done",
+        cleaned_text="body",
+        created_at=now,
+        updated_at=now,
+        uploaded_at=now,
+        parsed_at=now,
+    )
+    db.add(paper)
+    db.commit()
+    db.refresh(paper)
+    image_asset = DocumentAsset(
+        document_id=paper.id,
+        asset_type="figure",
+        page_number=2,
+        file_path="1/paper_agent/visual/image-object.png",
+        mime_type="image/png",
+        metadata_json='{"figure_label":"Figure 2 image","caption":"Image object","source":"extracted_image","fallback":false}',
+    )
+    page_asset = DocumentAsset(
+        document_id=paper.id,
+        asset_type="page_snapshot",
+        page_number=2,
+        file_path="1/paper_agent/visual/page-2.png",
+        mime_type="image/png",
+        metadata_json=(
+            '{"figure_label":"Page 2 Visual Evidence","caption":"Page-level visual evidence",'
+            '"source":"page_visual_snapshot","fallback":false,"visual_role":"page_evidence",'
+            '"context":"Fig. 2 page context"}'
+        ),
+    )
+    db.add_all([image_asset, page_asset])
+    db.commit()
+    db.refresh(image_asset)
+    db.refresh(page_asset)
+
+    paper_data = PaperDataAdapter().build(paper=paper, figures=[image_asset, page_asset], tables=[])
+
+    assert "visual_role=image_object" in paper_data.figures[0].context
+    assert "PDF image object; it may be a figure panel or image fragment." in paper_data.figures[0].context
+    assert "page_number=2" in paper_data.figures[0].context
+    assert "figure_label=Figure 2 image" in paper_data.figures[0].context
+    assert "caption=Image object" in paper_data.figures[0].context
+    assert "visual_role=page_evidence" in paper_data.figures[1].context
+    assert "Page-level visual evidence; not a complete figure." in paper_data.figures[1].context
+
+
+def test_paper_data_adapter_explains_rendered_figure_candidate(db, user, tmp_path, monkeypatch):
+    from app.core import config
+
+    monkeypatch.setattr(config, "UPLOAD_DIR", str(tmp_path))
+    now = datetime.now(timezone.utc)
+    paper = Document(
+        user_id=user.id,
+        title="rendered candidate paper",
+        original_filename="rendered.pdf",
+        stored_filename="rendered.pdf",
+        original_file_path="1/2026/05/rendered.pdf",
+        file_size=100,
+        mime_type="application/pdf",
+        source_type="pdf",
+        processing_mode="auto",
+        processing_strategy="pdf_text",
+        status="done",
+        cleaned_text="body",
+        created_at=now,
+        updated_at=now,
+        uploaded_at=now,
+        parsed_at=now,
+    )
+    db.add(paper)
+    db.commit()
+    db.refresh(paper)
+    asset = DocumentAsset(
+        document_id=paper.id,
+        asset_type="figure",
+        page_number=4,
+        file_path="1/paper_agent/rendered/fig-4.png",
+        mime_type="image/png",
+        metadata_json=(
+            '{"figure_label":"Fig. 4","caption":"Fig. 4 Rendered crop caption.",'
+            '"source":"rendered_figure_region","fallback":false,"visual_role":"figure_candidate",'
+            '"context":"Fig. 4 Rendered crop caption."}'
+        ),
+    )
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+
+    paper_data = PaperDataAdapter().build(paper=paper, figures=[asset], tables=[])
+
+    assert "visual_role=figure_candidate" in paper_data.figures[0].context
+    assert "Figure candidate produced from caption-guided page crop." in paper_data.figures[0].context
+    assert "page_number=4" in paper_data.figures[0].context
+    assert "figure_label=Fig. 4" in paper_data.figures[0].context
+    assert "caption=Fig. 4 Rendered crop caption." in paper_data.figures[0].context
+
+
+def test_frontend_paper_pages_match_five_page_product_shape():
+    detail_source = Path("frontend/src/pages/PaperDetailPage.tsx").read_text(encoding="utf-8")
+    upload_source = Path("frontend/src/pages/PaperUploadPage.tsx").read_text(encoding="utf-8")
+    list_source = Path("frontend/src/pages/PapersPage.tsx").read_text(encoding="utf-8")
+    task_source = Path("frontend/src/pages/ExtractionsPage.tsx").read_text(encoding="utf-8")
+    result_source = Path("frontend/src/pages/PaperExtractionResultPage.tsx").read_text(encoding="utf-8")
+
+    assert "文件过大" in upload_source
+    assert "仅支持 PDF 文件" in upload_source
+    assert "请先登录后再上传论文" in upload_source
+    assert "MAX_PDF_SIZE_BYTES = 100 * 1024 * 1024" in upload_source
+
+    assert "上传时间" in list_source
+    assert "解析进度" in list_source
+    assert "parse_error" in list_source
+
+    assert "基本信息" in detail_source
+    assert "正文预览" in detail_source
+    assert "图片列表" in detail_source
+    assert "表格列表" in detail_source
+    assert "操作日志" in detail_source
+
+    assert "提取目标" in task_source
+    assert "选择论文" in task_source
+    assert "selectedIds" in task_source
+    assert "开始提取" in task_source
+
+    assert "图片结果" in result_source
+    assert "图片/图表证据" in result_source
+    assert "表格结果" in result_source
+    assert "文本证据" in result_source
+    assert "正文结果" in result_source
+    assert "原始 JSON" in result_source
+    assert "confidence" in result_source
+    assert "thumbnailUrl" in result_source
+    assert "imageUrl" in result_source
+    assert "无法预览" in result_source
+    assert "evidenceTypeForResult" in result_source
 
 
 def test_list_extractions_without_paper_id_returns_all_user_jobs(client, db, user):
@@ -511,3 +1385,116 @@ def test_list_extractions_without_paper_id_returns_all_user_jobs(client, db, use
     assert first_payload["result_count"] == 1
     assert second_payload["status"] == "failed"
     assert second_payload["error_message"] == "bad extraction"
+
+
+def test_get_extraction_enriches_result_evidence_type_and_preview_urls(client, db, user):
+    now = datetime.now(timezone.utc)
+    paper = Document(
+        user_id=user.id,
+        title="visual evidence paper",
+        original_filename="visual.pdf",
+        stored_filename="visual.pdf",
+        original_file_path="1/2026/05/visual.pdf",
+        file_size=100,
+        mime_type="application/pdf",
+        source_type="pdf",
+        processing_mode="auto",
+        processing_strategy="pdf_text",
+        status="done",
+        cleaned_text="body",
+        created_at=now,
+        updated_at=now,
+        uploaded_at=now,
+        parsed_at=now,
+    )
+    db.add(paper)
+    db.commit()
+    db.refresh(paper)
+    figure = DocumentAsset(
+        document_id=paper.id,
+        asset_type="figure",
+        page_number=2,
+        file_path="1/paper_agent/visual/fig.png",
+        mime_type="image/png",
+        metadata_json=json.dumps(
+            {
+                "figure_label": "Fig. 2",
+                "caption": "Fig. 2 chart caption.",
+                "source": "rendered_figure_region",
+                "evidence_type": "chart",
+                "bbox": [10, 20, 300, 220],
+                "confidence": 0.82,
+            }
+        ),
+    )
+    page_region = DocumentAsset(
+        document_id=paper.id,
+        asset_type="page_snapshot",
+        page_number=3,
+        file_path="1/paper_agent/visual/page-3.png",
+        mime_type="image/png",
+        metadata_json=json.dumps(
+            {
+                "figure_label": "Page 3 Visual Evidence",
+                "caption": "Page-level crop",
+                "source": "page_visual_snapshot",
+                "evidence_type": "page_region",
+            }
+        ),
+    )
+    db.add_all([figure, page_region])
+    db.commit()
+    db.refresh(figure)
+    db.refresh(page_region)
+
+    job = ExtractionJob(paper_id=paper.id, query="extract visuals", status="done")
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    db.add_all(
+        [
+            ExtractionResult(
+                job_id=job.id,
+                source_type="asset",
+                source_id=figure.id,
+                field_name="trend",
+                content="increased",
+                evidence="Fig. 2",
+                confidence=0.8,
+            ),
+            ExtractionResult(
+                job_id=job.id,
+                source_type="asset",
+                source_id=page_region.id,
+                field_name="page_context",
+                content="context",
+                evidence="page 3",
+                confidence=0.4,
+            ),
+            ExtractionResult(
+                job_id=job.id,
+                source_type="text",
+                source_id=None,
+                field_name="abstract_claim",
+                content="text finding",
+                evidence="abstract text",
+                confidence=0.7,
+            ),
+        ]
+    )
+    db.commit()
+
+    response = client.get(f"/extractions/{job.id}")
+
+    assert response.status_code == 200
+    results = response.json()["results"]
+    by_field = {item["field_name"]: item for item in results}
+    assert by_field["trend"]["evidence_type"] == "chart"
+    assert by_field["trend"]["image_url"] == f"/papers/assets/{figure.id}"
+    assert by_field["trend"]["thumbnail_url"] == f"/papers/assets/{figure.id}"
+    assert by_field["trend"]["bbox"] == [10, 20, 300, 220]
+    assert by_field["trend"]["page"] == 2
+    assert by_field["trend"]["caption"] == "Fig. 2 chart caption."
+    assert by_field["page_context"]["evidence_type"] == "page_region"
+    assert by_field["page_context"]["image_url"] == f"/papers/assets/{page_region.id}"
+    assert by_field["abstract_claim"]["evidence_type"] == "text"

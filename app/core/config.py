@@ -17,11 +17,12 @@ TASK_LOG_FILE = LOG_DIR / "task_run.log"
 _allowed_ext = os.getenv("ALLOWED_EXTENSIONS", "txt,log,csv,pdf")
 ALLOWED_EXTENSIONS = {ext.strip() for ext in _allowed_ext.split(",")}
 
-DEFAULT_MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024
+DEFAULT_MAX_UPLOAD_SIZE_BYTES = 100 * 1024 * 1024
 _max_size = os.getenv("MAX_UPLOAD_SIZE") or os.getenv("MAX_UPLOAD_SIZE_BYTES")
 MAX_UPLOAD_SIZE_BYTES: int = int(_max_size) if _max_size else DEFAULT_MAX_UPLOAD_SIZE_BYTES
 DOCUMENT_PARSE_TIMEOUT_SECONDS = int(os.getenv("DOCUMENT_PARSE_TIMEOUT_SECONDS", "60"))
 OCR_TIMEOUT_SECONDS = int(os.getenv("OCR_TIMEOUT_SECONDS", str(DOCUMENT_PARSE_TIMEOUT_SECONDS)))
+ENABLE_DOCLING_PARSER = os.getenv("ENABLE_DOCLING_PARSER", "False").lower() in ("true", "1", "t", "yes", "on")
 
 # 处理布尔类型的环境变量
 _enable_worker = os.getenv("ENABLE_BACKGROUND_WORKER", "False")

@@ -5,14 +5,14 @@ import hashlib
 import time
 from uuid import uuid4
 
-from app.core.config import DOCUMENT_PARSE_TIMEOUT_SECONDS
+from app.core.config import DOCUMENT_PARSE_TIMEOUT_SECONDS, ENABLE_DOCLING_PARSER
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.time import app_now
 from app.db.session import SessionLocal
 from app.constants.jobs import JOB_KIND_DOCUMENT_PARSE, SUBJECT_TYPE_DOCUMENT
-from app.models import Document, DocumentAsset, DocumentChunk, DocumentEvent, JobRun
+from app.models import Document, DocumentAsset, DocumentChunk, DocumentClaim, DocumentEvent, JobRun
 from app.services.chunking_service import ChunkingService
 from app.services.document_embedding_service import EmbeddingProvider, DocumentEmbeddingService
 from app.services.document_kg_service import DocumentKgService
@@ -22,6 +22,8 @@ from app.services.document_input import build_document_input, DocumentInput
 from app.services.job_run_service import JobRunService
 from app.services.file_storage import FileStorageService
 from app.services.ocr_service import OcrService
+from app.services.paper.asset_understanding_service import AssetUnderstandingService
+from app.services.paper.claim_extraction_service import ClaimExtractionService
 from app.services.text_cleaner import TextCleaner
 
 STATUS_PROCESSING = "processing"
@@ -58,6 +60,8 @@ class DocumentParsePipeline:
         self.parser = DocumentParserService()
         self.cleaner = TextCleaner()
         self.chunker = ChunkingService()
+        self.asset_understanding = AssetUnderstandingService()
+        self.claim_extractor = ClaimExtractionService()
 
     def run(
         self,
@@ -183,6 +187,11 @@ class DocumentParsePipeline:
                     .filter(DocumentAsset.document_id == document.id)
                     .delete(synchronize_session=False)
                 )
+                (
+                    db.query(DocumentClaim)
+                    .filter(DocumentClaim.document_id == document.id)
+                    .delete(synchronize_session=False)
+                )
                 document.parsed_text = cleaned.raw_text
                 document.cleaned_text = cleaned.cleaned_text
                 document.references_text = cleaned.references_text
@@ -193,6 +202,7 @@ class DocumentParsePipeline:
                 document.parsed_at = app_now()
                 document.collection_name = collection_name
                 document.content_hash = content_hash
+                document.page_count = len(parsed_document.pages) or None
                 document.content_summary = content_summary
                 document.chunk_count = len(chunks)
                 document.error_message = None
@@ -243,6 +253,50 @@ class DocumentParsePipeline:
                         )
                     )
 
+                table_assets = self._table_assets_from_parsed_document(
+                    document=document,
+                    parse_job_id=job_run.id,
+                    parsed_document=parsed_document,
+                )
+                for asset in table_assets:
+                    self.asset_understanding.understand(asset)
+                    db.add(asset)
+
+                self._log_event(
+                    db,
+                    document,
+                    "asset_summary_finished",
+                    "证据资产摘要完成",
+                    metadata={
+                        "table_count": len(table_assets),
+                        "asset_count": len(ocr_assets) + len(table_assets),
+                    },
+                )
+                db.flush()
+
+                persisted_chunks = (
+                    db.query(DocumentChunk)
+                    .filter(DocumentChunk.document_id == document.id)
+                    .order_by(DocumentChunk.chunk_index)
+                    .all()
+                )
+                persisted_assets = (
+                    db.query(DocumentAsset)
+                    .filter(DocumentAsset.document_id == document.id)
+                    .order_by(DocumentAsset.id)
+                    .all()
+                )
+                claims = self.claim_extractor.extract(chunks=persisted_chunks, assets=persisted_assets)
+                for claim in claims:
+                    db.add(claim)
+                self._log_event(
+                    db,
+                    document,
+                    "claim_extraction_finished",
+                    f"抽取到 {len(claims)} 条关键结果",
+                    metadata={"claim_count": len(claims)},
+                )
+
                 job_service.update_progress(job_run, 85, metadata={"stage": "embedding_chunks"})
                 self._log_event(
                     db,
@@ -253,7 +307,7 @@ class DocumentParsePipeline:
                         "job_run_id": job_run.id,
                         "job_id": job_run.job_id,
                         "chunk_count": len(chunks),
-                        "asset_count": len(ocr_assets),
+                        "asset_count": len(ocr_assets) + len(table_assets),
                     },
                 )
                 db.commit()
@@ -352,6 +406,15 @@ class DocumentParsePipeline:
         }
 
         if source_type == "pdf":
+            if ENABLE_DOCLING_PARSER:
+                docling_parsed, docling_metadata = self._try_docling_parse(file_path)
+                if docling_parsed is not None:
+                    metadata.update(docling_metadata)
+                    return docling_parsed, [], metadata
+                metadata.update(docling_metadata)
+            else:
+                metadata.update({"docling_enabled": False, "docling_used": False})
+
             if strategy.ocr_first:
                 try:
                     ocr_pages = self.ocr_service.ocr_pdf_pages(file_path)
@@ -490,6 +553,86 @@ class DocumentParsePipeline:
             source_type=source_type,
         ), [], metadata
 
+    def _try_docling_parse(self, file_path) -> tuple[ParsedDocument | None, dict[str, bool | str | int | list]]:
+        try:
+            from docling.document_converter import DocumentConverter
+        except Exception as exc:
+            return None, {
+                "docling_enabled": True,
+                "docling_available": False,
+                "docling_used": False,
+                "docling_error": f"{type(exc).__name__}: {exc}",
+            }
+
+        try:
+            result = DocumentConverter().convert(file_path)
+            document = result.document
+            markdown = document.export_to_markdown()
+        except Exception as exc:
+            return None, {
+                "docling_enabled": True,
+                "docling_available": True,
+                "docling_used": False,
+                "docling_error": f"{type(exc).__name__}: {exc}",
+            }
+
+        if not str(markdown or "").strip():
+            return None, {
+                "docling_enabled": True,
+                "docling_available": True,
+                "docling_used": False,
+                "docling_error": "empty_markdown",
+            }
+
+        page_count = self._docling_page_count(document)
+        metadata = {
+            "source_type": "pdf",
+            "parser_engine": "docling",
+            "docling_enabled": True,
+            "docling_used": True,
+            "docling_available": True,
+        }
+        parsed_document = ParsedDocument(
+            pages=[
+                ParsedPage(
+                    page_number=1,
+                    profile=None,
+                    elements=[
+                        ParsedElement(
+                            element_type="paragraph",
+                            text=str(markdown),
+                            page_number=None,
+                            extractor="docling",
+                            metadata=metadata,
+                        )
+                    ],
+                )
+            ],
+            source_type="pdf",
+            parser_version="docling_optional_v1",
+            parser_engine="docling",
+            pymupdf_available=True,
+            table_extraction_enabled=True,
+            table_extraction_reason=None,
+        )
+        if page_count:
+            parsed_document.warnings.append(f"docling_page_count={page_count}")
+        return parsed_document, {
+            "processing_strategy": "docling",
+            "docling_enabled": True,
+            "docling_available": True,
+            "docling_used": True,
+            "docling_page_count": page_count or 0,
+        }
+
+    def _docling_page_count(self, document) -> int | None:
+        pages = getattr(document, "pages", None)
+        if isinstance(pages, dict):
+            return len(pages)
+        if isinstance(pages, list):
+            return len(pages)
+        return None
+
     def _chunk_parsed_pdf(self, parsed_document: ParsedDocument):
         chunks = []
         for page in parsed_document.pages:
@@ -519,6 +662,44 @@ class DocumentParsePipeline:
                     )
                 )
         return chunks
+
+    def _table_assets_from_parsed_document(
+        self,
+        *,
+        document: Document,
+        parse_job_id: int,
+        parsed_document: ParsedDocument,
+    ) -> list[DocumentAsset]:
+        assets: list[DocumentAsset] = []
+        for page in parsed_document.pages:
+            for element in page.elements:
+                if element.element_type != "table" or not element.text.strip():
+                    continue
+                index = len(assets)
+                metadata = {
+                    **element.metadata,
+                    "extractor": element.extractor,
+                    "source": "parsed_table",
+                    "data_extraction_possible": True,
+                }
+                label = str(metadata.get("label") or metadata.get("table_label") or f"Table {index + 1}")
+                caption = str(metadata.get("caption") or metadata.get("context") or label)
+                assets.append(
+                    DocumentAsset(
+                        document_id=document.id,
+                        parse_job_id=parse_job_id,
+                        asset_type="table",
+                        asset_index=index,
+                        label=label,
+                        caption=caption,
+                        page_number=element.page_number,
+                        markdown=element.text,
+                        text_content=element.text,
+                        mime_type="text/markdown",
+                        metadata_json=json.dumps(metadata, ensure_ascii=False),
+                    )
+                )
+        return assets
 
     def _parsed_document_from_ocr_pages(self, pages: list[str], source_type: str) -> ParsedDocument:
         parsed_pages = []
@@ -717,6 +898,11 @@ class DocumentParsePipeline:
                 (
                     db.query(DocumentAsset)
                     .filter(DocumentAsset.document_id == document.id)
+                    .delete(synchronize_session=False)
+                )
+                (
+                    db.query(DocumentClaim)
+                    .filter(DocumentClaim.document_id == document.id)
                     .delete(synchronize_session=False)
                 )
                 document.status = STATUS_FAILED
