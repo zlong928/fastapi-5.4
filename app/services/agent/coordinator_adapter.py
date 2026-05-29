@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from app.services.agent.fallback_agent import FallbackExtractionCoordinator
+from app.services.agent.coordinator import FallbackExtractionCoordinator
 from app.services.agent.types import PaperData
 
 
@@ -27,7 +27,7 @@ class CoordinatorAdapter:
         if not self.config.get("api_key"):
             return FallbackExtractionCoordinator()
         try:
-            from app.services.agent.openai_coordinator import OpenAIExtractionCoordinator
+            from app.services.agent.coordinator import OpenAIExtractionCoordinator
 
             return OpenAIExtractionCoordinator(self.config)
         except Exception:

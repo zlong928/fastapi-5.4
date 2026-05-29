@@ -41,6 +41,8 @@ class PaperFigureRead(BaseModel):
     bbox: Optional[list[float]] = None
     confidence: Optional[float] = None
     notes: Optional[str] = None
+    analysis_status: Optional[str] = None
+    analysis_error: Optional[str] = None
     created_at: datetime
 
 
@@ -152,3 +154,85 @@ class PaperDetailResponse(BaseModel):
 class ExtractionRunRequest(BaseModel):
     paperId: int
     query: str = Field(min_length=1, max_length=2000)
+
+
+class BatchExtractionRunRequest(BaseModel):
+    paper_ids: list[int] = Field(min_length=1, max_length=50)
+    query: str = Field(min_length=1, max_length=2000)
+
+
+class BatchExtractionResultItem(BaseModel):
+    paper_id: int
+    paper_title: str
+    job_id: Optional[int] = None
+    status: str
+    error: Optional[str] = None
+
+
+class PaperStatisticsResponse(BaseModel):
+    total_papers: int = 0
+    parsed_papers: int = 0
+    failed_papers: int = 0
+    processing_papers: int = 0
+    total_extractions: int = 0
+    successful_extractions: int = 0
+    failed_extractions: int = 0
+    total_figures: int = 0
+    total_tables: int = 0
+    avg_confidence: Optional[float] = None
+    recent_7_days_papers: int = 0
+    recent_7_days_extractions: int = 0
+
+
+class StructuredFigureResult(BaseModel):
+    figure_id: Optional[str] = None
+    caption: Optional[str] = None
+    image_url: Optional[str] = None
+    metric: str
+    value: str
+    evidence: str
+    confidence: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class StructuredTableResult(BaseModel):
+    table_id: Optional[str] = None
+    structured_data: Optional[str] = None
+    parse_status: Optional[str] = None
+    metric: str
+    value: str
+    evidence: str
+    notes: Optional[str] = None
+
+
+class StructuredTextResult(BaseModel):
+    metric: str
+    value: str
+    evidence: str
+    confidence: Optional[str] = None
+
+
+class PaperFigureAsset(BaseModel):
+    id: int
+    figure_label: str
+    caption: Optional[str] = None
+    image_url: Optional[str] = None
+    page: Optional[int] = None
+    source: Optional[str] = None
+    asset_type: str
+
+
+class StructuredExtractionResponse(BaseModel):
+    paper_id: int
+    title: str
+    task: str
+    status: str
+    error_message: Optional[str] = None
+    summary: dict
+    figure_results: list[StructuredFigureResult] = Field(default_factory=list)
+    table_results: list[StructuredTableResult] = Field(default_factory=list)
+    text_results: list[StructuredTextResult] = Field(default_factory=list)
+    not_found: list[str] = Field(default_factory=list)
+    paper_figures: list[PaperFigureAsset] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime

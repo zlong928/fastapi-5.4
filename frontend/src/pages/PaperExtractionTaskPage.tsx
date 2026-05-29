@@ -117,7 +117,7 @@ export function PaperExtractionTaskPage() {
 
           {!canExtractPaper(paper) ? (
             <Alert className="mb-4 rounded-xl">
-              <AlertDescription>当前论文还没有可提取的正文、图片或表格，请先完成解析。</AlertDescription>
+              <AlertDescription>论文正在解析中，解析完成后即可开始提取。</AlertDescription>
             </Alert>
           ) : null}
           {runMutation.error ? (

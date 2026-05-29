@@ -20,7 +20,7 @@ ALLOWED_EXTENSIONS = {ext.strip() for ext in _allowed_ext.split(",")}
 DEFAULT_MAX_UPLOAD_SIZE_BYTES = 100 * 1024 * 1024
 _max_size = os.getenv("MAX_UPLOAD_SIZE") or os.getenv("MAX_UPLOAD_SIZE_BYTES")
 MAX_UPLOAD_SIZE_BYTES: int = int(_max_size) if _max_size else DEFAULT_MAX_UPLOAD_SIZE_BYTES
-DOCUMENT_PARSE_TIMEOUT_SECONDS = int(os.getenv("DOCUMENT_PARSE_TIMEOUT_SECONDS", "60"))
+DOCUMENT_PARSE_TIMEOUT_SECONDS = int(os.getenv("DOCUMENT_PARSE_TIMEOUT_SECONDS", "1800"))
 OCR_TIMEOUT_SECONDS = int(os.getenv("OCR_TIMEOUT_SECONDS", str(DOCUMENT_PARSE_TIMEOUT_SECONDS)))
 ENABLE_DOCLING_PARSER = os.getenv("ENABLE_DOCLING_PARSER", "False").lower() in ("true", "1", "t", "yes", "on")
 

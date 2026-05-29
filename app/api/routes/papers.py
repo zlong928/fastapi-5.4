@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.time import app_now
 from app.db.session import get_db
-from app.models import Document, DocumentAsset, DocumentClaim, ExtractionJob, PaperTable, User
+from app.models import Document, DocumentAsset, DocumentClaim, DocumentEvent, ExtractionJob, ExtractionResult, PaperTable, User
 from app.schemas.paper import (
     PaperAskEvidence,
     PaperAskRequest,
@@ -17,6 +20,7 @@ from app.schemas.paper import (
     PaperDetailResponse,
     PaperFigureRead,
     PaperListItem,
+    PaperStatisticsResponse,
     PaperTableRead,
     PaperUploadResponse,
 )
@@ -26,6 +30,7 @@ from app.services.paper.evidence import asset_bbox, asset_image_url, asset_metad
 
 router = APIRouter(prefix="/papers", tags=["papers"])
 PAPER_ASSET_TYPES = ("figure", "page_snapshot")
+PAPER_FIGURE_DISPLAY_TYPES = ("figure",)
 DOCUMENT_ASSET_SOURCE_TYPES = {"table", "figure", "page_snapshot", "asset"}
 EXPLICIT_TABLE_LABEL_RE = re.compile(r"(?i)^(?:supplementary\s+)?table\s+(?:\d+[a-z]?|[ivxlcdm]+)\b|^表\s*\d+[a-z]?\b")
 
@@ -69,6 +74,8 @@ def _figure_read(asset: DocumentAsset) -> PaperFigureRead:
         bbox=asset_bbox(metadata),
         confidence=float(metadata["confidence"]) if isinstance(metadata.get("confidence"), (int, float)) else None,
         notes=str(metadata.get("notes") or metadata.get("context") or "") or None,
+        analysis_status=str(metadata.get("agent_analysis_status") or "") or None,
+        analysis_error=str(metadata.get("agent_analysis_error") or "") or None,
         created_at=asset.created_at,
     )
 
@@ -117,14 +124,29 @@ def _table_read(table: PaperTable) -> PaperTableRead:
 
 
 def _table_asset_read(asset: DocumentAsset) -> PaperTableRead:
+    content = asset.markdown or asset.text_content or asset.ocr_text or ""
+    parse_status = "success" if _content_is_markdown_table(content) else "partial"
+    metadata = {}
+    if asset.metadata_json:
+        try:
+            metadata = json.loads(asset.metadata_json)
+        except Exception:
+            metadata = {}
+    error_message = None
+    if not content.strip():
+        parse_status = "failed"
+        error_message = "表格内容为空，可能提取失败"
+    elif parse_status == "partial":
+        error_message = "表格结构不完整，未能解析为标准 Markdown 表格"
     return PaperTableRead(
         id=asset.id,
         paper_id=asset.document_id,
         table_label=asset.label or f"Table {asset.asset_index + 1 if asset.asset_index is not None else asset.id}",
-        content=asset.markdown or asset.text_content or asset.ocr_text or "",
+        content=content,
         page=asset.page_number,
-        parse_status="success" if _content_is_markdown_table(asset.markdown) else "partial",
+        parse_status=parse_status,
         source="document_asset",
+        error_message=error_message,
         created_at=asset.created_at,
     )
 
@@ -147,14 +169,14 @@ def _progress_label(paper: Document) -> str:
     if paper.status in {"done", "completed", "parsed"}:
         counts = _asset_counts(paper)
         if counts["table"] or counts["figure"] or counts["page_snapshot"]:
-            return "证据已生成"
+            return "就绪（可提取）"
         return "正文已解析"
     if paper.status in {"pending", "uploaded"}:
         return "等待解析"
     if paper.status in {"processing", "parsing", "extracting"}:
-        return "处理中"
+        return "解析中"
     if paper.status == "failed":
-        return "失败"
+        return "解析失败"
     return paper.status
 
 
@@ -168,13 +190,29 @@ def _json_metadata(value: str | None) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _should_display_figure(asset: DocumentAsset) -> bool:
+    if asset.asset_type == "figure":
+        return True
+    if asset.asset_type != "page_snapshot":
+        return False
+    metadata = _json_metadata(asset.metadata_json)
+    source = metadata.get("source", "")
+    visual_role = metadata.get("visual_role", "")
+    if source == "fallback_snapshot" or visual_role == "fallback_snapshot":
+        return False
+    if source == "page_visual_snapshot" or visual_role == "page_evidence":
+        return True
+    return False
+
+
 def _detail(db: Session, paper: Document) -> PaperDetailResponse:
-    figures = (
+    all_visual_assets = (
         db.query(DocumentAsset)
         .filter(DocumentAsset.document_id == paper.id, DocumentAsset.asset_type.in_(PAPER_ASSET_TYPES))
         .order_by(DocumentAsset.created_at.asc(), DocumentAsset.id.asc())
         .all()
     )
+    figures = [asset for asset in all_visual_assets if _should_display_figure(asset)]
     table_assets = (
         db.query(DocumentAsset)
         .filter(DocumentAsset.document_id == paper.id, DocumentAsset.asset_type == "table")
@@ -344,6 +382,58 @@ async def list_papers(current_user: User = Depends(get_current_user), db: Sessio
     ]
 
 
+@router.get("/statistics", response_model=PaperStatisticsResponse)
+async def get_paper_statistics(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> PaperStatisticsResponse:
+    base = [Document.user_id == current_user.id, Document.source_type == "pdf", Document.status != "deleted"]
+    total = db.query(func.count(Document.id)).filter(*base).scalar() or 0
+    parsed = db.query(func.count(Document.id)).filter(*base, Document.status.in_(["done", "completed", "parsed"])).scalar() or 0
+    failed = db.query(func.count(Document.id)).filter(*base, Document.status == "failed").scalar() or 0
+    processing = db.query(func.count(Document.id)).filter(*base, Document.status.in_(["pending", "processing", "parsing"])).scalar() or 0
+
+    paper_ids_subq = db.query(Document.id).filter(*base).subquery()
+    total_extractions = db.query(func.count(ExtractionJob.id)).filter(ExtractionJob.paper_id.in_(paper_ids_subq.select())).scalar() or 0
+    successful_extractions = db.query(func.count(ExtractionJob.id)).filter(ExtractionJob.paper_id.in_(paper_ids_subq.select()), ExtractionJob.status == "done").scalar() or 0
+    failed_extractions = db.query(func.count(ExtractionJob.id)).filter(ExtractionJob.paper_id.in_(paper_ids_subq.select()), ExtractionJob.status == "failed").scalar() or 0
+
+    total_figures = db.query(func.count(DocumentAsset.id)).filter(
+        DocumentAsset.document_id.in_(paper_ids_subq.select()),
+        DocumentAsset.asset_type.in_(["figure", "page_snapshot"]),
+    ).scalar() or 0
+    total_tables = db.query(func.count(DocumentAsset.id)).filter(
+        DocumentAsset.document_id.in_(paper_ids_subq.select()),
+        DocumentAsset.asset_type == "table",
+    ).scalar() or 0
+
+    avg_conf = db.query(func.avg(ExtractionResult.confidence)).join(
+        ExtractionJob, ExtractionResult.job_id == ExtractionJob.id
+    ).filter(
+        ExtractionJob.paper_id.in_(paper_ids_subq.select()),
+        ExtractionResult.confidence.isnot(None),
+    ).scalar()
+
+    recent_since = app_now() - timedelta(days=7)
+    recent_papers = db.query(func.count(Document.id)).filter(*base, Document.created_at >= recent_since).scalar() or 0
+    recent_extractions = db.query(func.count(ExtractionJob.id)).filter(
+        ExtractionJob.paper_id.in_(paper_ids_subq.select()),
+        ExtractionJob.created_at >= recent_since,
+    ).scalar() or 0
+
+    return PaperStatisticsResponse(
+        total_papers=total,
+        parsed_papers=parsed,
+        failed_papers=failed,
+        processing_papers=processing,
+        total_extractions=total_extractions,
+        successful_extractions=successful_extractions,
+        failed_extractions=failed_extractions,
+        total_figures=total_figures,
+        total_tables=total_tables,
+        avg_confidence=round(avg_conf, 4) if avg_conf is not None else None,
+        recent_7_days_papers=recent_papers,
+        recent_7_days_extractions=recent_extractions,
+    )
+
+
 @router.get("/{paper_id}", response_model=PaperDetailResponse)
 async def get_paper(paper_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> PaperDetailResponse:
     return _detail(db, _paper_or_404(db, paper_id, current_user))
@@ -352,7 +442,7 @@ async def get_paper(paper_id: int, current_user: User = Depends(get_current_user
 @router.post("/{paper_id}/parse", response_model=PaperDetailResponse)
 async def parse_paper(paper_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> PaperDetailResponse:
     paper = _paper_or_404(db, paper_id, current_user)
-    if paper.status != "done":
+    if paper.status not in ("done", "failed"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="文档解析完成后才能进行论文增强解析")
     try:
         parsed = PaperDemoService(db).parse(paper)
@@ -375,3 +465,21 @@ async def get_paper_asset(asset_id: int, current_user: User = Depends(get_curren
     if not path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset file not found.")
     return FileResponse(path=path, media_type=asset.mime_type or "image/png")
+
+
+@router.delete("/{paper_id}")
+async def delete_paper(paper_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    paper = _paper_or_404(db, paper_id, current_user)
+    paper.status = "deleted"
+    paper.updated_at = app_now()
+    db.add(
+        DocumentEvent(
+            document_id=paper.id,
+            user_id=current_user.id,
+            event_type="paper_deleted",
+            message=f"论文已删除：{paper.title}",
+            event_metadata=json.dumps({"paper_id": paper.id, "title": paper.title}, ensure_ascii=False),
+        )
+    )
+    db.commit()
+    return {"message": "论文已删除"}

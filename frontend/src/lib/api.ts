@@ -1,5 +1,6 @@
 import {
   BatchDeleteResponse,
+  BatchExtractionResult,
   BatchTagResponse,
   BookProgressRead,
   BookProgressUpdate,
@@ -34,12 +35,14 @@ import {
   PaperDetail,
   PaperAskResponse,
   PaperListItem,
+  PaperStatistics,
   PaperUploadResponse,
   PasswordForgotRequest,
   PasswordResetRequest,
   RegisterRequest,
   StreamChatCallbacks,
   StreamChatOptions,
+  StructuredExtractionResponse,
   TagCreate,
   TagRead,
   TagUpdate,
@@ -209,9 +212,13 @@ export async function uploadPaper(file: File, onProgress?: (progress: number) =>
 export function getPapers(): Promise<PaperListItem[]> { return request<PaperListItem[]>("/papers"); }
 export function getPaper(paperId: number): Promise<PaperDetail> { return request<PaperDetail>(`/papers/${paperId}`); }
 export function parsePaper(paperId: number): Promise<PaperDetail> { return request<PaperDetail>(`/papers/${paperId}/parse`, { method: "POST" }); }
+export function deletePaper(paperId: number): Promise<MessageResponse> { return request<MessageResponse>(`/papers/${paperId}`, { method: "DELETE" }); }
+export function getPaperStatistics(): Promise<PaperStatistics> { return request<PaperStatistics>("/papers/statistics"); }
 export function runExtraction(paperId: number, query: string): Promise<ExtractionJob> { return request<ExtractionJob>("/extractions/run", { method: "POST", body: JSON.stringify({ paperId, query }) }); }
+export function batchRunExtraction(paperIds: number[], query: string): Promise<BatchExtractionResult[]> { return request<BatchExtractionResult[]>("/extractions/batch", { method: "POST", body: JSON.stringify({ paper_ids: paperIds, query }) }); }
 export function retryExtraction(jobId: number): Promise<ExtractionJob> { return request<ExtractionJob>(`/extractions/${jobId}/retry`, { method: "POST" }); }
 export function getExtraction(jobId: number): Promise<ExtractionJob> { return request<ExtractionJob>(`/extractions/${jobId}`); }
+export function getStructuredExtraction(jobId: number): Promise<StructuredExtractionResponse> { return request<StructuredExtractionResponse>(`/extractions/${jobId}/structured`); }
 export function getExtractions(): Promise<ExtractionJobListItem[]> { return request<ExtractionJobListItem[]>("/extractions"); }
 export function getPaperExtractions(paperId: number): Promise<ExtractionJobListItem[]> { return request<ExtractionJobListItem[]>(`/extractions?paper_id=${paperId}`); }
 

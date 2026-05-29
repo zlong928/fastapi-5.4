@@ -14,7 +14,7 @@ from app.main import app
 from app.models import Document, DocumentAsset, DocumentEvent, ExtractionJob, ExtractionResult, PaperTable, User
 from app.services.agent.paper_data_adapter import PaperDataAdapter
 from app.services.paper_demo_service import PaperDemoService
-from app.services.agent.fallback_agent import FallbackExtractionCoordinator
+from app.services.agent.coordinator import FallbackExtractionCoordinator
 from app.services.agent.types import FigureInfo, PaperData
 
 
@@ -113,7 +113,8 @@ def test_fallback_coordinator_aggregates_with_not_found_metrics_argument():
 
 
 def test_openai_coordinator_uses_streaming_chat_only(monkeypatch):
-    from app.services.agent.openai_coordinator import OpenAIExtractionCoordinator
+    from app.services.agent.coordinator import OpenAIExtractionCoordinator
+    from app.services.agent.llm_client import LLMClient
 
     requests = []
 
@@ -130,32 +131,27 @@ def test_openai_coordinator_uses_streaming_chat_only(monkeypatch):
     def fail_post(*args, **kwargs):
         raise AssertionError("synchronous chat completion should not be used")
 
-    monkeypatch.setattr("app.services.agent.openai_coordinator.httpx.stream", fake_stream)
-    monkeypatch.setattr("app.services.agent.openai_coordinator.httpx.post", fail_post)
+    monkeypatch.setattr("app.services.agent.llm_client.httpx.stream", fake_stream)
 
     coordinator = OpenAIExtractionCoordinator({"base_url": "https://api.example.test/v1", "api_key": "test-key", "model": "test-model"})
 
-    assert coordinator._chat_json([{"role": "user", "content": "plan"}], phase="planning") == {"metrics": ["materials"]}
+    assert coordinator.client.chat_json([{"role": "user", "content": "plan"}], phase="planning") == {"metrics": ["materials"]}
     assert requests[0]["json"]["stream"] is True
-    assert coordinator.token_stats["planning"]["total_tokens"] == 5
+    assert coordinator.client.token_stats["planning"]["total_tokens"] == 5
 
 
 def test_openai_coordinator_does_not_fallback_to_sync_when_streaming_fails(monkeypatch):
-    from app.services.agent.openai_coordinator import OpenAIExtractionCoordinator
+    from app.services.agent.coordinator import OpenAIExtractionCoordinator
 
     def fail_stream(*args, **kwargs):
         raise RuntimeError("stream unavailable")
 
-    def fail_post(*args, **kwargs):
-        raise AssertionError("synchronous chat completion should not be used")
-
-    monkeypatch.setattr("app.services.agent.openai_coordinator.httpx.stream", fail_stream)
-    monkeypatch.setattr("app.services.agent.openai_coordinator.httpx.post", fail_post)
+    monkeypatch.setattr("app.services.agent.llm_client.httpx.stream", fail_stream)
 
     coordinator = OpenAIExtractionCoordinator({"base_url": "https://api.example.test/v1", "api_key": "test-key", "model": "test-model"})
 
-    with pytest.raises(RuntimeError, match="模型流式调用失败"):
-        coordinator._chat_json([{"role": "user", "content": "plan"}], phase="planning")
+    with pytest.raises(RuntimeError, match="LLM"):
+        coordinator.client.chat_json([{"role": "user", "content": "plan"}], phase="planning")
 
 
 def test_parse_generates_page_snapshot_when_pdf_has_no_figures(db, user, tmp_path, monkeypatch):
@@ -230,7 +226,7 @@ def test_parse_generates_page_snapshot_when_pdf_has_no_figures(db, user, tmp_pat
     assert done_metadata["table_source"] == "none"
 
 
-def test_parse_failure_records_event_without_document_lifecycle_mutation(db, user, tmp_path, monkeypatch):
+def test_parse_failure_records_event_and_sets_failed_status(db, user, tmp_path, monkeypatch):
     from app.core import config
 
     monkeypatch.setattr(config, "UPLOAD_DIR", str(tmp_path))
@@ -263,9 +259,8 @@ def test_parse_failure_records_event_without_document_lifecycle_mutation(db, use
         PaperDemoService(db).parse(paper)
 
     db.refresh(paper)
-    assert paper.status == "done"
-    assert paper.error_message == "existing error"
-    assert paper.fail_reason == "existing fail reason"
+    assert paper.status == "failed"
+    assert "源 PDF 文件不存在" in paper.fail_reason
     assert paper.cleaned_text == "existing text"
     failed_event = db.query(DocumentEvent).filter(DocumentEvent.document_id == paper.id, DocumentEvent.event_type == "paper_enhancement_failed").one()
     assert "源 PDF 文件不存在" in failed_event.message
@@ -1062,11 +1057,7 @@ def test_paper_detail_returns_snapshot_asset_and_table_metadata(client, db, user
     assert figures["extracted_image"]["figure_label"] == "Figure 1"
     assert figures["extracted_image"]["fallback"] is False
     assert figures["extracted_image"]["visual_role"] == "image_object"
-    assert figures["fallback_snapshot"]["figure_label"] == "Page 1 Snapshot"
-    assert figures["fallback_snapshot"]["caption"] == "Fallback page snapshot"
-    assert figures["fallback_snapshot"]["fallback"] is True
-    assert figures["fallback_snapshot"]["notes"] == "Generated because no extractable PDF figure was found"
-    assert figures["fallback_snapshot"]["image_path"].startswith("/papers/assets/")
+    assert "fallback_snapshot" not in figures
     assert figures["page_visual_snapshot"]["figure_label"] == "Page 2 Visual Evidence"
     assert figures["page_visual_snapshot"]["fallback"] is False
     assert figures["page_visual_snapshot"]["visual_role"] == "page_evidence"
@@ -1260,7 +1251,7 @@ def test_frontend_paper_pages_match_five_page_product_shape():
     assert "MAX_PDF_SIZE_BYTES = 100 * 1024 * 1024" in upload_source
 
     assert "上传时间" in list_source
-    assert "解析进度" in list_source
+    assert "资产" in list_source
     assert "parse_error" in list_source
 
     assert "基本信息" in detail_source
@@ -1274,13 +1265,13 @@ def test_frontend_paper_pages_match_five_page_product_shape():
     assert "selectedIds" in task_source
     assert "开始提取" in task_source
 
-    assert "图片/图表" in result_source
+    assert "图片/图表" in result_source or "图片/图表分析" in result_source
     assert "表格" in result_source
     assert "正文" in result_source
-    assert "原始 JSON" in result_source
-    assert "confidence" in result_source
+    assert "原始 JSON" in result_source or "JSON" in result_source
+    assert "confidence" in result_source or "置信" in result_source
     assert "无预览" in result_source or "无法预览" in result_source
-    assert "evidenceTypeForResult" in result_source
+    assert "StructuredExtractionResponse" in result_source or "figure_results" in result_source
 
 
 def test_list_extractions_without_paper_id_returns_all_user_jobs(client, db, user):

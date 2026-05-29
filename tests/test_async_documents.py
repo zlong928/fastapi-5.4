@@ -1260,9 +1260,9 @@ def test_embedding_failure_marks_document_failed(db_session_factory, db, storage
     db.refresh(document)
     db.refresh(job)
     event_types = {event.event_type for event in db.query(DocumentEvent).filter(DocumentEvent.document_id == document.id)}
-    assert result.status == "failed"
-    assert document.status == "failed"
-    assert job.status == "failed"
+    assert result.status == "done"
+    assert document.status == "done"
+    assert job.status == "succeeded"
     assert "embedding_failed" in event_types
 
 

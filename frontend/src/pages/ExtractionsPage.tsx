@@ -4,9 +4,9 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { getExtractions, getPapers, retryExtraction, runExtraction } from "@/lib/api";
+import { batchRunExtraction, getExtractions, getPapers, retryExtraction } from "@/lib/api";
 import { formatChinaDateTime } from "@/lib/time";
-import { ExtractionJobListItem, PaperListItem } from "@/lib/types";
+import { BatchExtractionResult, ExtractionJobListItem, PaperListItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { DEFAULT_EXTRACTION_QUERY, EXTRACTION_PRESETS, ExtractionStatusBadge, canExtractPaperListItem, extractionStatusLabel, isExtractionBusy } from "@/pages/paperShared";
 
@@ -91,14 +91,11 @@ export function ExtractionsPage() {
     mutationFn: (jobId: number) => retryExtraction(jobId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["extractions"] })
   });
+  const [batchResults, setBatchResults] = useState<BatchExtractionResult[] | null>(null);
   const runMutation = useMutation({
-    mutationFn: async () => {
-      const targetIds = selectedIds.slice();
-      for (const paperId of targetIds) {
-        await runExtraction(paperId, query.trim());
-      }
-    },
-    onSuccess: () => {
+    mutationFn: () => batchRunExtraction(selectedIds.slice(), query.trim()),
+    onSuccess: (results) => {
+      setBatchResults(results);
       queryClient.invalidateQueries({ queryKey: ["extractions"] });
       setSelectedIds([]);
     }
@@ -158,6 +155,22 @@ export function ExtractionsPage() {
             <Alert variant="destructive" className="mt-3">
               <AlertDescription>{runMutation.error instanceof Error ? runMutation.error.message : "提取任务创建失败"}</AlertDescription>
             </Alert>
+          ) : null}
+          {batchResults ? (
+            <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+              <p className="mb-2 text-xs font-medium text-slate-600">批量提取结果</p>
+              <div className="space-y-1">
+                {batchResults.map((item) => (
+                  <div key={item.paper_id} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="min-w-0 truncate text-slate-700">{item.paper_title || `#${item.paper_id}`}</span>
+                    <span className={cn("shrink-0", item.status === "pending" ? "text-blue-600" : item.status === "skipped" ? "text-red-600" : "text-slate-500")}>
+                      {item.status === "pending" ? "已创建" : item.error || item.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <button type="button" onClick={() => setBatchResults(null)} className="mt-2 text-xs text-slate-400 hover:text-slate-600">关闭</button>
+            </div>
           ) : null}
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">

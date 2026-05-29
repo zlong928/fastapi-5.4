@@ -37,6 +37,10 @@ class PaperEnhancementService:
     def enhance(self, paper: Document) -> Document:
         self._validate_paper(paper)
         paper_id = paper.id
+        paper.status = "processing"
+        paper.updated_at = app_now()
+        self._log_event(paper, "paper_enhancement_started", "论文增强解析开始。")
+        self.db.commit()
         try:
             source_path = self.file_storage.get_file_path(paper.original_file_path)
             if not source_path.exists():
@@ -76,6 +80,7 @@ class PaperEnhancementService:
                 self.asset_understanding.understand(asset)
                 self.db.add(asset)
 
+            paper.status = "done"
             paper.parsed_at = paper.parsed_at or app_now()
             paper.updated_at = app_now()
             done_metadata = {
@@ -103,6 +108,9 @@ class PaperEnhancementService:
             self.db.rollback()
             failed_paper = self.db.get(Document, paper_id)
             if failed_paper is not None:
+                failed_paper.status = "failed"
+                failed_paper.fail_reason = str(exc)[:500]
+                failed_paper.updated_at = app_now()
                 self._log_event(failed_paper, "paper_enhancement_failed", str(exc), {"error": str(exc)})
                 self.db.commit()
             raise
@@ -110,7 +118,7 @@ class PaperEnhancementService:
     def _validate_paper(self, paper: Document) -> None:
         if paper.source_type != "pdf":
             raise ValueError("仅支持 PDF 文档进行论文增强解析")
-        if paper.status != "done":
+        if paper.status not in ("done", "failed"):
             raise ValueError("文档解析完成后才能进行论文增强解析")
 
     def _delete_previous_enhancement(self, paper: Document) -> None:

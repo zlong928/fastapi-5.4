@@ -35,13 +35,13 @@ export const METRIC_ORDER = ["research_purpose", "materials", "methods", "experi
 const PAPER_STATUS_LABELS: Record<string, string> = {
   pending: "等待解析",
   processing: "解析中",
-  done: "已完成",
-  completed: "已完成",
-  failed: "失败",
+  done: "就绪",
+  completed: "就绪",
+  failed: "解析失败",
   deleted: "已删除",
   uploaded: "已上传",
   parsing: "解析中",
-  parsed: "已解析",
+  parsed: "就绪",
   extracting: "提取中"
 };
 

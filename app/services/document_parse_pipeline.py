@@ -317,12 +317,11 @@ class DocumentParsePipeline:
                         session_factory=self.session_factory,
                         embedding_provider=self.embedding_provider,
                     ).embed_document(document.id)
-                    self._raise_if_timeout(deadline)
                     if embedded_count != len(chunks):
                         raise RuntimeError(f"Expected {len(chunks)} embedded chunks, got {embedded_count}.")
                 except Exception as exc:
-                    self._record_processing_failure(document.id, job_id, "embedding_failed", exc)
-                    return self._get_document(document_id)
+                    self._record_warning(document.id, "embedding_failed", exc)
+                    embedded_count = 0
                 with self.session_factory() as status_db:
                     completed_document = status_db.get(Document, document_id)
                     completed_job = status_db.get(JobRun, job_id) if job_id is not None else None
@@ -362,6 +361,7 @@ class DocumentParsePipeline:
                     DocumentKgService(session_factory=self.session_factory).extract_document(document.id)
                 except Exception as exc:
                     self._record_warning(document.id, "kg_failed", exc)
+                self._auto_enhance_pdf(document_id)
                 with self.session_factory() as final_db:
                     final_document = final_db.get(Document, document_id)
                     if final_document is None:
@@ -828,6 +828,17 @@ class DocumentParsePipeline:
             if document is None:
                 raise ValueError(f"Document not found: {document_id}")
             return document
+
+    def _auto_enhance_pdf(self, document_id: int) -> None:
+        with self.session_factory() as db:
+            document = db.get(Document, document_id)
+            if document is None or document.source_type != "pdf" or document.status != STATUS_DONE:
+                return
+            try:
+                from app.services.paper.enhancement_service import PaperEnhancementService
+                PaperEnhancementService(db, file_storage=self.file_storage).enhance(document)
+            except Exception as exc:
+                self._record_warning(document_id, "auto_enhance_failed", exc)
 
     def _raise_if_timeout(self, deadline: float) -> None:
         if time.monotonic() > deadline:

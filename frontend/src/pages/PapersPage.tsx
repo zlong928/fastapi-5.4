@@ -3,13 +3,14 @@ import { AlertCircle, Eye, FileText, Loader2, Plus, Search } from "lucide-react"
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { getPapers } from "@/lib/api";
+import { getPapers, getPaperStatistics } from "@/lib/api";
 import { formatChinaDateTime } from "@/lib/time";
 import { PaperStatusBadge, paperStatusLabel } from "@/pages/paperShared";
 
 export function PapersPage() {
   const [keyword, setKeyword] = useState("");
   const papersQuery = useQuery({ queryKey: ["papers"], queryFn: getPapers });
+  const statsQuery = useQuery({ queryKey: ["paper-statistics"], queryFn: getPaperStatistics });
 
   const papers = papersQuery.data ?? [];
   const filteredPapers = useMemo(() => {
@@ -18,11 +19,7 @@ export function PapersPage() {
     return papers.filter((paper) => paper.title.toLowerCase().includes(q) || paperStatusLabel(paper.status).includes(q));
   }, [keyword, papers]);
 
-  const stats = useMemo(() => {
-    const done = papers.filter((paper) => paper.status === "done" || paper.status === "completed" || paper.status === "parsed").length;
-    const failed = papers.filter((paper) => paper.status === "failed").length;
-    return { total: papers.length, done, failed };
-  }, [papers]);
+  const stats = statsQuery.data ?? { total_papers: papers.length, parsed_papers: 0, failed_papers: 0, total_extractions: 0, successful_extractions: 0, total_figures: 0, total_tables: 0 };
 
   return (
     <div className="mx-auto max-w-6xl space-y-4">
@@ -37,18 +34,23 @@ export function PapersPage() {
           </Button>
         </div>
 
-        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+        <div className="mt-5 grid gap-3 sm:grid-cols-4">
           <div className="rounded-2xl bg-slate-50 p-4">
             <p className="text-xs font-medium text-slate-500">全部</p>
-            <p className="mt-2 text-2xl font-semibold text-slate-950">{stats.total}</p>
+            <p className="mt-2 text-2xl font-semibold text-slate-950">{stats.total_papers}</p>
           </div>
           <div className="rounded-2xl bg-emerald-50 p-4">
             <p className="text-xs font-medium text-emerald-700">已完成</p>
-            <p className="mt-2 text-2xl font-semibold text-emerald-950">{stats.done}</p>
+            <p className="mt-2 text-2xl font-semibold text-emerald-950">{stats.parsed_papers}</p>
           </div>
           <div className="rounded-2xl bg-red-50 p-4">
             <p className="text-xs font-medium text-red-700">失败</p>
-            <p className="mt-2 text-2xl font-semibold text-red-950">{stats.failed}</p>
+            <p className="mt-2 text-2xl font-semibold text-red-950">{stats.failed_papers}</p>
+          </div>
+          <div className="rounded-2xl bg-blue-50 p-4">
+            <p className="text-xs font-medium text-blue-700">提取任务</p>
+            <p className="mt-2 text-2xl font-semibold text-blue-950">{stats.total_extractions}</p>
+            <p className="mt-1 text-xs text-blue-600">成功 {stats.successful_extractions} · 图 {stats.total_figures} · 表 {stats.total_tables}</p>
           </div>
         </div>
       </section>
@@ -74,7 +76,7 @@ export function PapersPage() {
                 <th className="px-4 py-3">标题</th>
                 <th className="px-4 py-3">状态</th>
                 <th className="hidden px-4 py-3 md:table-cell">上传时间</th>
-                <th className="hidden px-4 py-3 lg:table-cell">解析进度</th>
+                <th className="hidden px-4 py-3 lg:table-cell">资产</th>
                 <th className="px-4 py-3 text-right">操作</th>
               </tr>
             </thead>

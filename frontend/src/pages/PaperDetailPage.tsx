@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, CalendarClock, CheckCircle2, FileText, Image as ImageIcon, Loader2, RefreshCw, Table2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CalendarClock, CheckCircle2, FileText, Image as ImageIcon, Loader2, RefreshCw, Table2, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { getDocumentAssets, getDocumentClaims, getDocumentEvents, getPaper, getPaperAssetBlob, parsePaper } from "@/lib/api";
+import { deletePaper, getDocumentAssets, getDocumentClaims, getDocumentEvents, getPaper, getPaperAssetBlob, parsePaper } from "@/lib/api";
 import { formatChinaDateTime } from "@/lib/time";
 import { DocumentAsset, DocumentClaim, PaperDetail } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -13,12 +13,12 @@ import { PaperStatusBadge, shouldPollPaper } from "@/pages/paperShared";
 
 type TabKey = "text" | "images" | "tables" | "logs";
 
-const tabs: Array<{ key: TabKey; label: string }> = [
-  { key: "text", label: "正文" },
-  { key: "images", label: "图片" },
-  { key: "tables", label: "表格" },
-  { key: "logs", label: "日志" }
-];
+const TAB_LABELS: Record<TabKey, string> = {
+  text: "正文",
+  images: "图片",
+  tables: "表格",
+  logs: "日志"
+};
 
 function assetImagePath(asset: DocumentAsset) {
   return asset.file_path ? `/papers/assets/${asset.id}` : "";
@@ -106,6 +106,8 @@ function AssetImage({ asset, onOpen }: { asset: DocumentAsset; onOpen: (src: str
 
 function ImageAssetCard({ asset, onOpen }: { asset: DocumentAsset; onOpen: (src: string) => void }) {
   const uncertainties = Array.isArray(asset.metadata?.uncertainties) ? asset.metadata.uncertainties.map(String).filter(Boolean) : [];
+  const analysisStatus = asset.metadata?.agent_analysis_status as string | undefined;
+  const analysisError = asset.metadata?.agent_analysis_error as string | undefined;
   return (
     <article id={`asset-${asset.id}`} className="rounded-md border border-slate-200 bg-white p-3">
       <AssetImage asset={asset} onOpen={onOpen} />
@@ -114,10 +116,18 @@ function ImageAssetCard({ asset, onOpen }: { asset: DocumentAsset; onOpen: (src:
           <h3 className="truncate text-sm font-semibold text-slate-950">{asset.label || imageKind(asset)}</h3>
           <p className="mt-1 text-xs text-slate-500">page {asset.page_number ?? "-"} · asset #{asset.id}</p>
         </div>
-        <Badge variant="outline" className="border-transparent bg-blue-50 text-blue-700 ring-1 ring-blue-200">{imageKind(asset)}</Badge>
+        <div className="flex flex-wrap gap-1">
+          <Badge variant="outline" className="border-transparent bg-blue-50 text-blue-700 ring-1 ring-blue-200">{imageKind(asset)}</Badge>
+          {analysisStatus === "success" ? <Badge variant="outline" className="border-transparent bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">分析完成</Badge> : null}
+          {analysisStatus === "failed" ? <Badge variant="outline" className="border-transparent bg-red-50 text-red-700 ring-1 ring-red-200">分析失败</Badge> : null}
+          {analysisStatus === "fallback" ? <Badge variant="outline" className="border-transparent bg-amber-50 text-amber-700 ring-1 ring-amber-200">降级模式</Badge> : null}
+        </div>
       </div>
       {asset.caption ? <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">{asset.caption}</p> : null}
       {asset.summary || asset.text_content ? <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-800">{asset.summary || asset.text_content}</p> : null}
+      {analysisError ? (
+        <p className="mt-3 rounded-md bg-red-50 p-2 text-xs leading-5 text-red-800">{analysisError}</p>
+      ) : null}
       {uncertainties.length ? (
         <p className="mt-3 rounded-md bg-amber-50 p-2 text-xs leading-5 text-amber-800">{uncertainties[0]}</p>
       ) : null}
@@ -151,6 +161,7 @@ function TableAssetCard({ asset }: { asset: DocumentAsset }) {
 export function PaperDetailPage() {
   const paperId = Number(useParams().id);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabKey>("text");
   const [previewImage, setPreviewImage] = useState<string | null>(null);
 
@@ -169,7 +180,14 @@ export function PaperDetailPage() {
   const assets = assetsQuery.data ?? [];
   const events = eventsQuery.data?.items ?? [];
   const tables = useMemo(() => assets.filter((asset) => asset.asset_type === "table"), [assets]);
-  const images = useMemo(() => assets.filter((asset) => asset.asset_type === "figure" || asset.asset_type === "page_snapshot"), [assets]);
+  const images = useMemo(() => assets.filter((asset) => {
+    if (asset.asset_type === "figure") return true;
+    if (asset.asset_type === "page_snapshot") {
+      const source = asset.metadata?.source;
+      return source === "page_visual_snapshot" || source === "rendered_figure_region";
+    }
+    return false;
+  }), [assets]);
 
   const refreshMutation = useMutation({
     mutationFn: () => parsePaper(paperId),
@@ -181,10 +199,20 @@ export function PaperDetailPage() {
     }
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: () => deletePaper(paperId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["papers"] });
+      navigate("/papers");
+    }
+  });
+
   if (paperQuery.isLoading) return <div className="flex min-h-[420px] items-center justify-center text-sm text-slate-400">加载中</div>;
   if (!paper) return <Alert variant="destructive"><AlertDescription>论文不存在</AlertDescription></Alert>;
 
   const busy = refreshMutation.isPending || paper.status === "processing" || paper.status === "parsing";
+  const hasFigures = images.length > 0;
+  const needsReparse = paper.status === "failed" || (!hasFigures && !tables.length && paper.status === "done");
 
   return (
     <main className="mx-auto max-w-7xl space-y-5">
@@ -201,23 +229,37 @@ export function PaperDetailPage() {
             <h1 className="mt-3 text-2xl font-semibold leading-tight tracking-tight text-slate-950">{paper.title}</h1>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" className="rounded-md border-slate-200 shadow-none" onClick={() => refreshMutation.mutate()} disabled={busy}>
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              更新证据
-            </Button>
+            {needsReparse ? (
+              <Button variant="outline" className="rounded-md border-slate-200 shadow-none" onClick={() => refreshMutation.mutate()} disabled={busy}>
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                重新解析
+              </Button>
+            ) : null}
             <Button asChild className="rounded-md">
               <Link to={`/papers/${paper.id}/extraction`}>提取任务</Link>
+            </Button>
+            <Button
+              variant="outline"
+              className="rounded-md border-red-200 text-red-600 shadow-none hover:bg-red-50 hover:text-red-700"
+              onClick={() => { if (window.confirm("确定删除此论文？")) deleteMutation.mutate(); }}
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              删除
             </Button>
           </div>
         </div>
         {paper.parse_error ? (
           <Alert variant="destructive"><AlertTriangle className="h-4 w-4" /><AlertDescription>{paper.parse_error}</AlertDescription></Alert>
         ) : null}
+        {busy ? (
+          <Alert><Loader2 className="h-4 w-4 animate-spin" /><AlertDescription>正在解析中，图片和表格将在解析完成后自动显示...</AlertDescription></Alert>
+        ) : null}
       </header>
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat icon={FileText} label="正文字符" value={paper.text_content?.length ?? 0} />
-        <Stat icon={ImageIcon} label="图片/截图" value={images.length} />
+        <Stat icon={ImageIcon} label="图片" value={images.length} />
         <Stat icon={Table2} label="表格" value={tables.length} />
         <Stat icon={CheckCircle2} label="关键结论" value={claims.length} />
       </section>
@@ -236,16 +278,19 @@ export function PaperDetailPage() {
       </section>
 
       <nav className="flex gap-1 overflow-x-auto border-b border-slate-200">
-        {tabs.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            onClick={() => setActiveTab(tab.key)}
-            className={cn("border-b-2 border-transparent px-3 py-3 text-sm text-slate-500 outline-none transition hover:text-slate-950 focus-visible:bg-slate-50", activeTab === tab.key && "border-slate-950 text-slate-950")}
-          >
-            {tab.label}
-          </button>
-        ))}
+        {(["text", "images", "tables", "logs"] as TabKey[]).map((key) => {
+          const count = key === "images" ? images.length : key === "tables" ? tables.length : key === "logs" ? events.length : 0;
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setActiveTab(key)}
+              className={cn("border-b-2 border-transparent px-3 py-3 text-sm text-slate-500 outline-none transition hover:text-slate-950 focus-visible:bg-slate-50", activeTab === key && "border-slate-950 text-slate-950")}
+            >
+              {TAB_LABELS[key]}{count > 0 ? ` (${count})` : ""}
+            </button>
+          );
+        })}
       </nav>
 
       {activeTab === "text" ? (
@@ -255,12 +300,20 @@ export function PaperDetailPage() {
       ) : null}
       {activeTab === "images" ? (
         <Panel title="图片列表">
-          {images.length ? <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{images.map((asset) => <ImageAssetCard key={asset.id} asset={asset} onOpen={setPreviewImage} />)}</div> : <Empty text="暂无图片资产" />}
+          {images.length ? (
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{images.map((asset) => <ImageAssetCard key={asset.id} asset={asset} onOpen={setPreviewImage} />)}</div>
+          ) : (
+            <Empty text={busy ? "解析中，图片将在完成后显示..." : "该论文未提取到图片"} />
+          )}
         </Panel>
       ) : null}
       {activeTab === "tables" ? (
         <Panel title="表格列表">
-          {tables.length ? <div className="grid gap-3 lg:grid-cols-2">{tables.map((asset) => <TableAssetCard key={asset.id} asset={asset} />)}</div> : <Empty text="暂无表格资产" />}
+          {tables.length ? (
+            <div className="grid gap-3 lg:grid-cols-2">{tables.map((asset) => <TableAssetCard key={asset.id} asset={asset} />)}</div>
+          ) : (
+            <Empty text={busy ? "解析中，表格将在完成后显示..." : "该论文未提取到表格"} />
+          )}
         </Panel>
       ) : null}
       {activeTab === "logs" ? (

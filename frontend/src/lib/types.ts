@@ -589,6 +589,8 @@ export interface PaperFigure {
   fallback: boolean;
   visual_role?: string | null;
   notes?: string | null;
+  analysis_status?: string | null;
+  analysis_error?: string | null;
   created_at: string;
 }
 
@@ -681,4 +683,88 @@ export interface PaperAskResponse {
   answer: string;
   evidence: PaperAskEvidence[];
   uncertainties: string[];
+}
+
+export interface PaperStatistics {
+  total_papers: number;
+  parsed_papers: number;
+  failed_papers: number;
+  processing_papers: number;
+  total_extractions: number;
+  successful_extractions: number;
+  failed_extractions: number;
+  total_figures: number;
+  total_tables: number;
+  avg_confidence?: number | null;
+  recent_7_days_papers: number;
+  recent_7_days_extractions: number;
+}
+
+export interface BatchExtractionResult {
+  paper_id: number;
+  paper_title: string;
+  job_id?: number | null;
+  status: string;
+  error?: string | null;
+}
+
+export interface StructuredFigureResult {
+  figure_id?: string | null;
+  caption?: string | null;
+  image_url?: string | null;
+  metric: string;
+  value: string;
+  evidence: string;
+  confidence?: string | null;
+  notes?: string | null;
+}
+
+export interface StructuredTableResult {
+  table_id?: string | null;
+  structured_data?: string | null;
+  parse_status?: string | null;
+  metric: string;
+  value: string;
+  evidence: string;
+  notes?: string | null;
+}
+
+export interface StructuredTextResult {
+  metric: string;
+  value: string;
+  evidence: string;
+  confidence?: string | null;
+}
+
+export interface StructuredExtractionResponse {
+  paper_id: number;
+  title: string;
+  task: string;
+  status: string;
+  error_message?: string | null;
+  summary: {
+    figures_analyzed: number;
+    tables_analyzed: number;
+    text_items_extracted: number;
+    failed_items: number;
+    total_results: number;
+    paper_figure_count?: number;
+  };
+  figure_results: StructuredFigureResult[];
+  table_results: StructuredTableResult[];
+  text_results: StructuredTextResult[];
+  not_found: string[];
+  paper_figures: PaperFigureAssetItem[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PaperFigureAssetItem {
+  id: number;
+  figure_label: string;
+  caption?: string | null;
+  image_url?: string | null;
+  page?: number | null;
+  source?: string | null;
+  asset_type: string;
 }
