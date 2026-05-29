@@ -114,6 +114,8 @@ class FigureExtractor:
                     classification = self._classify_region(page, figure_rect, caption_rect, caption, visual_rects)
                     if classification["evidence_type"] not in VISUAL_EVIDENCE_TYPES:
                         continue
+                    if not self._should_keep_rendered_visual_asset(classification):
+                        continue
                     if not self._trusted_figure_rect(page, figure_rect, caption_rect):
                         continue
 
@@ -606,6 +608,26 @@ class FigureExtractor:
         if rect_area / page_area > 0.45:
             return False
         return self._text_pollution_score(page, figure_rect, caption_rect) <= 0.35
+
+    def _should_keep_rendered_visual_asset(self, classification: dict[str, Any]) -> bool:
+        """Keep only rendered regions that contain meaningful visual evidence.
+
+        Rendered regions are screenshots around captions. They can accidentally capture
+        ordinary text blocks, so this filter is intentionally stricter than the generic
+        page-region classifier and only allows figures/charts with enough visual signal.
+        """
+        evidence_type = str(classification.get("evidence_type") or "")
+        text_density = float(classification.get("text_density") or 0.0)
+        image_density = float(classification.get("image_density") or 0.0)
+        has_axis_or_chart_shapes = bool(classification.get("has_axis_or_chart_shapes"))
+
+        if evidence_type not in {"figure", "chart"}:
+            return False
+        if image_density < 0.005 and not has_axis_or_chart_shapes:
+            return False
+        if text_density > 0.25 and image_density < 0.03 and not has_axis_or_chart_shapes:
+            return False
+        return True
 
     def _classify_region(
         self,
