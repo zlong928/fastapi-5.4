@@ -4,6 +4,7 @@ import json
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -12,6 +13,7 @@ from app.db.session import SessionLocal, get_db
 from app.models import Document, DocumentAsset, DocumentEvent, ExtractionJob, ExtractionResult, User
 from app.schemas.paper import BatchExtractionResultItem, BatchExtractionRunRequest, ExtractionJobListItem, ExtractionJobRead, ExtractionResultRead, ExtractionRunRequest, PaperFigureAsset, StructuredExtractionResponse, StructuredFigureResult, StructuredTableResult, StructuredTextResult
 from app.services.agent import AgentResultMapper, CoordinatorAdapter, PaperDataAdapter
+from app.services.export_service import ExportService
 from app.services.paper.evidence import asset_bbox, asset_image_url, asset_metadata, is_visual_evidence, normalize_evidence_type
 
 router = APIRouter(prefix="/extractions", tags=["extractions"])
@@ -290,7 +292,7 @@ async def list_extractions(paper_id: int | None = Query(None, ge=1), current_use
     query = (
         db.query(ExtractionJob, Document)
         .join(Document, ExtractionJob.paper_id == Document.id)
-        .filter(Document.user_id == current_user.id, Document.source_type == "pdf", Document.status != "deleted")
+        .filter(Document.user_id == current_user.id, Document.source_type == "pdf", Document.is_deleted == False)
     )
     if paper_id is not None:
         query = query.filter(ExtractionJob.paper_id == paper_id)
@@ -390,6 +392,7 @@ async def get_structured_extraction(job_id: int, current_user: User = Depends(ge
             img_asset = asset or (all_figure_assets.get(r.source_id) if r.source_id else None)
             img_metadata = asset_metadata(img_asset) if img_asset else {}
             figure_results.append(StructuredFigureResult(
+                id=r.id,
                 figure_id=r.figure_id or str(img_metadata.get("figure_label") or (f"Asset {img_asset.id}" if img_asset else "")),
                 caption=r.caption or str(img_metadata.get("caption") or ""),
                 image_url=asset_image_url(img_asset),
@@ -401,6 +404,7 @@ async def get_structured_extraction(job_id: int, current_user: User = Depends(ge
             ))
         elif ev_type == "table":
             table_results.append(StructuredTableResult(
+                id=r.id,
                 table_id=str(asset.label or f"Table {asset.id}") if asset else None,
                 structured_data=r.structured_data,
                 parse_status=r.parse_status,
@@ -411,6 +415,7 @@ async def get_structured_extraction(job_id: int, current_user: User = Depends(ge
             ))
         else:
             text_results.append(StructuredTextResult(
+                id=r.id,
                 metric=r.field_name,
                 value=r.content,
                 evidence=r.evidence,
@@ -457,4 +462,89 @@ async def get_structured_extraction(job_id: int, current_user: User = Depends(ge
         paper_figures=paper_figures,
         created_at=job.created_at,
         updated_at=job.updated_at,
+    )
+
+
+@router.post("/{job_id}/export")
+async def export_extraction(
+    job_id: int,
+    format: str = Query("csv", pattern="^(csv|json|markdown)$"),
+    result_ids: list[int] | None = Query(None, description="Optional list of result IDs to export. If not provided, exports all results."),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Response:
+    """Export a single extraction job to CSV, JSON, or Markdown format.
+
+    Optionally filter by result IDs to export only selected results.
+    """
+    job = _job_or_404(db, job_id, current_user)
+    paper = db.get(Document, job.paper_id)
+
+    if format == "csv":
+        content = ExportService.export_extraction_to_csv(db, job, result_ids=result_ids)
+        media_type = "text/csv"
+        filename = f"extraction_{job_id}_{paper.title[:30] if paper else 'unknown'}.csv"
+    elif format == "json":
+        content = ExportService.export_extraction_to_json(db, job, result_ids=result_ids)
+        media_type = "application/json"
+        filename = f"extraction_{job_id}_{paper.title[:30] if paper else 'unknown'}.json"
+    else:  # markdown
+        content = ExportService.export_extraction_to_markdown(db, job, result_ids=result_ids)
+        media_type = "text/markdown"
+        filename = f"extraction_{job_id}_{paper.title[:30] if paper else 'unknown'}.md"
+
+    # Sanitize filename
+    filename = "".join(c for c in filename if c.isalnum() or c in "._- ")
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
+
+
+@router.post("/batch-export")
+async def batch_export_extractions(
+    job_ids: list[int] = Query(..., description="List of extraction job IDs to export"),
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Response:
+    """Export multiple extraction jobs to CSV or JSON format."""
+    if not job_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No job IDs provided")
+
+    if len(job_ids) > 100:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Maximum 100 jobs can be exported at once")
+
+    # Verify all jobs belong to the user
+    jobs = []
+    for job_id in job_ids:
+        try:
+            job = _job_or_404(db, job_id, current_user)
+            jobs.append(job)
+        except HTTPException:
+            logger.warning(f"Job {job_id} not found or not accessible by user {current_user.id}")
+            continue
+
+    if not jobs:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No valid jobs found")
+
+    if format == "csv":
+        content = ExportService.export_batch_extractions_to_csv(db, jobs)
+        media_type = "text/csv"
+        filename = f"batch_extraction_{len(jobs)}_jobs.csv"
+    else:  # json
+        content = ExportService.export_batch_extractions_to_json(db, jobs)
+        media_type = "application/json"
+        filename = f"batch_extraction_{len(jobs)}_jobs.json"
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
     )

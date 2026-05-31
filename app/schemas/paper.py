@@ -185,6 +185,7 @@ class PaperStatisticsResponse(BaseModel):
 
 
 class StructuredFigureResult(BaseModel):
+    id: int
     figure_id: Optional[str] = None
     caption: Optional[str] = None
     image_url: Optional[str] = None
@@ -196,6 +197,7 @@ class StructuredFigureResult(BaseModel):
 
 
 class StructuredTableResult(BaseModel):
+    id: int
     table_id: Optional[str] = None
     structured_data: Optional[str] = None
     parse_status: Optional[str] = None
@@ -206,6 +208,7 @@ class StructuredTableResult(BaseModel):
 
 
 class StructuredTextResult(BaseModel):
+    id: int
     metric: str
     value: str
     evidence: str

@@ -4,8 +4,8 @@ import json
 import re
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,7 @@ from app.schemas.paper import (
     PaperTableRead,
     PaperUploadResponse,
 )
+from app.services.export_service import ExportService
 from app.services.file_storage import FileStorageService
 from app.services.paper_demo_service import PaperDemoService
 from app.services.paper.evidence import asset_bbox, asset_image_url, asset_metadata, normalize_evidence_type
@@ -314,7 +315,7 @@ async def ask_papers(payload: PaperAskRequest, current_user: User = Depends(get_
             Document.id.in_(payload.document_ids),
             Document.user_id == current_user.id,
             Document.source_type == "pdf",
-            Document.status != "deleted",
+            Document.is_deleted == False,
         )
         .all()
     )
@@ -362,7 +363,7 @@ async def upload_paper() -> PaperUploadResponse:
 async def list_papers(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[PaperListItem]:
     papers = (
         db.query(Document)
-        .filter(Document.user_id == current_user.id, Document.source_type == "pdf", Document.status != "deleted")
+        .filter(Document.user_id == current_user.id, Document.source_type == "pdf", Document.is_deleted == False)
         .order_by(Document.created_at.desc())
         .all()
     )
@@ -384,7 +385,7 @@ async def list_papers(current_user: User = Depends(get_current_user), db: Sessio
 
 @router.get("/statistics", response_model=PaperStatisticsResponse)
 async def get_paper_statistics(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> PaperStatisticsResponse:
-    base = [Document.user_id == current_user.id, Document.source_type == "pdf", Document.status != "deleted"]
+    base = [Document.user_id == current_user.id, Document.source_type == "pdf", Document.is_deleted == False]
     total = db.query(func.count(Document.id)).filter(*base).scalar() or 0
     parsed = db.query(func.count(Document.id)).filter(*base, Document.status.in_(["done", "completed", "parsed"])).scalar() or 0
     failed = db.query(func.count(Document.id)).filter(*base, Document.status == "failed").scalar() or 0
@@ -465,6 +466,41 @@ async def get_paper_asset(asset_id: int, current_user: User = Depends(get_curren
     if not path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset file not found.")
     return FileResponse(path=path, media_type=asset.mime_type or "image/png")
+
+
+@router.get("/export")
+async def export_papers(
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Response:
+    """Export papers list to CSV or JSON format."""
+    papers = (
+        db.query(Document)
+        .filter(Document.user_id == current_user.id, Document.source_type == "pdf", Document.is_deleted == False)
+        .order_by(Document.created_at.desc())
+        .all()
+    )
+
+    if not papers:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No papers found")
+
+    if format == "csv":
+        content = ExportService.export_documents_to_csv(papers)
+        media_type = "text/csv"
+        filename = f"papers_export_{len(papers)}_items.csv"
+    else:  # json
+        content = ExportService.export_documents_to_json(papers)
+        media_type = "application/json"
+        filename = f"papers_export_{len(papers)}_items.json"
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
 
 
 @router.delete("/{paper_id}")

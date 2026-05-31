@@ -1,14 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Braces, CheckCircle2, FileText, Image, Loader2, RefreshCw, RotateCw, Table2, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Braces, Check, CheckCircle2, Download, FileText, Image, Loader2, RefreshCw, RotateCw, Table2, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { getPaper, getPaperAssetBlob, getStructuredExtraction, retryExtraction } from "@/lib/api";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { API_BASE_URL, getPaper, getPaperAssetBlob, getStructuredExtraction, getToken, retryExtraction } from "@/lib/api";
 import { formatChinaDateTime } from "@/lib/time";
 import { PaperFigureAssetItem, StructuredExtractionResponse, StructuredFigureResult, StructuredTableResult, StructuredTextResult } from "@/lib/types";
 import { ExtractionStatusBadge, fieldLabel, isExtractionBusy, shouldPollPaper } from "@/pages/paperShared";
+import { cn } from "@/lib/utils";
 
 /* ─── Helpers ─── */
 
@@ -75,9 +77,24 @@ function SummaryCard({ icon: Icon, label, value, color }: { icon: typeof FileTex
 
 /* ─── Figure Result Card ─── */
 
-function FigureResultCard({ item }: { item: StructuredFigureResult }) {
+function FigureResultCard({ item, index, selected, onToggle, selectionMode }: { item: StructuredFigureResult; index: number; selected: boolean; onToggle: () => void; selectionMode: boolean }) {
   return (
-    <article className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+    <article className={cn("overflow-hidden rounded-xl border bg-white shadow-sm transition", selected ? "border-blue-500 ring-2 ring-blue-500" : "border-slate-200")}>
+      {selectionMode && (
+        <div className="flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2">
+          <button
+            type="button"
+            onClick={onToggle}
+            className={cn(
+              "flex h-5 w-5 shrink-0 items-center justify-center rounded border transition",
+              selected ? "border-blue-600 bg-blue-600 text-white" : "border-slate-300 bg-white hover:border-slate-400"
+            )}
+          >
+            {selected ? <Check className="h-3.5 w-3.5" /> : null}
+          </button>
+          <span className="text-xs text-slate-500">图片 #{index + 1}</span>
+        </div>
+      )}
       <FigureImage imageUrl={item.image_url} />
       <div className="space-y-2.5 p-4">
         <div className="flex items-start justify-between gap-2">
@@ -103,14 +120,29 @@ function FigureResultCard({ item }: { item: StructuredFigureResult }) {
 
 /* ─── Table Result Card ─── */
 
-function TableResultCard({ item }: { item: StructuredTableResult }) {
+function TableResultCard({ item, index, selected, onToggle, selectionMode }: { item: StructuredTableResult; index: number; selected: boolean; onToggle: () => void; selectionMode: boolean }) {
   const hasStructured = Boolean(item.structured_data);
   let rows: string[][] = [];
   if (hasStructured) {
     try { const p = JSON.parse(item.structured_data!); if (Array.isArray(p) && p.length >= 2) rows = p; } catch {}
   }
   return (
-    <article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-2.5">
+    <article className={cn("rounded-xl border bg-white p-4 shadow-sm space-y-2.5 transition", selected ? "border-emerald-500 ring-2 ring-emerald-500" : "border-slate-200")}>
+      {selectionMode && (
+        <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+          <button
+            type="button"
+            onClick={onToggle}
+            className={cn(
+              "flex h-5 w-5 shrink-0 items-center justify-center rounded border transition",
+              selected ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300 bg-white hover:border-slate-400"
+            )}
+          >
+            {selected ? <Check className="h-3.5 w-3.5" /> : null}
+          </button>
+          <span className="text-xs text-slate-500">表格 #{index + 1}</span>
+        </div>
+      )}
       <div className="flex items-start justify-between gap-2">
         <div>
           {item.table_id ? <p className="text-[11px] font-medium text-emerald-600">{item.table_id}</p> : null}
@@ -146,9 +178,24 @@ function TableResultCard({ item }: { item: StructuredTableResult }) {
 
 /* ─── Text Result Card ─── */
 
-function TextResultCard({ item }: { item: StructuredTextResult }) {
+function TextResultCard({ item, index, selected, onToggle, selectionMode }: { item: StructuredTextResult; index: number; selected: boolean; onToggle: () => void; selectionMode: boolean }) {
   return (
-    <article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
+    <article className={cn("rounded-xl border bg-white p-4 shadow-sm space-y-2 transition", selected ? "border-slate-500 ring-2 ring-slate-500" : "border-slate-200")}>
+      {selectionMode && (
+        <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+          <button
+            type="button"
+            onClick={onToggle}
+            className={cn(
+              "flex h-5 w-5 shrink-0 items-center justify-center rounded border transition",
+              selected ? "border-slate-600 bg-slate-600 text-white" : "border-slate-300 bg-white hover:border-slate-400"
+            )}
+          >
+            {selected ? <Check className="h-3.5 w-3.5" /> : null}
+          </button>
+          <span className="text-xs text-slate-500">文本 #{index + 1}</span>
+        </div>
+      )}
       <div className="flex items-start justify-between gap-2">
         <h3 className="text-sm font-semibold text-slate-900">{fieldLabel(item.metric)}</h3>
         <ConfidenceBadge confidence={item.confidence} />
@@ -191,15 +238,114 @@ function PaperFiguresGallery({ figures }: { figures: PaperFigureAssetItem[] }) {
   );
 }
 
-function ResultBody({ data }: { data: StructuredExtractionResponse }) {
+function ResultBody({ data, jobId }: { data: StructuredExtractionResponse; jobId: number }) {
   const [showRaw, setShowRaw] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedResultIds, setSelectedResultIds] = useState<number[]>([]);
+
   const hasFigures = data.figure_results.length > 0;
   const hasTables = data.table_results.length > 0;
   const hasText = data.text_results.length > 0;
   const hasPaperFigures = (data.paper_figures ?? []).length > 0;
 
+  const totalSelected = selectedResultIds.length;
+  const totalItems = data.figure_results.length + data.table_results.length + data.text_results.length;
+
+  function toggleResult(resultId: number) {
+    setSelectedResultIds(prev => prev.includes(resultId) ? prev.filter(id => id !== resultId) : [...prev, resultId]);
+  }
+
+  function selectAll() {
+    const allIds = [
+      ...data.figure_results.map(r => r.id),
+      ...data.table_results.map(r => r.id),
+      ...data.text_results.map(r => r.id)
+    ];
+    setSelectedResultIds(allIds);
+  }
+
+  function clearSelection() {
+    setSelectedResultIds([]);
+  }
+
+  function exportResults(format: "csv" | "json" | "markdown") {
+    const token = getToken();
+
+    // Build URL with result_ids if in selection mode and items are selected
+    let url = `${API_BASE_URL}/extractions/${jobId}/export?format=${format}`;
+    if (selectionMode && selectedResultIds.length > 0) {
+      selectedResultIds.forEach(id => {
+        url += `&result_ids=${id}`;
+      });
+    }
+
+    fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(response => {
+        if (!response.ok) throw new Error("导出失败");
+        return response.blob();
+      })
+      .then(blob => {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        const suffix = selectionMode && selectedResultIds.length > 0 ? `_selected_${selectedResultIds.length}` : '';
+        a.download = `extraction_${jobId}${suffix}.${format}`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+      })
+      .catch(error => {
+        alert(error.message || "导出失败");
+      });
+  }
+
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4">
+        <div className="flex items-center gap-3">
+          <Button
+            type="button"
+            variant={selectionMode ? "default" : "outline"}
+            size="sm"
+            onClick={() => {
+              setSelectionMode(!selectionMode);
+              if (selectionMode) clearSelection();
+            }}
+          >
+            <Check className="h-4 w-4" />
+            {selectionMode ? "退出选择" : "批量选择"}
+          </Button>
+          {selectionMode && (
+            <>
+              <span className="text-sm text-slate-500">已选 {totalSelected} / {totalItems}</span>
+              {totalSelected < totalItems ? (
+                <Button type="button" variant="ghost" size="sm" onClick={selectAll}>全选</Button>
+              ) : (
+                <Button type="button" variant="ghost" size="sm" onClick={clearSelection}>清空</Button>
+              )}
+            </>
+          )}
+        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger>
+            <Button type="button" size="sm">
+              <Download className="h-4 w-4" />
+              导出结果
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => exportResults("csv")}>导出为 CSV</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => exportResults("json")}>导出为 JSON</DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => exportResults("markdown")}>导出为 Markdown</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
       <SummaryBar data={data} />
 
       {hasPaperFigures ? <PaperFiguresGallery figures={data.paper_figures} /> : null}
@@ -210,9 +356,21 @@ function ResultBody({ data }: { data: StructuredExtractionResponse }) {
             <Image className="h-4 w-4 text-blue-500" />
             <h2 className="text-sm font-semibold text-slate-900">图片/图表分析结果</h2>
             <Badge variant="outline" className="text-[10px]">{data.figure_results.length}</Badge>
+            {selectionMode && selectedResultIds.filter(id => data.figure_results.some(r => r.id === id)).length > 0 && (
+              <Badge variant="outline" className="bg-blue-50 text-blue-600 text-[10px]">已选 {selectedResultIds.filter(id => data.figure_results.some(r => r.id === id)).length}</Badge>
+            )}
           </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {data.figure_results.map((item, i) => <FigureResultCard key={i} item={item} />)}
+            {data.figure_results.map((item, i) => (
+              <FigureResultCard
+                key={item.id}
+                item={item}
+                index={i}
+                selected={selectedResultIds.includes(item.id)}
+                onToggle={() => toggleResult(item.id)}
+                selectionMode={selectionMode}
+              />
+            ))}
           </div>
         </section>
       ) : null}
@@ -223,9 +381,21 @@ function ResultBody({ data }: { data: StructuredExtractionResponse }) {
             <Table2 className="h-4 w-4 text-emerald-500" />
             <h2 className="text-sm font-semibold text-slate-900">表格数据</h2>
             <Badge variant="outline" className="text-[10px]">{data.table_results.length}</Badge>
+            {selectionMode && selectedResultIds.filter(id => data.table_results.some(r => r.id === id)).length > 0 && (
+              <Badge variant="outline" className="bg-emerald-50 text-emerald-600 text-[10px]">已选 {selectedResultIds.filter(id => data.table_results.some(r => r.id === id)).length}</Badge>
+            )}
           </div>
           <div className="grid gap-3 lg:grid-cols-2">
-            {data.table_results.map((item, i) => <TableResultCard key={i} item={item} />)}
+            {data.table_results.map((item, i) => (
+              <TableResultCard
+                key={item.id}
+                item={item}
+                index={i}
+                selected={selectedResultIds.includes(item.id)}
+                onToggle={() => toggleResult(item.id)}
+                selectionMode={selectionMode}
+              />
+            ))}
           </div>
         </section>
       ) : null}
@@ -236,9 +406,21 @@ function ResultBody({ data }: { data: StructuredExtractionResponse }) {
             <FileText className="h-4 w-4 text-slate-500" />
             <h2 className="text-sm font-semibold text-slate-900">正文提取</h2>
             <Badge variant="outline" className="text-[10px]">{data.text_results.length}</Badge>
+            {selectionMode && selectedResultIds.filter(id => data.text_results.some(r => r.id === id)).length > 0 && (
+              <Badge variant="outline" className="bg-slate-50 text-slate-600 text-[10px]">已选 {selectedResultIds.filter(id => data.text_results.some(r => r.id === id)).length}</Badge>
+            )}
           </div>
           <div className="grid gap-3 lg:grid-cols-2">
-            {data.text_results.map((item, i) => <TextResultCard key={i} item={item} />)}
+            {data.text_results.map((item, i) => (
+              <TextResultCard
+                key={item.id}
+                item={item}
+                index={i}
+                selected={selectedResultIds.includes(item.id)}
+                onToggle={() => toggleResult(item.id)}
+                selectionMode={selectionMode}
+              />
+            ))}
           </div>
         </section>
       ) : null}
@@ -339,7 +521,7 @@ export function PaperExtractionResultPage() {
         </Alert>
       )}
 
-      {data?.status === "done" && <ResultBody data={data} />}
+      {data?.status === "done" && <ResultBody data={data} jobId={selectedJobId} />}
     </main>
   );
 }

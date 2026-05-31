@@ -709,6 +709,7 @@ export interface BatchExtractionResult {
 }
 
 export interface StructuredFigureResult {
+  id: number;
   figure_id?: string | null;
   caption?: string | null;
   image_url?: string | null;
@@ -720,6 +721,7 @@ export interface StructuredFigureResult {
 }
 
 export interface StructuredTableResult {
+  id: number;
   table_id?: string | null;
   structured_data?: string | null;
   parse_status?: string | null;
@@ -730,6 +732,7 @@ export interface StructuredTableResult {
 }
 
 export interface StructuredTextResult {
+  id: number;
   metric: string;
   value: string;
   evidence: string;

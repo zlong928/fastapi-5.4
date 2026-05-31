@@ -1,37 +1,50 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Check, Eye, FileText, Loader2, Play, RefreshCw, RotateCcw, Search, Sparkles } from "lucide-react";
+import { AlertCircle, Check, Download, Eye, FileText, Loader2, Play, RefreshCw, RotateCcw, Search, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { batchRunExtraction, getExtractions, getPapers, retryExtraction } from "@/lib/api";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { API_BASE_URL, batchRunExtraction, getExtractions, getPapers, getToken, retryExtraction } from "@/lib/api";
 import { formatChinaDateTime } from "@/lib/time";
 import { BatchExtractionResult, ExtractionJobListItem, PaperListItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { DEFAULT_EXTRACTION_QUERY, EXTRACTION_PRESETS, ExtractionStatusBadge, canExtractPaperListItem, extractionStatusLabel, isExtractionBusy } from "@/pages/paperShared";
 
-function ExtractionJobCard({ job, onRetry, retrying }: { job: ExtractionJobListItem; onRetry: (jobId: number) => void; retrying: boolean }) {
+function ExtractionJobCard({ job, onRetry, retrying, selected, onToggle }: { job: ExtractionJobListItem; onRetry: (jobId: number) => void; retrying: boolean; selected: boolean; onToggle: () => void }) {
   return (
-    <article className="rounded-md border border-slate-200 bg-white p-4">
+    <article className={cn("rounded-md border bg-white p-4 transition", selected ? "border-slate-900 ring-2 ring-slate-900" : "border-slate-200")}>
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <ExtractionStatusBadge status={job.status} />
-            <span className="text-xs text-slate-400">#{job.id}</span>
-            <span className="text-xs text-slate-400">{job.result_count} 条结果</span>
-          </div>
-          <Link to={`/papers/${job.paper_id}`} className="mt-3 inline-flex max-w-full items-center gap-2 text-base font-semibold text-slate-950 hover:text-slate-700">
-            <FileText className="h-4 w-4 shrink-0 text-slate-400" />
-            <span className="truncate">{job.paper_title}</span>
-          </Link>
-          <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-700">{job.query}</p>
-          <p className="mt-2 text-xs text-slate-400">{formatChinaDateTime(job.created_at)} · {extractionStatusLabel(job.status)}</p>
-          {job.error_message ? (
-            <div className="mt-3 flex gap-2 rounded-md bg-red-50 p-3 text-xs leading-5 text-red-700">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span className="line-clamp-3">{job.error_message}</span>
+        <div className="flex min-w-0 flex-1 gap-3">
+          <button
+            type="button"
+            onClick={onToggle}
+            className={cn(
+              "mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded border transition",
+              selected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white hover:border-slate-400"
+            )}
+          >
+            {selected ? <Check className="h-3.5 w-3.5" /> : null}
+          </button>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <ExtractionStatusBadge status={job.status} />
+              <span className="text-xs text-slate-400">#{job.id}</span>
+              <span className="text-xs text-slate-400">{job.result_count} 条结果</span>
             </div>
-          ) : null}
+            <Link to={`/papers/${job.paper_id}`} className="mt-3 inline-flex max-w-full items-center gap-2 text-base font-semibold text-slate-950 hover:text-slate-700">
+              <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+              <span className="truncate">{job.paper_title}</span>
+            </Link>
+            <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-700">{job.query}</p>
+            <p className="mt-2 text-xs text-slate-400">{formatChinaDateTime(job.created_at)} · {extractionStatusLabel(job.status)}</p>
+            {job.error_message ? (
+              <div className="mt-3 flex gap-2 rounded-md bg-red-50 p-3 text-xs leading-5 text-red-700">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span className="line-clamp-3">{job.error_message}</span>
+              </div>
+            ) : null}
+          </div>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
           <Button asChild size="sm" variant="outline" className="rounded-md border-slate-200 shadow-none">
@@ -79,6 +92,7 @@ export function ExtractionsPage() {
   const [activePreset, setActivePreset] = useState(0);
   const [keyword, setKeyword] = useState("");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [selectedJobIds, setSelectedJobIds] = useState<number[]>([]);
 
   const jobsQuery = useQuery({
     queryKey: ["extractions"],
@@ -113,6 +127,84 @@ export function ExtractionsPage() {
   function togglePaper(paper: PaperListItem) {
     if (!canExtractPaperListItem(paper)) return;
     setSelectedIds((current) => current.includes(paper.id) ? current.filter((id) => id !== paper.id) : [...current, paper.id]);
+  }
+
+  function toggleJob(jobId: number) {
+    setSelectedJobIds((current) => current.includes(jobId) ? current.filter((id) => id !== jobId) : [...current, jobId]);
+  }
+
+  function selectAllJobs() {
+    setSelectedJobIds(jobs.map(job => job.id));
+  }
+
+  function clearJobSelection() {
+    setSelectedJobIds([]);
+  }
+
+  function exportJobs(format: "csv" | "json" | "markdown") {
+    if (selectedJobIds.length === 0) {
+      alert("请先选择要导出的任务");
+      return;
+    }
+
+    const token = getToken();
+
+    if (selectedJobIds.length === 1) {
+      // Single job export
+      const jobId = selectedJobIds[0];
+      const url = `${API_BASE_URL}/extractions/${jobId}/export?format=${format}`;
+
+      fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` }
+      })
+        .then(response => {
+          if (!response.ok) throw new Error("导出失败");
+          return response.blob();
+        })
+        .then(blob => {
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `extraction_${jobId}.${format}`;
+          document.body.appendChild(a);
+          a.click();
+          window.URL.revokeObjectURL(url);
+          document.body.removeChild(a);
+        })
+        .catch(error => {
+          alert(error.message || "导出失败");
+        });
+    } else {
+      // Batch export
+      const params = new URLSearchParams();
+      selectedJobIds.forEach(id => params.append("job_ids", String(id)));
+      params.set("format", format);
+
+      const url = `${API_BASE_URL}/extractions/batch-export?${params.toString()}`;
+
+      fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` }
+      })
+        .then(response => {
+          if (!response.ok) throw new Error("导出失败");
+          return response.blob();
+        })
+        .then(blob => {
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `batch_extraction_${selectedJobIds.length}_jobs.${format}`;
+          document.body.appendChild(a);
+          a.click();
+          window.URL.revokeObjectURL(url);
+          document.body.removeChild(a);
+        })
+        .catch(error => {
+          alert(error.message || "导出失败");
+        });
+    }
   }
 
   return (
@@ -207,11 +299,51 @@ export function ExtractionsPage() {
       </section>
 
       <section className="space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold text-slate-950">任务历史</h2>
-          {jobsQuery.isFetching ? <span className="inline-flex items-center gap-2 text-sm text-slate-400"><Loader2 className="h-4 w-4 animate-spin" />刷新中</span> : null}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm font-semibold text-slate-950">任务历史</h2>
+            {selectedJobIds.length > 0 ? (
+              <span className="text-xs text-slate-500">已选择 {selectedJobIds.length} 个任务</span>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2">
+            {jobsQuery.isFetching ? <span className="inline-flex items-center gap-2 text-sm text-slate-400"><Loader2 className="h-4 w-4 animate-spin" />刷新中</span> : null}
+            {jobs.length > 0 ? (
+              <>
+                {selectedJobIds.length > 0 ? (
+                  <>
+                    <Button type="button" variant="outline" size="sm" className="rounded-md border-slate-200 shadow-none" onClick={clearJobSelection}>
+                      取消选择
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger>
+                        <Button type="button" size="sm" className="rounded-md">
+                          <Download className="h-4 w-4" />
+                          导出 ({selectedJobIds.length})
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => exportJobs("csv")}>导出为 CSV</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => exportJobs("json")}>导出为 JSON</DropdownMenuItem>
+                        {selectedJobIds.length === 1 ? (
+                          <>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem onClick={() => exportJobs("markdown")}>导出为 Markdown</DropdownMenuItem>
+                          </>
+                        ) : null}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </>
+                ) : (
+                  <Button type="button" variant="outline" size="sm" className="rounded-md border-slate-200 shadow-none" onClick={selectAllJobs}>
+                    全选
+                  </Button>
+                )}
+              </>
+            ) : null}
+          </div>
         </div>
-        {jobs.map((job) => <ExtractionJobCard key={job.id} job={job} onRetry={(jobId) => retryMutation.mutate(jobId)} retrying={retryMutation.isPending} />)}
+        {jobs.map((job) => <ExtractionJobCard key={job.id} job={job} onRetry={(jobId) => retryMutation.mutate(jobId)} retrying={retryMutation.isPending} selected={selectedJobIds.includes(job.id)} onToggle={() => toggleJob(job.id)} />)}
         {jobsQuery.isLoading ? <div className="rounded-md bg-slate-50 p-10 text-center text-sm text-slate-400">加载中</div> : null}
         {!jobsQuery.isLoading && !jobs.length ? <div className="rounded-md bg-slate-50 p-10 text-center text-sm text-slate-400">暂无提取任务</div> : null}
       </section>

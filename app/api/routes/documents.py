@@ -2,7 +2,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.routing import APIRoute
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -39,8 +39,10 @@ from app.services.document_embedding_service import DocumentEmbeddingService
 from app.services.document_service import DONE_STATUSES, DocumentService
 from app.services.document_search_service import DocumentSearchService
 from app.services.document_upload_service import DocumentUploadService, DuplicateUploadError
+from app.services.export_service import ExportService
 from app.services.job_run_service import JobRunService
 from app.services.paper.evidence import asset_image_url, asset_metadata, normalize_evidence_type
+from app.services.soft_delete_service import SoftDeleteService
 from app.utils.json import json_loads_object_or_none
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -388,13 +390,18 @@ async def retry_parse_document(document_id: int, current_user: User = Depends(ge
 
 @router.delete("/{document_id}", response_model=dict)
 async def delete_document(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    """Soft delete a document. Use /permanent endpoint for permanent deletion."""
     service = DocumentService(db)
     document = service.get_document_by_id(document_id)
     if not document:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
     assert_document_owner(document, current_user)
-    deleted_id = service.hard_delete_document(document_id)
-    return {"id": deleted_id, "status": "deleted", "message": "Document deleted."}
+
+    # Perform soft delete instead of hard delete
+    SoftDeleteService.soft_delete(db=db, instance=document, deleted_by_user_id=current_user.id)
+
+    return {"id": document_id, "status": "deleted", "message": "Document soft deleted. Use restore endpoint to recover."}
+
 
 
 @router.get("/{document_id}/events", response_model=PaginatedDocumentEvents)
@@ -495,6 +502,136 @@ async def get_document_kg(document_id: int, current_user: User = Depends(get_cur
     entities = db.query(KgEntity).filter(KgEntity.document_id == document_id).order_by(KgEntity.name).all()
     relations = db.query(KgRelation).filter(KgRelation.document_id == document_id).order_by(KgRelation.id).all()
     return DocumentKgResponse(document_id=document_id, entities=entities, relations=relations)
+
+
+@router.get("/export")
+async def export_documents(
+    source_type: str | None = Query(None, pattern=SOURCE_TYPE_PATTERN),
+    status_filter: str | None = Query(None, alias="status"),
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Response:
+    """Export documents list to CSV or JSON format with optional filters."""
+    query = db.query(Document).filter(Document.user_id == current_user.id, Document.is_deleted == False)
+
+    if source_type:
+        query = query.filter(Document.source_type == source_type)
+
+    if status_filter:
+        query = query.filter(Document.status == status_filter)
+
+    documents = query.order_by(Document.created_at.desc()).all()
+
+    if not documents:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No documents found")
+
+    if format == "csv":
+        content = ExportService.export_documents_to_csv(documents)
+        media_type = "text/csv"
+        filename = f"documents_export_{len(documents)}_items.csv"
+    else:  # json
+        content = ExportService.export_documents_to_json(documents)
+        media_type = "application/json"
+        filename = f"documents_export_{len(documents)}_items.json"
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
+
+
+@router.get("/deleted", response_model=DocumentListResponse)
+async def list_deleted_documents(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get list of soft-deleted documents for the current user."""
+    documents = SoftDeleteService.get_deleted_documents(
+        db=db,
+        user_id=current_user.id,
+        limit=limit,
+        offset=offset
+    )
+
+    total = SoftDeleteService.count_deleted_documents(db=db, user_id=current_user.id)
+
+    return DocumentListResponse(
+        documents=documents,
+        total=total,
+        limit=limit,
+        offset=offset
+    )
+
+
+@router.post("/{document_id}/restore")
+async def restore_document(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Restore a soft-deleted document."""
+    document = db.query(Document).filter(
+        Document.id == document_id,
+        Document.user_id == current_user.id
+    ).first()
+
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    if not document.is_deleted:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Document is not deleted")
+
+    restored_document = SoftDeleteService.restore(db=db, instance=document)
+
+    return {"message": "Document restored successfully", "document_id": restored_document.id}
+
+
+@router.delete("/{document_id}/permanent")
+async def permanent_delete_document(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Permanently delete a document. This action is irreversible!"""
+    document = db.query(Document).filter(
+        Document.id == document_id,
+        Document.user_id == current_user.id
+    ).first()
+
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    if not document.is_deleted:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Document must be soft-deleted first before permanent deletion"
+        )
+
+    SoftDeleteService.permanent_delete(db=db, instance=document)
+
+    return {"message": "Document permanently deleted", "document_id": document_id}
+
+
+@router.post("/batch-restore")
+async def batch_restore_documents(
+    document_ids: list[int],
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Batch restore multiple soft-deleted documents."""
+    count = SoftDeleteService.batch_restore_documents(
+        db=db,
+        document_ids=document_ids,
+        user_id=current_user.id
+    )
+
+    return {"message": f"Restored {count} documents", "count": count}
 
 
 def _apply_openapi_boundaries() -> None:

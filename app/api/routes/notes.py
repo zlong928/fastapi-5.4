@@ -250,7 +250,7 @@ def upsert_note_document(db: Session, current_user: User, payload: NotePayload, 
 
 @router.get("", response_model=list[NoteRead])
 def list_notes(source_type: str | None = Query(None, pattern="^(note|diary)$"), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[NoteRead]:
-    query = db.query(Document).filter(Document.user_id == current_user.id, Document.status != "deleted", Document.source_type.in_(["note", "diary"]))
+    query = db.query(Document).filter(Document.user_id == current_user.id, Document.is_deleted == False, Document.source_type.in_(["note", "diary"]))
     if source_type:
         query = query.filter(Document.source_type == source_type)
     documents = query.order_by(Document.updated_at.desc()).all()

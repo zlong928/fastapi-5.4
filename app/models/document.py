@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.time import app_now
@@ -69,6 +69,11 @@ class Document(Base):
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     fail_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # 软删除字段
+    is_deleted: Mapped[bool] = mapped_column(default=False, nullable=False, index=True)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+
     # 时间戳
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -93,7 +98,7 @@ class Document(Base):
     )
 
     # 关系
-    user: Mapped[User] = relationship("User", back_populates="documents")
+    user: Mapped[User] = relationship("User", back_populates="documents", foreign_keys=[user_id])
     tag_links: Mapped[list[DocumentTag]] = relationship(
         "DocumentTag",
         back_populates="document",

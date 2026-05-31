@@ -62,7 +62,7 @@ def serialize_collection(collection: Collection, db: Session) -> dict:
         db.query(func.count(Document.id))
         .filter(
             Document.user_id == collection.user_id,
-            Document.status != "deleted",
+            Document.is_deleted == False,
             Document.collection_name == collection.name,
         )
         .scalar()
@@ -119,7 +119,7 @@ def build_collection_documents_query(
 ):
     query = db.query(Document).filter(
         Document.user_id == user_id,
-        Document.status != "deleted",
+        Document.is_deleted == False,
         Document.collection_name == collection_name,
     )
     if keyword:
@@ -462,7 +462,7 @@ def remove_document_from_collection(
 
 
 def build_statistics(current_user: User, db: Session) -> DashboardStatsResponse:
-    base_filters = [Document.user_id == current_user.id, Document.status != "deleted"]
+    base_filters = [Document.user_id == current_user.id, Document.is_deleted == False]
     total = db.query(func.count(Document.id)).filter(*base_filters).scalar() or 0
     done = db.query(func.count(Document.id)).filter(*base_filters, Document.status.in_(DONE_STATUSES)).scalar() or 0
     failed = db.query(func.count(Document.id)).filter(*base_filters, Document.status == "failed").scalar() or 0

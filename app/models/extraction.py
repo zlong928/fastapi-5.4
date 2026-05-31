@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.time import app_now
@@ -28,6 +28,10 @@ class ExtractionJob(Base):
         onupdate=lambda: app_now(),
         nullable=False,
     )
+
+    # 软删除字段
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     paper: Mapped[Document] = relationship("Document")
     results: Mapped[list[ExtractionResult]] = relationship(
@@ -55,5 +59,9 @@ class ExtractionResult(Base):
     parse_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
     extraction_mode: Mapped[str | None] = mapped_column(String(60), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: app_now(), nullable=False)
+
+    # 软删除字段
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     job: Mapped[ExtractionJob] = relationship("ExtractionJob", back_populates="results")

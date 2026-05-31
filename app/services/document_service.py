@@ -538,7 +538,7 @@ class DocumentService:
         query = self.db.query(Document).filter(Document.user_id == user_id)
 
         if exclude_deleted:
-            query = query.filter(Document.status != "deleted")
+            query = query.filter(Document.is_deleted == False)
         if keyword:
             pattern = f"%{keyword.strip()}%"
             query = query.filter(
