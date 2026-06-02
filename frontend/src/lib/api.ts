@@ -6,6 +6,9 @@ import {
   BookProgressUpdate,
   BookRead,
   BookUploadResponse,
+  ChatSessionDetail,
+  ChatSessionListItem,
+  ChatStreamSession,
   BookmarkCreate,
   BookmarkCreateResponse,
   ChatStreamSource,
@@ -298,13 +301,22 @@ export function updateDocument(documentId: number, payload: { title?: string; co
 export function batchDeleteDocuments(ids: number[]): Promise<BatchDeleteResponse> { return request<BatchDeleteResponse>("/documents/batch", { method: "DELETE", body: JSON.stringify({ ids }) }); }
 export function batchTagDocuments(documentIds: number[], tagIds: number[]): Promise<BatchTagResponse> { return request<BatchTagResponse>("/documents/batch-tag", { method: "POST", body: JSON.stringify({ document_ids: documentIds, tag_ids: tagIds }) }); }
 export function getDocumentEvents(documentId: number, page = 1, size = 20): Promise<PaginatedDocumentEvents> { return request<PaginatedDocumentEvents>(`/documents/${documentId}/events?page=${page}&size=${size}`); }
+export function getChatSessions(): Promise<ChatSessionListItem[]> { return request<ChatSessionListItem[]>("/chat/sessions"); }
+export function getChatSession(sessionId: number): Promise<ChatSessionDetail> { return request<ChatSessionDetail>(`/chat/sessions/${sessionId}`); }
 
 export async function streamChat(question: string, callbacks: StreamChatCallbacks, options: StreamChatOptions = {}) {
   const token = getToken();
   const response = await fetch(`${API_BASE_URL}/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: JSON.stringify({ question, top_k: options.topK ?? 5, document_id: options.documentId, threshold: options.threshold ?? 0 })
+    body: JSON.stringify({
+      question,
+      top_k: options.topK ?? 5,
+      document_id: options.documentId,
+      threshold: options.threshold ?? 0,
+      session_id: options.sessionId ?? undefined,
+      enable_web_search: options.enableWebSearch ?? false  // 新增：传递网页搜索开关
+    })
   });
   if (response.status === 401) handleUnauthorized();
   if (!response.ok || !response.body) throw new Error(response.statusText || `Request failed with ${response.status}`);
@@ -320,6 +332,7 @@ export async function streamChat(question: string, callbacks: StreamChatCallback
     for (const message of messages) {
       const parsed = parseSseMessage(message);
       if (!parsed) continue;
+      if (parsed.event === "session") callbacks.onSession?.(parsed.data as ChatStreamSession);
       if (parsed.event === "sources") callbacks.onSources?.(parsed.data as ChatStreamSource[]);
       if (parsed.event === "token") callbacks.onToken?.(String(parsed.data));
       if (parsed.event === "error") callbacks.onError?.(String(parsed.data));

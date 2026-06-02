@@ -26,7 +26,7 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def create_db_and_tables() -> None:
-    from app.models import Book, BookProgress, Collection, Document, DocumentAsset, DocumentChunk, DocumentClaim, DocumentEvent, DocumentTag, ExtractionJob, ExtractionResult, FileCleanupJob, JobRun, KgEntity, KgRelation, OAuthAccount, PaperTable, ParseJob, Tag, Task, User  # noqa: F401
+    from app.models import Book, BookProgress, ChatMessage, ChatMessageSource, ChatSession, Collection, Document, DocumentAsset, DocumentChunk, DocumentClaim, DocumentEvent, DocumentTag, ExtractionJob, ExtractionResult, FileCleanupJob, JobRun, KgEntity, KgRelation, OAuthAccount, PaperTable, ParseJob, Tag, Task, User  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     ensure_sqlite_compat_columns()

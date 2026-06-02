@@ -1,4 +1,5 @@
 from .book import Book, BookProgress
+from .chat import ChatMessage, ChatMessageSource, ChatSession
 from .collection import Collection
 from .document import Document
 from .document_asset import DocumentAsset
@@ -20,6 +21,9 @@ from .user import User
 __all__ = [
     "Book",
     "BookProgress",
+    "ChatMessage",
+    "ChatMessageSource",
+    "ChatSession",
     "Collection",
     "Document",
     "DocumentAsset",

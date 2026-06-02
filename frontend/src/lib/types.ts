@@ -533,6 +533,8 @@ export interface DashboardStatsResponse {
 }
 
 export interface ChatStreamSource {
+  source_type?: "document_chunk" | "extraction_result" | string;
+  source_id?: number | null;
   chunk_id: number | null;
   document_id: number | null;
   document_title: string | null;
@@ -544,15 +546,55 @@ export interface ChatStreamSource {
   source?: string | null;
   page_start?: number | null;
   page_end?: number | null;
+  extraction_job_id?: number | null;
+  field_name?: string | null;
+  content?: string | null;
+  evidence?: string | null;
+  confidence?: number | null;
+}
+
+export interface ChatMessageItem {
+  id: number;
+  role: "user" | "assistant" | string;
+  content: string;
+  created_at: string;
+  sources: ChatStreamSource[];
+}
+
+export interface ChatSessionListItem {
+  id: number;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+  last_message?: string | null;
+}
+
+export interface ChatSessionDetail {
+  id: number;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  messages: ChatMessageItem[];
+}
+
+export interface ChatStreamSession {
+  id: number;
+  title: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface StreamChatOptions {
   topK?: number;
   documentId?: number;
   threshold?: number;
+  sessionId?: number | null;
+  enableWebSearch?: boolean;  // 新增：是否启用网页搜索
 }
 
 export interface StreamChatCallbacks {
+  onSession?: (session: ChatStreamSession) => void;
   onSources?: (sources: ChatStreamSource[]) => void;
   onToken?: (token: string) => void;
   onDone?: () => void;

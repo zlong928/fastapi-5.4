@@ -123,6 +123,11 @@ OBSIDIAN_SYNC_ENABLED = os.getenv("OBSIDIAN_SYNC_ENABLED", "False").lower() in (
 OBSIDIAN_CREATE_REFERENCE_NOTE = os.getenv("OBSIDIAN_CREATE_REFERENCE_NOTE", "True").lower() in ("true", "1", "t", "yes", "on")
 OBSIDIAN_VERIFY_SSL = os.getenv("OBSIDIAN_VERIFY_SSL", "False").lower() in ("true", "1", "t", "yes", "on")
 
+# OpenAI-compatible chat completions
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
 # Embedding / Vector Search
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "ollama")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -134,6 +139,11 @@ CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "500"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "80"))
 CHUNK_MIN_SIZE_TARGET = int(os.getenv("CHUNK_MIN_SIZE_TARGET", "120"))
 TEXT_SPLITTER = os.getenv("TEXT_SPLITTER", "markdown_header").strip().lower()
+
+# Web Search (Tavily)
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+WEB_SEARCH_ENABLED = os.getenv("WEB_SEARCH_ENABLED", "True").lower() in ("true", "1", "t", "yes", "on")
+WEB_SEARCH_MAX_RESULTS = int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
 
 
 def ensure_runtime_dirs() -> None:

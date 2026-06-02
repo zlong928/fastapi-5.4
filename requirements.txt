@@ -43,3 +43,4 @@ itsdangerous==2.2.0
 sqlite-vec>=0.1.0
 httpx>=0.28.0
 chardet==5.2.0
+tavily-python>=0.3.0
