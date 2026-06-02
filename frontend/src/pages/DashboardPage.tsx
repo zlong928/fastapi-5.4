@@ -24,7 +24,7 @@ export function DashboardPage() {
   const entries = [
     { title: "知识库", href: "/knowledge", icon: Library, meta: `${stats.data?.total_documents ?? 0} 个文档` },
     { title: "搜索", href: "/search", icon: Search, meta: "文档 / 片段" },
-    { title: "上传", href: "/knowledge?upload=1", icon: UploadCloud, meta: "PDF / EPUB / Markdown" }
+    { title: "上传", href: "/knowledge?upload=1", icon: UploadCloud, meta: "PDF / EPUB / Video" }
   ];
 
   return (

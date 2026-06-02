@@ -9,7 +9,7 @@ TEXT_TYPES = {"txt", "text"}
 PDF_TYPES = {"pdf"}
 IMAGE_TYPES = {"image"}
 MARKDOWN_TYPES = {"markdown", "md"}
-PREVIEW_ONLY_TYPES = {"epub", "docx"}
+PREVIEW_ONLY_TYPES = {"epub", "docx", "video"}
 BASIC_FILE_TYPES = {"pdf", "txt", "text", "markdown", "md"}
 
 
@@ -87,6 +87,8 @@ def select_parser_strategy(processing_mode: str | DocumentProcessingMode, detect
             return ProcessingStrategy(name="epub_reader_preview")
         if source_type == "docx":
             return ProcessingStrategy(name="download_preview_only")
+        if source_type == "video":
+            return ProcessingStrategy(name="video_preview")
         return ProcessingStrategy(name="plain_text")
     if mode == DocumentProcessingMode.PLAIN_TEXT:
         return ProcessingStrategy(name="plain_text")

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from io import BytesIO
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote
+import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -27,6 +29,8 @@ from app.services.file_cleanup_service import FileCleanupService
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00"
 PDF_BYTES = b"%PDF-1.4\n"
+MP4_BYTES = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
+MOV_BYTES = b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  "
 
 
 @pytest.fixture()
@@ -710,6 +714,93 @@ def test_upload_auto_renames_duplicate_user_filename(client, db, storage, monkey
     assert second_document.stored_filename == "notes-1.txt"
     assert storage.get_file_path(first_document.original_file_path).read_bytes() == b"first"
     assert storage.get_file_path(second_document.original_file_path).read_bytes() == b"second"
+
+
+@pytest.mark.parametrize(
+    ("filename", "content", "declared_mime_type", "expected_mime_type"),
+    [
+        ("screen-recording.mp4", MP4_BYTES, "video/mp4", "video/mp4"),
+        ("clip.mov", MOV_BYTES, "video/quicktime", "video/quicktime"),
+    ],
+)
+def test_upload_video_is_stored_for_preview_without_parse_queue(
+    client,
+    db,
+    storage,
+    monkeypatch,
+    filename,
+    content,
+    declared_mime_type,
+    expected_mime_type,
+):
+    monkeypatch.setattr("app.services.document_upload_service.FileStorageService", lambda: storage)
+    enqueued: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        "app.services.document_service.enqueue_document_parse",
+        lambda document_id, parse_job_id: enqueued.append((document_id, parse_job_id)),
+    )
+
+    response = client.post(
+        "/documents/upload",
+        files={"file": (filename, content, declared_mime_type)},
+    )
+
+    assert response.status_code == 202
+    payload = response.json()
+    document = db.get(Document, payload["document_id"])
+    job = db.get(JobRun, payload["parse_job_id"])
+    assert document.source_type == "video"
+    assert document.mime_type == expected_mime_type
+    assert document.status == "done"
+    assert document.content_summary == "文件已保存，可在知识库中预览；当前版本未抽取全文用于检索。"
+    assert job.status == "succeeded"
+    assert enqueued == []
+    assert storage.get_file_path(document.original_file_path).read_bytes() == content
+
+    list_response = client.get("/documents", params={"file_type": "video"})
+    assert list_response.status_code == 200
+    assert [item["id"] for item in list_response.json()["items"]] == [document.id]
+
+    export_response = client.get("/documents/export", params={"source_type": "video", "format": "json"})
+    assert export_response.status_code == 200
+    exported = export_response.json()
+    assert exported["summary"]["total_documents"] == 1
+    assert exported["documents"][0]["source_type"] == "video"
+
+
+def test_export_selected_uploaded_files_returns_zip(client, db, storage, monkeypatch):
+    monkeypatch.setattr("app.services.document_upload_service.FileStorageService", lambda: storage)
+    monkeypatch.setattr("app.services.document_service.FileStorageService", lambda: storage)
+
+    text_response = client.post(
+        "/documents/upload",
+        files={"file": ("notes.txt", b"selected notes", "text/plain")},
+    )
+    video_response = client.post(
+        "/documents/upload",
+        files={"file": ("screen-recording.mp4", MP4_BYTES, "video/mp4")},
+    )
+    assert text_response.status_code == 202
+    assert video_response.status_code == 202
+    document_ids = [text_response.json()["document_id"], video_response.json()["document_id"]]
+
+    response = client.post("/documents/export-files", json={"document_ids": document_ids})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    assert "knowledge_files_2_items.zip" in response.headers["content-disposition"]
+    with zipfile.ZipFile(BytesIO(response.content)) as archive:
+        assert archive.namelist() == ["notes.txt", "screen-recording.mp4"]
+        assert archive.read("notes.txt") == b"selected notes"
+        assert archive.read("screen-recording.mp4") == MP4_BYTES
+
+    metadata_response = client.get(
+        "/documents/export",
+        params=[("document_ids", str(document_ids[1])), ("document_ids", str(document_ids[0])), ("format", "json")],
+    )
+    assert metadata_response.status_code == 200
+    exported_documents = metadata_response.json()["documents"]
+    assert [document["id"] for document in exported_documents] == [document_ids[1], document_ids[0]]
 
 
 def test_create_document_with_parse_job_writes_three_tables_in_one_transaction(db, storage, user):

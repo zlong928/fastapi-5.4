@@ -1,4 +1,7 @@
 from datetime import datetime
+from io import BytesIO
+from pathlib import Path
+import zipfile
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.routing import APIRoute
@@ -23,6 +26,7 @@ from app.schemas.document import (
     DocumentChunkRead,
     DocumentDetailResponse,
     DocumentEventRead,
+    DocumentFileExportRequest,
     DocumentKgResponse,
     DocumentListResponse,
     DocumentProcessingMode,
@@ -47,7 +51,7 @@ from app.utils.json import json_loads_object_or_none
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 asset_router = APIRouter(tags=["document-assets"])
-SOURCE_TYPE_PATTERN = "^(pdf|markdown|txt|image|docx|epub|bookmark|note|diary)$"
+SOURCE_TYPE_PATTERN = "^(pdf|markdown|txt|image|video|docx|epub|bookmark|note|diary)$"
 
 
 def explain_interface(*, responsibility: str, database: str, files: str, future: str | None = None) -> str:
@@ -147,6 +151,19 @@ def serialize_document_claim(claim: DocumentClaim) -> DocumentClaimRead:
     )
 
 
+def archive_filename(document: Document, used_names: set[str]) -> str:
+    filename = Path((document.original_filename or "").replace("\\", "/")).name or f"document-{document.id}"
+    candidate = filename
+    stem = Path(filename).stem or f"document-{document.id}"
+    suffix = Path(filename).suffix
+    counter = 1
+    while candidate in used_names:
+        candidate = f"{stem}-{counter}{suffix}"
+        counter += 1
+    used_names.add(candidate)
+    return candidate
+
+
 @router.post("/bookmarks", response_model=BookmarkCreateResponse, status_code=status.HTTP_201_CREATED)
 async def create_bookmark_document(payload: BookmarkCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> BookmarkCreateResponse:
     try:
@@ -173,7 +190,7 @@ async def upload_document(file: UploadFile = File(...), title: str | None = Form
         document = result.document
         job = result.parse_job
         message = "Document uploaded and queued for parsing."
-        if document.source_type in {"epub", "docx"}:
+        if document.source_type in {"epub", "docx", "video"}:
             message = "Document uploaded for preview. Text extraction is not enabled for this file type."
         if document.status == "failed" and job.status == "failed":
             message = "Document uploaded, but parsing could not be queued."
@@ -269,6 +286,109 @@ async def re_embed_all_documents(current_user: User = Depends(get_current_user),
         except Exception:
             db.rollback()
     return {"user_id": current_user.id, "documents_processed": len(docs), "chunks_embedded": total}
+
+
+@router.get(
+    "/export",
+    summary="Export documents list",
+    description=explain_interface(
+        responsibility="Export the current user's knowledge document metadata as CSV or JSON.",
+        database="Reads documents filtered by source_type and status; does not write database rows.",
+        files="does not read stored upload file bytes.",
+    ),
+)
+async def export_documents(
+    document_ids: list[int] | None = Query(None),
+    source_type: str | None = Query(None, pattern=SOURCE_TYPE_PATTERN),
+    status_filter: str | None = Query(None, alias="status"),
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Response:
+    """Export documents list to CSV or JSON format with optional filters."""
+    query = db.query(Document).filter(Document.user_id == current_user.id, Document.is_deleted == False)
+    requested_ids = list(dict.fromkeys(document_ids or []))
+
+    if requested_ids:
+        query = query.filter(Document.id.in_(requested_ids))
+
+    if source_type:
+        query = query.filter(Document.source_type == source_type)
+
+    if status_filter:
+        query = query.filter(Document.status == status_filter)
+
+    documents = query.all() if requested_ids else query.order_by(Document.created_at.desc()).all()
+
+    if not documents:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No documents found")
+    if requested_ids:
+        documents_by_id = {document.id: document for document in documents}
+        if len(documents_by_id) != len(requested_ids):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="One or more selected documents were not found.")
+        documents = [documents_by_id[document_id] for document_id in requested_ids]
+
+    if format == "csv":
+        content = ExportService.export_documents_to_csv(documents)
+        media_type = "text/csv"
+        filename = f"documents_export_{len(documents)}_items.csv"
+    else:  # json
+        content = ExportService.export_documents_to_json(documents)
+        media_type = "application/json"
+        filename = f"documents_export_{len(documents)}_items.json"
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
+
+
+@router.post(
+    "/export-files",
+    summary="Export selected document files",
+    description=explain_interface(
+        responsibility="Export selected authenticated user-owned knowledge upload files as one ZIP archive.",
+        database="Reads documents for ownership and file metadata; does not write database rows.",
+        files="reads selected stored upload files from UPLOAD_DIR and streams them into a ZIP archive.",
+    ),
+)
+async def export_document_files(payload: DocumentFileExportRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> Response:
+    requested_ids = list(dict.fromkeys(payload.document_ids))
+    documents_by_id = {
+        document.id: document
+        for document in db.query(Document)
+        .filter(
+            Document.user_id == current_user.id,
+            Document.is_deleted == False,
+            Document.id.in_(requested_ids),
+        )
+        .all()
+    }
+    if len(documents_by_id) != len(requested_ids):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="One or more selected documents were not found.")
+
+    service = DocumentService(db)
+    archive_buffer = BytesIO()
+    used_names: set[str] = set()
+    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for document_id in requested_ids:
+            document = documents_by_id[document_id]
+            if document.source_type in {"bookmark", "note", "diary"} or document.original_file_path.startswith(("bookmark:", "note:", "diary:")):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only uploaded files can be exported.")
+            file_path = service.file_storage.get_file_path(document.original_file_path)
+            if not file_path.exists():
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Stored file not found for document {document.id}.")
+            archive.writestr(archive_filename(document, used_names), file_path.read_bytes())
+
+    filename = f"knowledge_files_{len(requested_ids)}_items.zip"
+    return Response(
+        content=archive_buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/{document_id}", response_model=DocumentDetailResponse)
@@ -502,46 +622,6 @@ async def get_document_kg(document_id: int, current_user: User = Depends(get_cur
     entities = db.query(KgEntity).filter(KgEntity.document_id == document_id).order_by(KgEntity.name).all()
     relations = db.query(KgRelation).filter(KgRelation.document_id == document_id).order_by(KgRelation.id).all()
     return DocumentKgResponse(document_id=document_id, entities=entities, relations=relations)
-
-
-@router.get("/export")
-async def export_documents(
-    source_type: str | None = Query(None, pattern=SOURCE_TYPE_PATTERN),
-    status_filter: str | None = Query(None, alias="status"),
-    format: str = Query("csv", pattern="^(csv|json)$"),
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-) -> Response:
-    """Export documents list to CSV or JSON format with optional filters."""
-    query = db.query(Document).filter(Document.user_id == current_user.id, Document.is_deleted == False)
-
-    if source_type:
-        query = query.filter(Document.source_type == source_type)
-
-    if status_filter:
-        query = query.filter(Document.status == status_filter)
-
-    documents = query.order_by(Document.created_at.desc()).all()
-
-    if not documents:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No documents found")
-
-    if format == "csv":
-        content = ExportService.export_documents_to_csv(documents)
-        media_type = "text/csv"
-        filename = f"documents_export_{len(documents)}_items.csv"
-    else:  # json
-        content = ExportService.export_documents_to_json(documents)
-        media_type = "application/json"
-        filename = f"documents_export_{len(documents)}_items.json"
-
-    return Response(
-        content=content,
-        media_type=media_type,
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"'
-        }
-    )
 
 
 @router.get("/deleted", response_model=DocumentListResponse)

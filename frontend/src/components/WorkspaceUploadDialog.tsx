@@ -1,16 +1,54 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle2, FileUp, Loader2, Paperclip, UploadCloud, X } from "lucide-react";
-import { ChangeEvent, useMemo, useState } from "react";
+import { ChangeEvent, ClipboardEvent, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { batchUploadDocuments, uploadDocument } from "@/lib/api";
 import { DOCUMENT_PROCESSING_MODE_OPTIONS, DocumentBatchUploadItem, DocumentProcessingMode } from "@/lib/types";
 
+export interface WorkspaceUploadPasteBatch {
+  id: number;
+  files: File[];
+}
+
 interface WorkspaceUploadDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  pasteBatch?: WorkspaceUploadPasteBatch | null;
 }
 
-const ACCEPTED_KNOWLEDGE_FILES = ".pdf,.md,.markdown,.txt,.png,.jpg,.jpeg,.webp,.epub,.docx";
+export const ACCEPTED_KNOWLEDGE_FILES = [
+  ".pdf",
+  ".md",
+  ".markdown",
+  ".txt",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".webp",
+  ".epub",
+  ".docx",
+  ".mp4",
+  ".mov",
+  ".m4v",
+  ".webm",
+  ".avi",
+  ".mkv",
+  "video/mp4",
+  "video/quicktime",
+  "video/x-m4v",
+  "video/webm",
+  "video/x-msvideo",
+  "video/x-matroska"
+].join(",");
+
+const ACCEPTED_EXTENSIONS = new Set(["pdf", "md", "markdown", "txt", "png", "jpg", "jpeg", "webp", "epub", "docx", "mp4", "mov", "m4v", "webm", "avi", "mkv"]);
+const ACCEPTED_MIME_PREFIXES = ["image/", "video/"];
+
+export function isAcceptedKnowledgeFile(file: File) {
+  const extension = file.name.includes(".") ? file.name.split(".").pop()?.toLowerCase() : undefined;
+  if (extension && ACCEPTED_EXTENSIONS.has(extension)) return true;
+  return ACCEPTED_MIME_PREFIXES.some((prefix) => file.type.startsWith(prefix));
+}
 
 function resultStatus(item: DocumentBatchUploadItem) {
   if (!item.ok) return item.error ?? "失败";
@@ -21,7 +59,7 @@ function resultStatus(item: DocumentBatchUploadItem) {
   return "已入队";
 }
 
-export function WorkspaceUploadDialog({ open, onOpenChange }: WorkspaceUploadDialogProps) {
+export function WorkspaceUploadDialog({ open, onOpenChange, pasteBatch }: WorkspaceUploadDialogProps) {
   const queryClient = useQueryClient();
   const [files, setFiles] = useState<File[]>([]);
   const [title, setTitle] = useState("");
@@ -30,10 +68,17 @@ export function WorkspaceUploadDialog({ open, onOpenChange }: WorkspaceUploadDia
   const [results, setResults] = useState<DocumentBatchUploadItem[]>([]);
 
   const selectedSummary = useMemo(() => {
-    if (!files.length) return "PDF / EPUB / Markdown / TXT / Image";
+    if (!files.length) return "PDF / EPUB / Markdown / TXT / Image / Video";
     if (files.length === 1) return files[0].name;
     return `${files.length} 个文件`;
   }, [files]);
+
+  useEffect(() => {
+    if (!open || !pasteBatch?.files.length) return;
+    setFiles(pasteBatch.files);
+    setResults([]);
+    setProgress(0);
+  }, [open, pasteBatch?.id]);
 
   const uploadMutation = useMutation({
     mutationFn: async () => {
@@ -54,6 +99,15 @@ export function WorkspaceUploadDialog({ open, onOpenChange }: WorkspaceUploadDia
 
   function onFilesChanged(event: ChangeEvent<HTMLInputElement>) {
     setFiles(Array.from(event.target.files ?? []));
+    setResults([]);
+    setProgress(0);
+  }
+
+  function onPasteFiles(event: ClipboardEvent<HTMLElement>) {
+    const pastedFiles = Array.from(event.clipboardData.files).filter(isAcceptedKnowledgeFile);
+    if (!pastedFiles.length) return;
+    event.preventDefault();
+    setFiles(pastedFiles);
     setResults([]);
     setProgress(0);
   }
@@ -83,12 +137,12 @@ export function WorkspaceUploadDialog({ open, onOpenChange }: WorkspaceUploadDia
         </div>
 
         <div className="mt-4 space-y-3">
-          <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 transition hover:bg-slate-100">
+          <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 transition hover:bg-slate-100" onPaste={onPasteFiles} tabIndex={0}>
             <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white text-slate-500 ring-1 ring-slate-100">
               <Paperclip className="h-4 w-4" />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-slate-900">选择文件</p>
+              <p className="truncate text-sm font-medium text-slate-900">选择或粘贴文件</p>
               <p className="mt-0.5 truncate text-xs text-slate-400">{selectedSummary}</p>
             </div>
             <UploadCloud className="h-4 w-4 text-slate-400" />

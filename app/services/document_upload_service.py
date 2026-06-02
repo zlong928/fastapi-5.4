@@ -31,12 +31,26 @@ EXTENSION_SOURCE_TYPE = {
     "jpg": "image",
     "jpeg": "image",
     "webp": "image",
+    "mp4": "video",
+    "mov": "video",
+    "m4v": "video",
+    "webm": "video",
+    "avi": "video",
+    "mkv": "video",
 }
 IMAGE_MIME_BY_EXTENSION = {
     "png": "image/png",
     "jpg": "image/jpeg",
     "jpeg": "image/jpeg",
     "webp": "image/webp",
+}
+VIDEO_MIME_BY_EXTENSION = {
+    "mp4": "video/mp4",
+    "mov": "video/quicktime",
+    "m4v": "video/x-m4v",
+    "webm": "video/webm",
+    "avi": "video/x-msvideo",
+    "mkv": "video/x-matroska",
 }
 GENERIC_DECLARED_CONTENT_TYPES = {
     "application/octet-stream",
@@ -54,9 +68,19 @@ DECLARED_CONTENT_TYPES_BY_EXTENSION = {
     "jpg": {"image/jpeg"},
     "jpeg": {"image/jpeg"},
     "webp": {"image/webp"},
+    "mp4": {"video/mp4", "application/mp4"},
+    "mov": {"video/quicktime", "video/mp4"},
+    "m4v": {"video/x-m4v", "video/mp4", "video/m4v"},
+    "webm": {"video/webm"},
+    "avi": {"video/x-msvideo", "video/avi", "video/msvideo", "application/x-troff-msvideo"},
+    "mkv": {"video/x-matroska", "video/matroska"},
 }
 PARSE_ENQUEUE_FAILED_REASON = "解析任务入队失败，请稍后重试"
-PREVIEW_ONLY_SOURCE_TYPES = {"epub", "docx"}
+PREVIEW_ONLY_SOURCE_TYPES = {"epub", "docx", "video"}
+UNSUPPORTED_FILE_TYPE_MESSAGE = (
+    "Unsupported file type. Only PDF, Markdown, TXT, DOCX, EPUB, PNG, JPG, JPEG, WebP, "
+    "MP4, MOV, M4V, WebM, AVI, and MKV are allowed."
+)
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +207,7 @@ class DocumentUploadService:
         ext = ext.lower()
         source_type = EXTENSION_SOURCE_TYPE.get(ext)
         if source_type is None:
-            raise ValueError("Unsupported file type. Only PDF, Markdown, TXT, DOCX, EPUB, PNG, JPG, JPEG, and WebP are allowed.")
+            raise ValueError(UNSUPPORTED_FILE_TYPE_MESSAGE)
 
         detected_mime_type = self.detect_allowed_mime_type(
             content=content,
@@ -235,7 +259,10 @@ class DocumentUploadService:
             self.validate_zip_content(content, label="DOCX")
             return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
-        raise ValueError("Unsupported file type. Only PDF, Markdown, TXT, DOCX, EPUB, PNG, JPG, JPEG, and WebP are allowed.")
+        if source_type == "video":
+            return self.detect_video_mime_type(content=content, extension=extension)
+
+        raise ValueError(UNSUPPORTED_FILE_TYPE_MESSAGE)
 
     def expected_magic_mime_type(self, *, extension: str, source_type: str) -> str | None:
         if source_type == "pdf":
@@ -244,6 +271,8 @@ class DocumentUploadService:
             return IMAGE_MIME_BY_EXTENSION[extension]
         if source_type in {"epub", "docx"}:
             return "application/zip"
+        if source_type == "video":
+            return VIDEO_MIME_BY_EXTENSION[extension]
         return None
 
     def detect_known_magic_mime_type(self, content: bytes) -> str | None:
@@ -251,6 +280,9 @@ class DocumentUploadService:
             return "application/pdf"
         if content.startswith(b"PK\x03\x04"):
             return "application/zip"
+        video_mime_type = self.detect_video_magic_bytes(content)
+        if video_mime_type is not None:
+            return video_mime_type
         return self.detect_image_magic_bytes(content)
 
     def validate_zip_content(self, content: bytes, *, label: str) -> None:
@@ -330,6 +362,34 @@ class DocumentUploadService:
             return "image/jpeg"
         if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
             return "image/webp"
+        return None
+
+    def detect_video_mime_type(self, *, content: bytes, extension: str) -> str:
+        expected_mime_type = VIDEO_MIME_BY_EXTENSION[extension]
+        detected_mime_type = self.detect_video_magic_bytes(content)
+        if detected_mime_type != expected_mime_type:
+            raise ValueError(
+                f"Invalid video file: content type {detected_mime_type or 'unknown'} "
+                f"does not match .{extension} magic bytes."
+            )
+        return detected_mime_type
+
+    def detect_video_magic_bytes(self, content: bytes) -> str | None:
+        if len(content) >= 12 and content[4:8] == b"ftyp":
+            brand = content[8:12]
+            if brand == b"qt  ":
+                return "video/quicktime"
+            if brand in {b"M4V ", b"M4VH", b"M4VP"}:
+                return "video/x-m4v"
+            return "video/mp4"
+        if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"AVI ":
+            return "video/x-msvideo"
+        if content.startswith(b"\x1a\x45\xdf\xa3"):
+            header = content[:256].lower()
+            if b"webm" in header:
+                return "video/webm"
+            if b"matroska" in header:
+                return "video/x-matroska"
         return None
 
     def decode_text_content(self, content: bytes, *, label: str) -> str:

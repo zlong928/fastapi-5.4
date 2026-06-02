@@ -376,7 +376,7 @@ def list_collection_documents(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     keyword: str | None = Query(None),
-    file_type: str | None = Query(None, pattern="^(pdf|markdown|txt|image|docx|epub|bookmark)$"),
+    file_type: str | None = Query(None, pattern="^(pdf|markdown|txt|image|video|docx|epub|bookmark)$"),
     status_filter: str | None = Query(None, alias="status", pattern="^(pending|processing|done|completed|failed|deleted)$"),
     sort_by: str = Query("created_at"),
     sort_order: str = Query("desc", pattern="^(asc|desc)$"),

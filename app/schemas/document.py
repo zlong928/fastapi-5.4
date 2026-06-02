@@ -171,8 +171,8 @@ class DocumentCreate(BaseModel):
     title: Optional[str] = None
     mime_type: str
     source_type: str = Field(
-        pattern="^(pdf|markdown|txt|image|docx|epub|bookmark|note|diary)$",
-        description="File type: pdf, markdown, txt, image, docx, epub, bookmark, note, or diary"
+        pattern="^(pdf|markdown|txt|image|video|docx|epub|bookmark|note|diary)$",
+        description="File type: pdf, markdown, txt, image, video, docx, epub, bookmark, note, or diary"
     )
     processing_mode: DocumentProcessingMode = DocumentProcessingMode.AUTO
     file_size: int = Field(ge=0, description="File size in bytes")
@@ -210,6 +210,10 @@ class DocumentBatchUploadItem(BaseModel):
     status: Optional[str] = None
     processing_mode: Optional[DocumentProcessingMode] = None
     error: Optional[str] = None
+
+
+class DocumentFileExportRequest(BaseModel):
+    document_ids: list[int] = Field(min_length=1, max_length=100)
 
 
 class ParseJobRead(BaseModel):

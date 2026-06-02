@@ -76,6 +76,10 @@ function isEpub(document?: DocumentRead) {
   return document?.source_type === "epub" || document?.mime_type === "application/epub+zip";
 }
 
+function isVideo(document?: DocumentRead) {
+  return document?.source_type === "video" || Boolean(document?.mime_type?.startsWith("video/"));
+}
+
 function isDone(status?: DocumentStatus) {
   return status === "done" || status === "completed";
 }
@@ -407,6 +411,15 @@ function PreviewPane({ document, fileUrl, fileText, onFullscreen }: { document: 
     );
   }
 
+  if (isVideo(document)) {
+    return (
+      <div className="overflow-hidden rounded-2xl border border-slate-100 bg-slate-950">
+        <div className="flex justify-end p-2"><Button size="sm" variant="ghost" className="rounded-xl text-white hover:bg-white/10 hover:text-white" onClick={onFullscreen}><Maximize2 className="h-4 w-4" /></Button></div>
+        <video src={fileUrl} controls className="max-h-[68vh] min-h-[420px] w-full bg-black object-contain" />
+      </div>
+    );
+  }
+
   if (isEpub(document)) return <EpubReader title={document.title} fileUrl={fileUrl} progressKey={`document-epub-progress-${document.id}`} />;
 
   if (document.source_type === "markdown" && fileText !== undefined) {
@@ -515,6 +528,8 @@ function FullscreenPreview({ document, fileUrl, fileText, onClose }: { document:
         <iframe src={fileUrl} title={document.original_filename} className="min-h-0 flex-1 border-0 bg-white" />
       ) : document.source_type === "image" ? (
         <div className="min-h-0 flex-1 overflow-auto p-6"><img src={fileUrl} alt={document.original_filename} className="mx-auto max-h-full max-w-full object-contain" /></div>
+      ) : isVideo(document) ? (
+        <div className="flex min-h-0 flex-1 items-center bg-black"><video src={fileUrl} controls autoPlay className="max-h-full w-full object-contain" /></div>
       ) : isEpub(document) ? (
         <div className="min-h-0 flex-1 bg-white text-slate-950"><EpubReader title={document.title} fileUrl={fileUrl} progressKey={`document-epub-progress-${document.id}`} heightClassName="h-[calc(100vh-3rem)] min-h-0" /></div>
       ) : document.source_type === "markdown" ? (

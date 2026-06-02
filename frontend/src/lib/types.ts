@@ -122,7 +122,7 @@ export interface TokenResponse {
 
 export type DocumentStatus = "pending" | "processing" | "done" | "completed" | "failed" | "deleted" | "uploaded" | "parsing" | "parsed" | "extracting";
 export type ParseJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "skipped";
-export type DocumentSourceType = "pdf" | "markdown" | "txt" | "image" | "epub" | "docx" | "bookmark" | "note" | "diary";
+export type DocumentSourceType = "pdf" | "markdown" | "txt" | "image" | "video" | "epub" | "docx" | "bookmark" | "note" | "diary";
 export type DocumentProcessingMode =
   | "auto"
   | "plain_text"

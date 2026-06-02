@@ -5,7 +5,24 @@ from pathlib import Path, PurePosixPath
 
 from app.core import config
 
-ALLOWED_STORED_EXTENSIONS = {"pdf", "md", "markdown", "txt", "docx", "epub", "png", "jpg", "jpeg", "webp"}
+ALLOWED_STORED_EXTENSIONS = {
+    "pdf",
+    "md",
+    "markdown",
+    "txt",
+    "docx",
+    "epub",
+    "png",
+    "jpg",
+    "jpeg",
+    "webp",
+    "mp4",
+    "mov",
+    "m4v",
+    "webm",
+    "avi",
+    "mkv",
+}
 
 
 class FileStorageService:
@@ -62,6 +79,22 @@ class FileStorageService:
         elif extension in {"docx", "epub"}:
             if not content.startswith(b"PK\x03\x04"):
                 raise ValueError(f"Invalid {extension} file: zip container magic bytes mismatch.")
+        elif extension in {"mp4", "mov", "m4v"}:
+            if len(content) < 12 or content[4:8] != b"ftyp":
+                raise ValueError(f"Invalid {extension} file: ISO BMFF magic bytes mismatch.")
+        elif extension == "webm":
+            if not self._looks_like_ebml_video(content, b"webm"):
+                raise ValueError("Invalid webm file: EBML/WebM magic bytes mismatch.")
+        elif extension == "mkv":
+            if not self._looks_like_ebml_video(content, b"matroska"):
+                raise ValueError("Invalid mkv file: EBML/Matroska magic bytes mismatch.")
+        elif extension == "avi":
+            if len(content) < 12 or content[:4] != b"RIFF" or content[8:12] != b"AVI ":
+                raise ValueError("Invalid avi file: RIFF AVI magic bytes mismatch.")
+
+    @staticmethod
+    def _looks_like_ebml_video(content: bytes, doc_type: bytes) -> bool:
+        return content.startswith(b"\x1a\x45\xdf\xa3") and doc_type in content[:256].lower()
 
     def store_file(
         self,
@@ -89,7 +122,7 @@ class FileStorageService:
         if normalized_extension not in ALLOWED_STORED_EXTENSIONS:
             raise ValueError(
                 f"Unsupported file extension: {file_extension}. "
-                f"Only pdf, md, markdown, txt, docx, epub, png, jpg, jpeg, and webp are allowed."
+                f"Only pdf, md, markdown, txt, docx, epub, png, jpg, jpeg, webp, mp4, mov, m4v, webm, avi, and mkv are allowed."
             )
 
         # 验证文件真实内容魔数

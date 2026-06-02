@@ -55,6 +55,7 @@ function sourceTypeLabel(sourceType: string) {
     markdown: "Markdown",
     txt: "文本",
     image: "图片",
+    video: "视频",
     epub: "EPUB",
     docx: "Word",
     bookmark: "网页收藏",
@@ -83,20 +84,29 @@ interface DocumentCardProps {
   onRetry?: (id: number) => void;
   onDelete?: (id: number) => void;
   onMoveToCollection?: (document: DocumentListItem) => void;
+  selectable?: boolean;
+  selected?: boolean;
+  onSelectChange?: (document: DocumentListItem, selected: boolean) => void;
   isRetrying?: boolean;
   isDeleting?: boolean;
 }
 
-export function DocumentCard({ document, onRetry, onDelete, onMoveToCollection, isRetrying, isDeleting }: DocumentCardProps) {
+export function DocumentCard({ document, onRetry, onDelete, onMoveToCollection, selectable = false, selected = false, onSelectChange, isRetrying, isDeleting }: DocumentCardProps) {
   const navigate = useNavigate();
   const processingStatus = document.processing_status ?? document.status;
   const processingError = document.processing_error ?? document.fail_reason ?? document.error_message;
   const meta = [sourceTypeLabel(document.source_type), formatBytes(document.file_size), formatDocumentTime(document)].filter(Boolean);
   const isIndexed = document.chunk_count > 0;
+  const openDocument = () => selectable ? onSelectChange?.(document, !selected) : navigate(`/documents/${document.id}`);
 
   return (
-    <article className="group cursor-pointer rounded-2xl border border-slate-100 bg-white px-4 py-3 transition hover:border-slate-200 hover:bg-slate-50/70" onClick={() => navigate(`/documents/${document.id}`)}>
+    <article className={cn("group cursor-pointer rounded-2xl border bg-white px-4 py-3 transition hover:border-slate-200 hover:bg-slate-50/70", selected ? "border-slate-300 bg-slate-50 ring-1 ring-slate-200" : "border-slate-100")} onClick={openDocument}>
       <div className="flex items-start gap-3">
+        {selectable ? (
+          <label className="mt-2 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-white" onClick={(event) => event.stopPropagation()}>
+            <input type="checkbox" checked={selected} onChange={(event) => onSelectChange?.(document, event.target.checked)} className="h-4 w-4 rounded border-slate-300 accent-slate-950" aria-label={`选择 ${document.title}`} />
+          </label>
+        ) : null}
         <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-50 text-slate-500 ring-1 ring-slate-100"><FileText className="h-5 w-5" /></div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
