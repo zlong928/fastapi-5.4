@@ -38,6 +38,7 @@ class CoordinatorAdapter:
             "base_url": os.getenv("OPENAI_BASE_URL", "https://2api.narrafark.com"),
             "api_key": os.getenv("OPENAI_API_KEY", ""),
             "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            "api_format": os.getenv("LLM_API_FORMAT", "responses"),
         }
         if env_config["api_key"]:
             return env_config

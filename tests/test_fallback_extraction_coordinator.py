@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,9 +21,10 @@ from app.services.agent.types import FigureInfo, PaperData
 
 
 class _FakeStreamResponse:
-    def __init__(self, lines: list[str], content_type: str = "text/event-stream") -> None:
+    def __init__(self, lines: list[str], content_type: str = "text/event-stream", status_code: int = 200) -> None:
         self.lines = lines
         self.headers = {"content-type": content_type}
+        self.status_code = status_code
 
     def __enter__(self):
         return self
@@ -34,6 +37,9 @@ class _FakeStreamResponse:
 
     def iter_lines(self):
         return iter(self.lines)
+
+    def read(self):
+        return "\n".join(self.lines).encode("utf-8")
 
 
 @pytest.fixture()
@@ -112,9 +118,8 @@ def test_fallback_coordinator_aggregates_with_not_found_metrics_argument():
     assert "by_metric" in finish["results"]
 
 
-def test_openai_coordinator_uses_streaming_chat_only(monkeypatch):
+def test_openai_coordinator_uses_streaming_chat_as_primary_path(monkeypatch):
     from app.services.agent.coordinator import OpenAIExtractionCoordinator
-    from app.services.agent.llm_client import LLMClient
 
     requests = []
 
@@ -128,30 +133,400 @@ def test_openai_coordinator_uses_streaming_chat_only(monkeypatch):
             ]
         )
 
-    def fail_post(*args, **kwargs):
-        raise AssertionError("synchronous chat completion should not be used")
-
     monkeypatch.setattr("app.services.agent.llm_client.httpx.stream", fake_stream)
 
-    coordinator = OpenAIExtractionCoordinator({"base_url": "https://api.example.test/v1", "api_key": "test-key", "model": "test-model"})
+    coordinator = OpenAIExtractionCoordinator({
+        "base_url": "https://api.example.test/v1",
+        "api_key": "test-key",
+        "model": "test-model",
+        "api_format": "openai_chat",
+        "http_retries": 0,
+        "min_request_interval_seconds": 0,
+    })
 
     assert coordinator.client.chat_json([{"role": "user", "content": "plan"}], phase="planning") == {"metrics": ["materials"]}
     assert requests[0]["json"]["stream"] is True
     assert coordinator.client.token_stats["planning"]["total_tokens"] == 5
 
 
-def test_openai_coordinator_does_not_fallback_to_sync_when_streaming_fails(monkeypatch):
+def test_gpt_models_use_minimal_openai_chat_payload_first(monkeypatch):
+    from app.services.agent.llm_client import LLMClient
+
+    requests = []
+
+    class FakePostResponse:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+        text = '{"choices":[{"message":{"content":"{\\"metrics\\":[\\"materials\\"]}"}}]}'
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"metrics":["materials"]}'}}]}
+
+    def fake_post(url, headers, json, timeout):
+        requests.append({"url": url, "json": json})
+        return FakePostResponse()
+
+    monkeypatch.setattr("app.services.agent.llm_client.httpx.post", fake_post)
+
+    client = LLMClient({
+        "base_url": "https://api.example.test/v1",
+        "api_key": "test-key",
+        "model": "gpt-5.5",
+        "api_format": "openai_chat",
+        "http_retries": 0,
+        "min_request_interval_seconds": 0,
+    })
+
+    assert client.chat_json([{"role": "user", "content": "plan"}], phase="planning") == {"metrics": ["materials"]}
+    assert requests[0]["json"] == {
+        "model": "gpt-5.5",
+        "messages": [{"role": "user", "content": "plan"}],
+        "stream": False,
+    }
+
+
+def test_responses_format_uses_openai_responses_endpoint(monkeypatch):
+    from app.services.agent.llm_client import LLMClient
+
+    requests = []
+
+    class FakePostResponse:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+        text = '{"output_text":"{\\"metrics\\":[\\"materials\\"]}"}'
+
+        def json(self):
+            return {
+                "output_text": '{"metrics":["materials"]}',
+                "usage": {"input_tokens": 4, "output_tokens": 5, "total_tokens": 9},
+            }
+
+    def fake_post(url, headers, json, timeout):
+        requests.append({"url": url, "json": json})
+        return FakePostResponse()
+
+    monkeypatch.setattr("app.services.agent.llm_client.httpx.post", fake_post)
+
+    client = LLMClient({
+        "base_url": "https://api.example.test/v1",
+        "api_key": "test-key",
+        "model": "gpt-5.5",
+        "api_format": "responses",
+        "http_retries": 0,
+        "min_request_interval_seconds": 0,
+    })
+
+    assert client.chat_json([{"role": "user", "content": "plan"}], phase="planning") == {"metrics": ["materials"]}
+    assert requests[0]["url"] == "https://api.example.test/v1/responses"
+    assert requests[0]["json"] == {
+        "model": "gpt-5.5",
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "plan"}]}],
+        "store": False,
+    }
+
+
+def test_openai_coordinator_falls_back_to_non_streaming_when_streaming_fails(monkeypatch):
     from app.services.agent.coordinator import OpenAIExtractionCoordinator
+
+    requests = []
 
     def fail_stream(*args, **kwargs):
         raise RuntimeError("stream unavailable")
 
+    class FakePostResponse:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+        text = '{"choices":[{"message":{"content":"{\\"metrics\\":[\\"materials\\"]}"}}]}'
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": '{"metrics":["materials"]}'}}],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 5, "total_tokens": 9},
+            }
+
+    def fake_post(url, headers, json, timeout):
+        requests.append({"url": url, "json": json})
+        return FakePostResponse()
+
     monkeypatch.setattr("app.services.agent.llm_client.httpx.stream", fail_stream)
+    monkeypatch.setattr("app.services.agent.llm_client.httpx.post", fake_post)
 
-    coordinator = OpenAIExtractionCoordinator({"base_url": "https://api.example.test/v1", "api_key": "test-key", "model": "test-model"})
+    coordinator = OpenAIExtractionCoordinator({
+        "base_url": "https://api.example.test/v1",
+        "api_key": "test-key",
+        "model": "test-model",
+        "api_format": "openai_chat",
+        "http_retries": 0,
+        "min_request_interval_seconds": 0,
+    })
 
-    with pytest.raises(RuntimeError, match="LLM"):
+    assert coordinator.client.chat_json([{"role": "user", "content": "plan"}], phase="planning") == {"metrics": ["materials"]}
+    assert requests[0]["json"]["stream"] is False
+    assert coordinator.client.token_stats["planning"]["total_tokens"] == 9
+
+
+def test_openai_coordinator_retries_without_response_format_when_gateway_rejects_it(monkeypatch):
+    from app.services.agent.coordinator import OpenAIExtractionCoordinator
+
+    requests = []
+
+    def fake_stream(method, url, headers, json, timeout):
+        requests.append({"url": url, "json": json})
+        if "response_format" in json:
+            raise RuntimeError("response_format unsupported")
+        return _FakeStreamResponse(
+            [
+                'data: {"choices":[{"delta":{"content":"{\\"metrics\\":["}}]}',
+                'data: {"choices":[{"delta":{"content":"\\"yield\\"]}"}}]}',
+                "data: [DONE]",
+            ]
+        )
+
+    monkeypatch.setattr("app.services.agent.llm_client.httpx.stream", fake_stream)
+
+    coordinator = OpenAIExtractionCoordinator({
+        "base_url": "https://api.example.test/v1",
+        "api_key": "test-key",
+        "model": "test-model",
+        "api_format": "openai_chat",
+        "http_retries": 0,
+        "min_request_interval_seconds": 0,
+    })
+
+    assert coordinator.client.chat_json([{"role": "user", "content": "plan"}], phase="planning") == {"metrics": ["yield"]}
+    assert "response_format" in requests[0]["json"]
+    assert "response_format" not in requests[-1]["json"]
+
+
+def test_openai_coordinator_reports_gateway_error_instead_of_html_json_parse(monkeypatch):
+    from app.services.agent.coordinator import OpenAIExtractionCoordinator
+
+    def fake_stream(method, url, headers, json, timeout):
+        if url.endswith("/v1/chat/completions"):
+            return _FakeStreamResponse(
+                ['{"error":{"message":"No available accounts: no available accounts","type":"api_error"}}'],
+                content_type="application/json",
+                status_code=503,
+            )
+        return _FakeStreamResponse(
+            ["<!doctype html>", "<html><head><title>Sub2API</title></head></html>"],
+            content_type="text/html; charset=utf-8",
+            status_code=200,
+        )
+
+    class FakePostResponse:
+        status_code = 200
+        headers = {"content-type": "text/html; charset=utf-8"}
+        text = "<!doctype html><html><head><title>Sub2API</title></head></html>"
+
+    def fake_post(url, headers, json, timeout):
+        if url.endswith("/v1/chat/completions"):
+            response = FakePostResponse()
+            response.status_code = 503
+            response.headers = {"content-type": "application/json"}
+            response.text = '{"error":{"message":"No available accounts: no available accounts","type":"api_error"}}'
+            return response
+        return FakePostResponse()
+
+    monkeypatch.setattr("app.services.agent.llm_client.httpx.stream", fake_stream)
+    monkeypatch.setattr("app.services.agent.llm_client.httpx.post", fake_post)
+
+    coordinator = OpenAIExtractionCoordinator({
+        "base_url": "https://api.example.test",
+        "api_key": "test-key",
+        "model": "test-model",
+        "api_format": "openai_chat",
+        "http_retries": 0,
+        "min_request_interval_seconds": 0,
+        "allow_root_chat_fallback": True,
+    })
+
+    with pytest.raises(RuntimeError) as exc_info:
         coordinator.client.chat_json([{"role": "user", "content": "plan"}], phase="planning")
+
+    message = str(exc_info.value)
+    assert "No available accounts" in message
+    assert "non-json response" in message
+    assert "Expecting value" not in message
+
+
+def test_openai_coordinator_does_not_probe_root_chat_url_by_default(monkeypatch):
+    from app.services.agent.coordinator import OpenAIExtractionCoordinator
+
+    urls = []
+
+    def fake_stream(method, url, headers, json, timeout):
+        urls.append(url)
+        return _FakeStreamResponse(
+            ['{"error":{"message":"Bad gateway","type":"api_error"}}'],
+            content_type="application/json",
+            status_code=502,
+        )
+
+    class FakePostResponse:
+        status_code = 502
+        headers = {"content-type": "application/json"}
+        text = '{"error":{"message":"Bad gateway","type":"api_error"}}'
+
+    def fake_post(url, headers, json, timeout):
+        urls.append(url)
+        return FakePostResponse()
+
+    monkeypatch.setattr("app.services.agent.llm_client.httpx.stream", fake_stream)
+    monkeypatch.setattr("app.services.agent.llm_client.httpx.post", fake_post)
+
+    coordinator = OpenAIExtractionCoordinator({
+        "base_url": "https://api.example.test",
+        "api_key": "test-key",
+        "model": "test-model",
+        "api_format": "openai_chat",
+        "http_retries": 0,
+        "min_request_interval_seconds": 0,
+    })
+
+    with pytest.raises(RuntimeError):
+        coordinator.client.chat_json([{"role": "user", "content": "plan"}], phase="planning")
+
+    assert urls
+    assert all(url == "https://api.example.test/v1/chat/completions" for url in urls)
+
+
+def test_llm_client_image_data_url_uses_prepared_jpeg(tmp_path):
+    from PIL import Image
+
+    from app.services.agent.llm_client import LLMClient
+
+    image_path = tmp_path / "page.png"
+    Image.new("RGB", (1200, 900), color=(255, 255, 255)).save(image_path)
+
+    client = LLMClient({
+        "api_key": "test-key",
+        "force_jpeg_images": True,
+        "max_image_side": 500,
+        "max_image_bytes": 1,
+        "min_request_interval_seconds": 0,
+    })
+
+    data_url = client.image_data_url(str(image_path))
+
+    assert data_url is not None
+    assert data_url.startswith("data:image/jpeg;base64,")
+
+
+def test_visual_agent_uses_text_fallback_when_json_visual_call_fails(tmp_path, monkeypatch):
+    from PIL import Image
+
+    from app.services.agent.agents import VisualBatchAgent
+    from app.services.agent.llm_client import LLMClient
+    from app.services.agent.types import ExtractionTask, FigureExtractionPlan, SupervisorState
+
+    image_path = tmp_path / "figure.png"
+    Image.new("RGB", (300, 200), color=(255, 255, 255)).save(image_path)
+    client = LLMClient({
+        "api_key": "test-key",
+        "force_jpeg_images": True,
+        "min_request_interval_seconds": 0,
+    })
+
+    monkeypatch.setattr(client, "chat_json", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("empty assistant content")))
+    monkeypatch.setattr(client, "chat_text", lambda *args, **kwargs: "图中显示柱状图，A组约为10，B组约为20。")
+
+    plan = FigureExtractionPlan(
+        figure_id="Figure 1 [asset:1]",
+        image_path=str(image_path),
+        caption="Bar chart",
+        tasks=[ExtractionTask(metric_name="key_metrics", text_context="extract bars")],
+    )
+
+    result = VisualBatchAgent(client)._analyze_with_retry(plan, SupervisorState())
+
+    assert result["mode"] == "visual_text_fallback"
+    assert result["extractions"][0]["success"] is True
+    assert "A组约为10" in result["extractions"][0]["qualitative"]
+    assert "结构化视觉 JSON 失败" in result["extractions"][0]["notes"]
+
+
+def test_visual_agent_uses_text_first_for_page_snapshots(tmp_path, monkeypatch):
+    from PIL import Image
+
+    from app.services.agent.agents import VisualBatchAgent
+    from app.services.agent.llm_client import LLMClient
+    from app.services.agent.types import ExtractionTask, FigureExtractionPlan, SupervisorState
+
+    image_path = tmp_path / "page.png"
+    Image.new("RGB", (300, 200), color=(255, 255, 255)).save(image_path)
+    client = LLMClient({
+        "api_key": "test-key",
+        "force_jpeg_images": True,
+        "min_request_interval_seconds": 0,
+    })
+
+    def fail_json(*args, **kwargs):
+        raise AssertionError("page snapshots should not use JSON visual call first")
+
+    monkeypatch.setattr(client, "chat_json", fail_json)
+    monkeypatch.setattr(client, "chat_text", lambda *args, **kwargs: "页面截图显示关键趋势。")
+
+    plan = FigureExtractionPlan(
+        figure_id="Page 4 Visual Evidence [asset:1]",
+        image_path=str(image_path),
+        caption="Page-level visual evidence generated from a page containing figure-like content.",
+        tasks=[ExtractionTask(metric_name="comprehensive_data_extraction", text_context="extract page")],
+    )
+
+    result = VisualBatchAgent(client)._analyze_with_retry(plan, SupervisorState())
+
+    assert result["mode"] == "visual_text_fallback"
+    assert result["json_failure_reason"] == "page snapshot uses text-first visual analysis"
+    assert result["extractions"][0]["success"] is True
+
+
+def test_visual_batch_agent_analyzes_multiple_figures_in_parallel(monkeypatch):
+    from app.services.agent.agents import VisualBatchAgent
+    from app.services.agent.types import ExtractionTask, FigureExtractionPlan, SupervisorState
+
+    monkeypatch.delenv("VISUAL_LLM_MAX_WORKERS", raising=False)
+    monkeypatch.setenv("VISUAL_LLM_MAX_RETRIES", "0")
+
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    class FakeVisualBatchAgent(VisualBatchAgent):
+        def _analyze_figure(self, plan: FigureExtractionPlan) -> dict:
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.15)
+            with lock:
+                active -= 1
+            return {
+                "figure_id": plan.figure_id,
+                "image_path": plan.image_path,
+                "extractions": [{"metric": "key_metrics", "success": True, "data": {"ok": True}}],
+            }
+
+    plans = [
+        FigureExtractionPlan(
+            figure_id=f"Figure {index}",
+            image_path=f"/tmp/figure-{index}.png",
+            caption="figure",
+            tasks=[ExtractionTask(metric_name="key_metrics", text_context="extract")],
+        )
+        for index in range(4)
+    ]
+
+    started = time.perf_counter()
+    results = FakeVisualBatchAgent(client=object()).analyze_batch(plans, SupervisorState())
+    elapsed = time.perf_counter() - started
+
+    assert [result["figure_id"] for result in results] == [plan.figure_id for plan in plans]
+    assert max_active > 1
+    assert elapsed < 0.45
 
 
 def test_parse_generates_page_snapshot_when_pdf_has_no_figures(db, user, tmp_path, monkeypatch):

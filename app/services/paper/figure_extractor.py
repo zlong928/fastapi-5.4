@@ -612,12 +612,22 @@ class FigureExtractor:
         image_density = float(classification.get("image_density") or 0.0)
         has_axis_or_chart_shapes = bool(classification.get("has_axis_or_chart_shapes"))
 
-        if evidence_type not in {"figure", "chart"}:
+        # 放宽条件：接受更多证据类型（包括table）
+        if evidence_type not in {"figure", "chart", "table"}:
             return False
-        if image_density < 0.005 and not has_axis_or_chart_shapes:
+
+        # 对于表格类型，放宽要求
+        if evidence_type == "table":
+            return True
+
+        # 降低图像密度阈值：从0.005降到0.002，提高召回率
+        if image_density < 0.002 and not has_axis_or_chart_shapes:
             return False
-        if text_density > 0.25 and image_density < 0.03 and not has_axis_or_chart_shapes:
+
+        # 放宽文本密度限制：从0.25提高到0.35，允许包含更多文字标注的图表
+        if text_density > 0.35 and image_density < 0.02 and not has_axis_or_chart_shapes:
             return False
+
         return True
 
     def _classify_region(

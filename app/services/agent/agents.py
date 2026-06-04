@@ -7,6 +7,7 @@ VisualBatchAgent runs figures in parallel via ThreadPoolExecutor.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -118,9 +119,50 @@ class GlobalMapAgent:
         )
         extraction_map = self._parse_map(paper, payload)
         not_found = [normalize_metric(str(item)) for item in (payload.get("not_found_metrics") or [])]
+
+        # 关键改进：确保每个图表都有提取任务
+        extraction_map = self._ensure_all_figures_covered(paper, extraction_map, metrics)
+
         if not extraction_map.figures and paper.figures:
             extraction_map, not_found = self._fallback_map(paper, metrics)
         return extraction_map, not_found
+
+    def _ensure_all_figures_covered(self, paper: PaperData, extraction_map: ExtractionMap, metrics: list[str]) -> ExtractionMap:
+        """确保每个图表都有提取任务，即使用户没有明确查询"""
+        for figure in paper.figures:
+            if figure.figure_id not in extraction_map.figures:
+                # 为未覆盖的图表添加通用提取任务
+                plan = FigureExtractionPlan(
+                    figure_id=figure.figure_id,
+                    image_path=figure.image_path,
+                    caption=figure.caption
+                )
+                # 添加全面的数据提取任务
+                plan.tasks.append(
+                    ExtractionTask(
+                        metric_name="comprehensive_data_extraction",
+                        text_context=figure.caption or "图表完整数据提取",
+                        specific_instruction="提取图表中所有可见的数据点、数值、关键指标和对比关系，用中文详细说明"
+                    )
+                )
+                extraction_map.figures[figure.figure_id] = plan
+            else:
+                # 为已有的图表补充全面提取任务（如果没有）
+                existing_plan = extraction_map.figures[figure.figure_id]
+                has_comprehensive = any(
+                    task.metric_name in ("comprehensive_data_extraction", "figure_data", "key_metrics")
+                    for task in existing_plan.tasks
+                )
+                if not has_comprehensive:
+                    existing_plan.tasks.append(
+                        ExtractionTask(
+                            metric_name="comprehensive_data_extraction",
+                            text_context=figure.caption or "图表完整数据提取",
+                            specific_instruction="提取图表中所有可见的数据点、数值、关键指标和对比关系，用中文详细说明"
+                        )
+                    )
+
+        return extraction_map
 
     def _system_prompt(self) -> str:
         return """你是科研论文数据分析专家。一次阅读全文，建立图片/正文/表格到指标的映射。
@@ -405,10 +447,12 @@ class VisualBatchAgent:
     """Analyze multiple figures in parallel using ThreadPoolExecutor."""
 
     MAX_WORKERS = 4
-    MAX_RETRIES = 2
+    MAX_RETRIES = 3  # 从2增加到3，提高图表分析成功率
 
     def __init__(self, client: LLMClient) -> None:
         self.client = client
+        self.max_workers = max(1, int(os.getenv("VISUAL_LLM_MAX_WORKERS", str(self.MAX_WORKERS))))
+        self.max_retries = max(0, int(os.getenv("VISUAL_LLM_MAX_RETRIES", "1")))
 
     def analyze_batch(
         self,
@@ -425,7 +469,7 @@ class VisualBatchAgent:
             return [result]
 
         results: list[dict | None] = [None] * len(plans)
-        workers = min(self.MAX_WORKERS, len(plans))
+        workers = min(self.max_workers, len(plans))
         with ThreadPoolExecutor(max_workers=workers) as executor:
             future_to_idx = {
                 executor.submit(self._analyze_with_retry, plan, supervisor_state): idx
@@ -445,7 +489,7 @@ class VisualBatchAgent:
     def _analyze_with_retry(self, plan: FigureExtractionPlan, supervisor_state: SupervisorState) -> dict:
         result = self._analyze_figure(plan)
         retry_count = 0
-        while self._needs_retry(result) and retry_count < self.MAX_RETRIES:
+        while self._needs_retry(result) and retry_count < self.max_retries:
             retry_count += 1
             supervisor_state.visual_retries[plan.figure_id] = retry_count
             diagnosis = self._diagnose_failure(result)
@@ -466,69 +510,224 @@ class VisualBatchAgent:
 
     def _analyze_figure(self, plan: FigureExtractionPlan) -> dict:
         started = time.time()
-        image_base64 = self.client.image_base64(plan.image_path)
-        if not image_base64:
+        image_data_url = self.client.image_data_url(plan.image_path)
+        if not image_data_url:
             return self._error_result(plan, "图片文件不可读")
         tasks_desc = "\n".join(
             f"{i + 1}. {t.metric_name}: {t.specific_instruction or t.text_context}"
             for i, t in enumerate(plan.tasks)
         )
+        if self._prefer_text_fallback_first(plan):
+            return self._text_visual_fallback(plan, image_data_url, tasks_desc, "page snapshot uses text-first visual analysis", started)
         review = f"\n复核提示：{plan.review_notes}" if plan.review_notes else ""
         try:
             payload = self.client.chat_json(
                 [
                     {
                         "role": "system",
-                        "content": """你是科研图表分析专家。必须结合图片可见内容和图注，用中文输出 JSON：
+                        "content": """你是顶级科研图表数据提取专家。你的任务是从图片中提取**所有**可见的数据和信息，并用中文详细解释。
+
+## 分析步骤（必须逐步完成）：
+
+### 第一步：识别图表类型和结构
+- 图表类型：柱状图/折线图/散点图/显微镜图/流程图/结构示意图/表格/组合图/其他
+- 坐标轴信息：X轴标签、单位、刻度值；Y轴标签、单位、刻度值
+- 图例信息：所有系列的名称、颜色、标记符号
+- 标题和注释：主标题、子标题、图中所有文字标注
+
+### 第二步：提取所有数据点（关键！）
+**必须提取图中每个可见的数据点**：
+- 柱状图：每个柱子的高度数值
+- 折线图：每个数据点的X、Y坐标
+- 散点图：每个点的位置
+- 显微镜图/示意图：关键尺寸、标注的数值
+- 表格：所有单元格的数据
+
+如果数值清晰可读：记录精确数值
+如果数值模糊：估算范围（如"约50-60"）
+如果无法读取：标注"数值不可读"但描述大致位置和趋势
+
+### 第三步：提取文本标注
+记录图中所有文字：
+- 数据标签（如柱子上的数字）
+- 统计显著性标记（*, **, ***, p<0.05, p<0.01等）
+- 箭头指向的说明文字
+- 误差线的数值
+- 百分比、倍数关系
+
+### 第四步：总结关键发现
+用中文总结：
+- 最大值和最小值及其对应的条件
+- 各组之间的对比关系（谁比谁高/低多少，倍数关系）
+- 变化趋势（上升/下降/先升后降等）
+- 统计显著性结论
+- 关键数据点的具体数值
+
+## 输出JSON格式：
 {
-  "figure_type": "bar_chart/line_chart/scatter_plot/microscopy/flowchart/architecture_diagram/table_snapshot/other",
-  "overall_description": "用中文描述图片整体内容，包括可见的坐标轴、图例、标注文字",
+  "figure_type": "具体图表类型",
+  "title": "图表标题（中文）",
+  "axes": {
+    "x_axis": {"label": "X轴标签（中文）", "unit": "单位", "visible_values": ["刻度1", "刻度2"]},
+    "y_axis": {"label": "Y轴标签（中文）", "unit": "单位", "range": "范围（如0-100）"}
+  },
+  "legend": [
+    {"name": "系列名（中文）", "color": "颜色描述", "marker": "标记类型"}
+  ],
+  "data_points": [
+    {
+      "series": "所属系列（中文）",
+      "x": "X值或分类",
+      "y": "Y值",
+      "value_label": "数据标签",
+      "error_bar": "误差值（如有）",
+      "significance": "显著性标记（如有）"
+    }
+  ],
+  "annotations": ["图中所有文字标注（中文）"],
+  "statistics": {
+    "max_value": {"value": 数值, "condition": "条件（中文）"},
+    "min_value": {"value": 数值, "condition": "条件（中文）"},
+    "comparisons": ["对比1：A比B高50%", "对比2：C显著低于D (p<0.05)"]
+  },
+  "overall_description": "完整的中文描述，包括：图表展示了什么、主要数据点、关键趋势、重要对比",
   "extractions": [{
-    "metric": "指标名",
-    "success": true/false,
-    "data": {"key": "value"},
-    "qualitative": "用中文给出定性结论或数值描述",
+    "metric": "提取的指标名",
+    "success": true,
+    "data": {"具体数值字段": 数值},
+    "qualitative": "用中文详细描述该指标的数值、趋势、对比关系",
     "confidence": "high/medium/low",
-    "notes": "用中文说明不确定性或补充信息",
-    "evidence": "图中可见的支撑证据（坐标轴数字、图例文字、标注等）"
-  }]
+    "notes": "补充说明（中文）",
+    "evidence": "图中可见的证据（坐标轴数值、标注文字等）"
+  }],
+  "key_findings": [
+    "关键发现1：具体数值+单位+对比（中文）",
+    "关键发现2：趋势+幅度+显著性（中文）"
+  ],
+  "extraction_completeness": "完整度评估（如：已提取所有可见数据点/部分数据点模糊）"
 }
-规则：
-1. 所有描述性字段（overall_description, qualitative, notes, evidence）必须用中文
-2. data 字段尽量填入从图中读取的具体数值（如柱状图高度、折线图数据点）
-3. evidence 必须来自图片中可见的文字、数字或标注，不能编造
-4. 如果无法读取精确数值，data 留空但 qualitative 给出保守描述
-5. notes 说明不确定性来源（如分辨率不足、数据点重叠等）""",
+
+## 严格要求：
+1. **全部中文**：所有描述、标签、结论必须用中文，包括overall_description、qualitative、notes、evidence、key_findings
+2. **不遗漏数据**：提取图中**每一个**可见的数据点，不要只提取部分
+3. **精确优先**：能看清数值就记录精确数值，不要只说"较高"、"增加"等模糊描述
+4. **结构化**：数据必须结构化存储在data_points数组中
+5. **可验证**：所有结论必须基于图中可见的证据
+6. **完整解释**：key_findings必须包含具体数值和单位，如"A组的转化率为85%，比B组(60%)高出41.7%"
+7. **中文图例**：如果图例是英文，翻译成中文""",
                     },
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": f"图片：{plan.figure_id}\n图注：{plan.caption}\n任务：\n{tasks_desc}{review}"},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}},
+                            {"type": "text", "text": f"""# 图表信息
+- 图表编号：{plan.figure_id}
+- 图注：{plan.caption}
+
+# 提取任务
+{tasks_desc}
+
+# 分析要求
+请严格按照系统提示的步骤，**完整提取**这个图表中的所有信息：
+
+1. **完整识别结构**：图表类型、坐标轴（标签+刻度值）、图例（所有系列）
+2. **提取所有数据点**：图中每个柱/点/线的具体数值，不要遗漏
+3. **记录所有文字**：标题、标签、数据标签、统计标记、注释
+4. **总结关键发现**：用中文说明主要数据、对比关系、显著性，必须包含具体数值
+
+**关键要求**：
+- 提取图中**每一个**可见的数据点
+- 所有描述必须用**中文**
+- 数值必须**精确记录**（能看清就记数值）
+- 结论必须**具体**（如"A组85%，比B组60%高41.7%"，而不是"A组较高"）
+{review}"""},
+                            {"type": "image_url", "image_url": {"url": image_data_url}},
                         ],
                     },
                 ],
                 phase="visual",
             )
         except Exception as exc:
-            return self._error_result(plan, str(exc))
+            return self._text_visual_fallback(plan, image_data_url, tasks_desc, str(exc), started)
         payload["figure_id"] = plan.figure_id
         payload["image_path"] = plan.image_path
         payload["elapsed"] = round(time.time() - started, 2)
         if not payload.get("extractions"):
-            return self._error_result(plan, "模型未返回图片提取结果")
+            return self._text_visual_fallback(plan, image_data_url, tasks_desc, "模型未返回图片提取结果", started)
         return payload
 
+    def _text_visual_fallback(self, plan: FigureExtractionPlan, image_data_url: str, tasks_desc: str, reason: str, started: float) -> dict:
+        try:
+            description = self.client.chat_text(
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "请用中文描述这张论文图或页面截图，重点列出可见的关键数据、趋势、坐标轴、图例、"
+                                    "显著性标记和结论。不要输出 JSON，不要解释过程，控制在500字以内。"
+                                ),
+                            },
+                            {"type": "image_url", "image_url": {"url": image_data_url}},
+                        ],
+                    }
+                ],
+                phase="visual_text_fallback",
+                max_tokens=1200,
+            )
+        except Exception as fallback_exc:
+            return self._error_result(plan, f"{reason}; text fallback failed: {fallback_exc}")
+
+        return {
+            "figure_id": plan.figure_id,
+            "image_path": plan.image_path,
+            "figure_type": "page_or_figure",
+            "overall_description": description,
+            "mode": "visual_text_fallback",
+            "json_failure_reason": reason,
+            "extractions": [
+                {
+                    "metric": task.metric_name,
+                    "success": True,
+                    "data": {},
+                    "qualitative": description,
+                    "confidence": "medium",
+                    "notes": f"结构化视觉 JSON 失败后使用自然语言视觉理解降级。原始错误：{reason[:300]}",
+                    "evidence": description[:500],
+                    "mode": "visual_text_fallback",
+                }
+                for task in plan.tasks
+            ],
+            "elapsed": round(time.time() - started, 2),
+        }
+
+    def _prefer_text_fallback_first(self, plan: FigureExtractionPlan) -> bool:
+        if os.getenv("VISUAL_TEXT_FIRST_PAGE_SNAPSHOTS", "True").lower() not in ("true", "1", "t", "yes", "on"):
+            return False
+        marker = f"{plan.figure_id} {plan.caption}".lower()
+        return "page" in marker and ("snapshot" in marker or "visual evidence" in marker)
+
     def _needs_retry(self, result: dict) -> bool:
+        """判断是否需要重试图表分析。
+
+        更宽松的重试策略：只重试严重失败的情况，避免过度重试导致低置信度结果丢失。
+        """
         if result.get("error"):
             return True
         extractions = result.get("extractions") or []
         if not extractions:
             return True
-        return any(
-            str(item.get("confidence", "")).lower() == "low" or not (item.get("qualitative") or item.get("data"))
-            for item in extractions
+
+        # 计算完全失败的提取项数量（既没有qualitative也没有data）
+        failed_count = sum(
+            1 for item in extractions
+            if not item.get("success") and not item.get("qualitative") and not item.get("data")
         )
+
+        # 只有超过一半提取项完全失败才重试，避免因低置信度就重试
+        # 这样可以保留更多低置信度但有内容的结果
+        return failed_count >= len(extractions) // 2
 
     def _diagnose_failure(self, result: dict) -> dict:
         if result.get("error"):
