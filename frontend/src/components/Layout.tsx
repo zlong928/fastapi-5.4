@@ -86,7 +86,7 @@ export function Layout({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen bg-background text-foreground transition-colors">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[220px] border-r border-border bg-slate-50/70 px-2.5 py-3 transition-colors dark:bg-slate-950/80 lg:flex lg:flex-col">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[220px] border-r border-border bg-slate-50/70 px-2.5 py-3 transition-colors dark:bg-slate-950/80 md:flex md:flex-col">
         <Link to="/knowledge" className="mb-4 flex items-center gap-2 rounded-xl px-2 py-1.5">
           <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-xs font-semibold text-slate-950 ring-1 ring-slate-100 dark:bg-slate-900 dark:text-slate-50 dark:ring-slate-800">KB</span>
           <span className="truncate text-sm font-semibold tracking-tight text-slate-950 dark:text-slate-50">Second Brain</span>
@@ -112,14 +112,14 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      <div className="lg:pl-[220px]">
+      <div className="md:pl-[220px]">
         <header className="sticky top-0 z-20 bg-background/85 backdrop-blur transition-colors">
-          <div className="flex h-14 items-center justify-between gap-3 px-4 lg:px-6">
-            <Link to="/knowledge" className="flex items-center gap-2 text-sm font-semibold lg:hidden">
+          <div className="flex h-14 items-center justify-between gap-3 px-4 md:px-6">
+            <Link to="/knowledge" className="flex items-center gap-2 text-sm font-semibold md:hidden">
               <BookOpen className="h-4 w-4" />
               Second Brain
             </Link>
-            <div className="hidden lg:block" />
+            <div className="hidden md:block" />
             <Button asChild size="sm" variant="outline" className="h-9 rounded-xl border-border px-3 text-slate-600 shadow-none dark:text-slate-300">
               <Link to={pageAction.href}>
                 <ActionIcon className="h-4 w-4" />
@@ -129,7 +129,7 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
         </header>
 
-        <main className="mx-auto min-h-[calc(100vh-3.5rem)] max-w-7xl px-4 py-5 lg:px-6">
+        <main className="mx-auto min-h-[calc(100vh-3.5rem)] max-w-7xl px-4 py-5 md:px-6">
           {children}
         </main>
       </div>

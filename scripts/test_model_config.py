@@ -12,10 +12,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv()
 
-import asyncio
-from openai import AsyncOpenAI
+from app.services.agent.llm_client import LLMClient
 
-async def test_model_config():
+
+def run_model_config_check():
     """测试模型配置"""
 
     print("=" * 80)
@@ -27,6 +27,7 @@ async def test_model_config():
     api_key = os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("OPENAI_BASE_URL")
     model = os.getenv("OPENAI_MODEL")
+    api_format = os.getenv("LLM_API_FORMAT", "responses")
 
     print("📋 当前配置:")
     print(f"  OPENAI_API_KEY: {api_key[:20]}..." if api_key else "  OPENAI_API_KEY: 未设置")
@@ -41,7 +42,7 @@ async def test_model_config():
         "gemini-pro-vision", "gemini-1.5-pro"
     ]
 
-    supports_vision = any(vm in model.lower() for vm in vision_capable_models)
+    supports_vision = any(vm in (model or "").lower() for vm in vision_capable_models)
 
     if supports_vision:
         print("✅ 模型支持视觉分析")
@@ -54,21 +55,23 @@ async def test_model_config():
     # 测试API连接
     print("🔗 测试API连接...")
     try:
-        client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=base_url
+        client = LLMClient(
+            {
+                "api_key": api_key,
+                "base_url": base_url,
+                "model": model,
+                "api_format": api_format,
+                "timeout": 10,
+                "http_retries": 0,
+                "min_request_interval_seconds": 0,
+            }
         )
 
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "user", "content": "Hello, please respond with 'OK' if you receive this message."}
-            ],
+        content = client.chat_text(
+            [{"role": "user", "content": "Hello, please respond with 'OK' if you receive this message."}],
+            phase="model_config_text_probe",
             max_tokens=50,
-            timeout=10
         )
-
-        content = response.choices[0].message.content
         print(f"✅ API连接成功")
         print(f"   响应: {content}")
         print()
@@ -86,9 +89,8 @@ async def test_model_config():
             # 使用一个简单的1x1像素的PNG图片
             simple_image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
-            response = await client.chat.completions.create(
-                model=model,
-                messages=[
+            content = client.chat_text(
+                [
                     {
                         "role": "user",
                         "content": [
@@ -97,11 +99,10 @@ async def test_model_config():
                         ]
                     }
                 ],
+                phase="model_config_vision_probe",
                 max_tokens=100,
-                timeout=15
             )
 
-            content = response.choices[0].message.content
             print(f"✅ 视觉分析功能正常")
             print(f"   响应: {content}")
             print()
@@ -123,7 +124,7 @@ async def test_model_config():
     return True
 
 
-async def suggest_config():
+def suggest_config():
     """建议正确的配置"""
 
     print()
@@ -157,6 +158,6 @@ async def suggest_config():
 
 
 if __name__ == "__main__":
-    result = asyncio.run(test_model_config())
+    result = run_model_config_check()
     if not result:
-        asyncio.run(suggest_config())
+        suggest_config()

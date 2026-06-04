@@ -16,10 +16,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from sqlalchemy import text
 from app.db.session import SessionLocal
 from app.models import Document, ExtractionJob
-from app.api.routes.extractions import _run_job
+from app.services.extraction_job_service import run_extraction_job
 
 
-def test_extraction(document_id: int, query: str = None):
+def run_extraction_check(document_id: int, query: str = None):
     """测试文档提取"""
     with SessionLocal() as db:
         # 获取文档
@@ -53,7 +53,7 @@ def test_extraction(document_id: int, query: str = None):
 
         try:
             # 运行提取
-            job = _run_job(db, job, document)
+            job = run_extraction_job(db, job, document)
             elapsed = time.time() - start_time
 
             print(f"\n✅ 提取完成！耗时 {elapsed:.1f}秒")
@@ -141,7 +141,7 @@ def retry_job(job_id: int):
         start_time = time.time()
 
         try:
-            new_job = _run_job(db, new_job, document)
+            new_job = run_extraction_job(db, new_job, document)
             elapsed = time.time() - start_time
 
             print(f"\n✅ 重试完成！耗时 {elapsed:.1f}秒")
@@ -226,7 +226,7 @@ def main():
         check_api_config()
 
     if args.document_id:
-        test_extraction(args.document_id, args.query)
+        run_extraction_check(args.document_id, args.query)
 
     if args.job_id:
         if args.retry:

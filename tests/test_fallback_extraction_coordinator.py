@@ -149,24 +149,21 @@ def test_openai_coordinator_uses_streaming_chat_as_primary_path(monkeypatch):
     assert coordinator.client.token_stats["planning"]["total_tokens"] == 5
 
 
-def test_gpt_models_use_minimal_openai_chat_payload_first(monkeypatch):
+def test_gpt_models_use_streaming_openai_chat_payload_first(monkeypatch):
     from app.services.agent.llm_client import LLMClient
 
     requests = []
 
-    class FakePostResponse:
-        status_code = 200
-        headers = {"content-type": "application/json"}
-        text = '{"choices":[{"message":{"content":"{\\"metrics\\":[\\"materials\\"]}"}}]}'
-
-        def json(self):
-            return {"choices": [{"message": {"content": '{"metrics":["materials"]}'}}]}
-
-    def fake_post(url, headers, json, timeout):
+    def fake_stream(method, url, headers, json, timeout):
         requests.append({"url": url, "json": json})
-        return FakePostResponse()
+        return _FakeStreamResponse(
+            [
+                'data: {"choices":[{"delta":{"content":"{\\"metrics\\":[\\"materials\\"]}"}}]}',
+                "data: [DONE]",
+            ]
+        )
 
-    monkeypatch.setattr("app.services.agent.llm_client.httpx.post", fake_post)
+    monkeypatch.setattr("app.services.agent.llm_client.httpx.stream", fake_stream)
 
     client = LLMClient({
         "base_url": "https://api.example.test/v1",
@@ -181,7 +178,9 @@ def test_gpt_models_use_minimal_openai_chat_payload_first(monkeypatch):
     assert requests[0]["json"] == {
         "model": "gpt-5.5",
         "messages": [{"role": "user", "content": "plan"}],
-        "stream": False,
+        "temperature": 0.1,
+        "response_format": {"type": "json_object"},
+        "stream": True,
     }
 
 
@@ -225,7 +224,7 @@ def test_responses_format_uses_openai_responses_endpoint(monkeypatch):
     }
 
 
-def test_openai_coordinator_falls_back_to_non_streaming_when_streaming_fails(monkeypatch):
+def test_openai_coordinator_falls_back_to_non_streaming_only_when_enabled(monkeypatch):
     from app.services.agent.coordinator import OpenAIExtractionCoordinator
 
     requests = []
@@ -261,6 +260,7 @@ def test_openai_coordinator_falls_back_to_non_streaming_when_streaming_fails(mon
         "api_format": "openai_chat",
         "http_retries": 0,
         "min_request_interval_seconds": 0,
+        "allow_non_stream_fallback": True,
     })
 
     assert coordinator.client.chat_json([{"role": "user", "content": "plan"}], phase="planning") == {"metrics": ["materials"]}
@@ -527,6 +527,235 @@ def test_visual_batch_agent_analyzes_multiple_figures_in_parallel(monkeypatch):
     assert [result["figure_id"] for result in results] == [plan.figure_id for plan in plans]
     assert max_active > 1
     assert elapsed < 0.45
+
+
+def test_global_map_agent_routes_deterministically_without_llm():
+    from app.services.agent.agents import GlobalMapAgent
+
+    class FailingClient:
+        def chat_json(self, *args, **kwargs):
+            raise AssertionError("mapping should not call LLM")
+
+    paper = PaperData(
+        paper_id="paper-1",
+        title="Mesospace domain orchestrates microbial",
+        content=(
+            "Here we propose a mesospace-domain regulation strategy. "
+            "We tailored a novel microbial consortium comprising Clostridium carboxidivorans P7 and "
+            "Shewanella oneidensis MR-1. The system was confined within 10–40 μm-diameter hydrogel chambers. "
+            "Meso-CS increased hexanoic acid titres to 10,485.8 mg COD l−1."
+        ),
+        figures=[
+            FigureInfo(
+                figure_id="Fig. 1 [asset:1]",
+                image_path="/tmp/fig.png",
+                caption="Fig. 1 schematic illustration of the mesospace domain.",
+                context="asset_type=figure; visual_role=figure_candidate",
+            )
+        ],
+    )
+
+    extraction_map, not_found = GlobalMapAgent(FailingClient()).build_map(
+        paper,
+        ["objective", "materials_methods", "key_metrics", "figure_data"],
+    )
+
+    assert not not_found
+    assert extraction_map.text_only_metrics
+    assert any(item["field"] == "水凝胶微腔直径" for item in extraction_map.text_only_metrics)
+    assert "Fig. 1 [asset:1]" in extraction_map.figures
+    assert extraction_map.figures["Fig. 1 [asset:1]"].tasks[0].metric_name == "figure_data"
+
+
+def test_result_mapper_filters_negative_visual_outputs_and_derives_specific_text_fields():
+    from app.services.agent.result_mapper import AgentResultMapper
+
+    figure = DocumentAsset(
+        id=402,
+        document_id=1,
+        asset_type="figure",
+        file_path="fig1.png",
+        metadata_json=json.dumps({"figure_label": "Fig. 1", "caption": "Schematic illustration."}),
+    )
+    final_results = {
+        "text_only_data": [
+            {
+                "metric": "materials_methods",
+                "value": "微生物被限制在直径 10–40 µm 的 hydrogel chambers 中。",
+                "evidence": "was confined within 10–40 μm-diameter hydrogel chambers.",
+            },
+            {
+                "metric": "materials_methods",
+                "value": "",
+                "evidence": "",
+            },
+        ],
+        "by_figure": {
+            "Fig. 1 [asset:402]": {
+                "figure_type": "molecular_structure",
+                "overall_description": "该图是分子结构示意图，没有坐标轴或数值。",
+                "extractions": [
+                    {
+                        "metric": "文字标注",
+                        "success": True,
+                        "qualitative": "图像内部未见任何文字标签、箭头说明、数值说明或统计标记。",
+                        "confidence": "high",
+                        "notes": "用户提供的图注包含文字信息，但图像本身没有可见文字。",
+                    },
+                    {
+                        "metric": "可见定量数据",
+                        "success": True,
+                        "qualitative": "图中没有任何可直接读取的数值数据，因此无法提取柱高、点坐标、线趋势、误差范围或p值。",
+                        "confidence": "high",
+                    },
+                    {
+                        "metric": "visible_evidence",
+                        "success": True,
+                        "qualitative": "中央青色结构占据图像中部，呈现明显三维折叠和螺旋特征。",
+                        "confidence": "medium",
+                        "evidence": "图中部可见青色三维结构。",
+                    },
+                ],
+            }
+        },
+        "not_found_metrics": [],
+    }
+
+    rows = AgentResultMapper().map_results(job_id=41, final_results=final_results, figures=[figure], tables=[])
+
+    assert [row.field_name for row in rows] == ["水凝胶微腔直径", "可见图像证据"]
+    assert all("无法提取" not in row.content for row in rows)
+    assert all("没有任何" not in row.content for row in rows)
+
+
+def test_structured_extraction_hides_existing_negative_visual_rows(client, db, user):
+    now = datetime.now(timezone.utc)
+    paper = Document(
+        user_id=user.id,
+        title="negative visual paper",
+        original_filename="negative.pdf",
+        stored_filename="negative.pdf",
+        original_file_path="1/2026/06/negative.pdf",
+        file_size=100,
+        mime_type="application/pdf",
+        source_type="pdf",
+        processing_mode="auto",
+        processing_strategy="pdf_text",
+        status="done",
+        cleaned_text="body",
+        created_at=now,
+        updated_at=now,
+        uploaded_at=now,
+        parsed_at=now,
+    )
+    db.add(paper)
+    db.commit()
+    db.refresh(paper)
+    figure = DocumentAsset(
+        document_id=paper.id,
+        asset_type="figure",
+        file_path="fig.png",
+        mime_type="image/png",
+        metadata_json=json.dumps({"figure_label": "Fig. 1", "caption": "Schematic"}),
+    )
+    db.add(figure)
+    db.commit()
+    db.refresh(figure)
+    job = ExtractionJob(paper_id=paper.id, query="extract", status="done")
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    db.add_all(
+        [
+            ExtractionResult(
+                job_id=job.id,
+                source_type="asset",
+                source_id=figure.id,
+                field_name="可见定量数据",
+                content="图中没有任何可直接读取的数值数据，因此无法提取柱高。",
+                evidence="schematic",
+                confidence=0.85,
+                extraction_mode="visual_analysis",
+            ),
+            ExtractionResult(
+                job_id=job.id,
+                source_type="asset",
+                source_id=figure.id,
+                field_name="中央结构",
+                content="中央青色结构位于图像中部。",
+                evidence="schematic",
+                confidence=0.65,
+                extraction_mode="visual_analysis",
+            ),
+        ]
+    )
+    db.commit()
+
+    response = client.get(f"/extractions/{job.id}/structured")
+
+    assert response.status_code == 200
+    figure_results = response.json()["figure_results"]
+    assert [item["metric"] for item in figure_results] == ["中央结构"]
+
+
+def test_structured_extraction_hides_low_confidence_and_localizes_english_text(client, db, user):
+    now = datetime.now(timezone.utc)
+    paper = Document(
+        user_id=user.id,
+        title="localized paper",
+        original_filename="localized.pdf",
+        stored_filename="localized.pdf",
+        original_file_path="1/2026/06/localized.pdf",
+        file_size=100,
+        mime_type="application/pdf",
+        source_type="pdf",
+        processing_mode="auto",
+        processing_strategy="pdf_text",
+        status="done",
+        cleaned_text="body",
+        created_at=now,
+        updated_at=now,
+        uploaded_at=now,
+        parsed_at=now,
+    )
+    db.add(paper)
+    db.commit()
+    db.refresh(paper)
+    job = ExtractionJob(paper_id=paper.id, query="extract", status="done")
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    db.add_all(
+        [
+            ExtractionResult(
+                job_id=job.id,
+                source_type="text",
+                field_name="mechanistic_conclusion",
+                content="The improvement was attributed to porin regulation and exometabolite enrichment that shifted interbacterial interactions from unidirectional electron transfer to bidirectional multimetabolite cross-feeding.",
+                evidence="This improvement is attributed to mesospace-governed porin regulation and exometabolite enrichment.",
+                confidence=0.7,
+                extraction_mode="text_extraction",
+            ),
+            ExtractionResult(
+                job_id=job.id,
+                source_type="asset",
+                field_name="实验分组",
+                content="低置信视觉解释",
+                evidence="visual evidence",
+                confidence=0.4,
+                extraction_mode="visual_analysis",
+            ),
+        ]
+    )
+    db.commit()
+
+    response = client.get(f"/extractions/{job.id}/structured")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["figure_results"] == []
+    assert payload["text_results"][0]["value"].startswith("性能提升归因于孔蛋白调控")
+    assert "The improvement" not in payload["text_results"][0]["value"]
 
 
 def test_parse_generates_page_snapshot_when_pdf_has_no_figures(db, user, tmp_path, monkeypatch):
@@ -1305,7 +1534,7 @@ def test_run_extraction_returns_pending_job_for_polling(client, db, user, monkey
 
     monkeypatch.setattr(
         "app.api.routes.extractions._schedule_job",
-        lambda _background_tasks, job_id: scheduled_jobs.append(job_id),
+        lambda job_id: scheduled_jobs.append(job_id),
     )
 
     response = client.post("/extractions/run", json={"paperId": paper.id, "query": "提取关键指标"})
@@ -1322,6 +1551,260 @@ def test_run_extraction_returns_pending_job_for_polling(client, db, user, monkey
     assert jobs[0]["id"] == payload["id"]
     assert jobs[0]["status"] == "pending"
     assert jobs[0]["result_count"] == 0
+
+
+def test_extraction_queue_payload_round_trip():
+    from app.queue.extraction_queue import build_extraction_payload, parse_extraction_payload
+
+    payload = build_extraction_payload(42)
+
+    assert parse_extraction_payload(payload) == 42
+    assert parse_extraction_payload('{"type": "document_parse", "job_id": 42}') is None
+    assert parse_extraction_payload('{"type": "extraction_run", "job_id": "42"}') is None
+
+
+def test_enqueue_extraction_uses_dedicated_queue(monkeypatch):
+    import app.queue.extraction_queue as extraction_queue
+
+    calls: list[tuple[str, str]] = []
+
+    class FakeRedisQueue:
+        def __init__(self, queue_name: str) -> None:
+            self.queue_name = queue_name
+
+        def enqueue(self, payload: str) -> None:
+            calls.append((self.queue_name, payload))
+
+    monkeypatch.setattr(extraction_queue, "RedisQueue", FakeRedisQueue)
+
+    extraction_queue.enqueue_extraction(7)
+
+    assert len(calls) == 1
+    queue_name, payload = calls[0]
+    assert queue_name == extraction_queue.EXTRACTION_QUEUE_NAME
+    assert extraction_queue.parse_extraction_payload(payload) == 7
+
+
+def test_extraction_metrics_reports_queue_and_status_counts(client, db, user, monkeypatch):
+    import app.api.routes.extractions as extraction_routes
+
+    now = datetime.now(timezone.utc)
+    paper = Document(
+        user_id=user.id,
+        title="metrics paper",
+        original_filename="metrics.pdf",
+        stored_filename="metrics.pdf",
+        original_file_path="1/2026/06/metrics.pdf",
+        file_size=100,
+        mime_type="application/pdf",
+        source_type="pdf",
+        processing_mode="auto",
+        processing_strategy="pdf_text",
+        status="done",
+        cleaned_text="metrics content",
+        created_at=now,
+        updated_at=now,
+        uploaded_at=now,
+        parsed_at=now,
+    )
+    db.add(paper)
+    db.commit()
+    db.refresh(paper)
+    db.add_all(
+        [
+            ExtractionJob(paper_id=paper.id, query="pending", status="pending", created_at=now, updated_at=now),
+            ExtractionJob(paper_id=paper.id, query="done", status="done", created_at=now, updated_at=now),
+            ExtractionJob(paper_id=paper.id, query="failed", status="failed", created_at=now, updated_at=now),
+            DocumentAsset(document_id=paper.id, asset_type="figure", file_path="figure.png", mime_type="image/png"),
+        ]
+    )
+    db.commit()
+
+    class FakeRedisQueue:
+        def __init__(self, queue_name: str) -> None:
+            self.queue_name = queue_name
+
+        def size(self) -> int:
+            assert self.queue_name == extraction_routes.EXTRACTION_QUEUE_NAME
+            return 5
+
+    monkeypatch.setattr(extraction_routes, "RedisQueue", FakeRedisQueue)
+
+    response = client.get("/extractions/metrics")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["queue_name"] == extraction_routes.EXTRACTION_QUEUE_NAME
+    assert payload["queue_size"] == 5
+    assert payload["pending_jobs"] == 1
+    assert payload["done_jobs"] == 1
+    assert payload["failed_jobs"] == 1
+    assert payload["success_rate"] == 50.0
+    assert payload["active_figure_count"] == 1
+
+
+def test_run_extraction_job_records_phase_events(db, user, monkeypatch):
+    from app.services import extraction_job_service
+
+    now = datetime.now(timezone.utc)
+    paper = Document(
+        user_id=user.id,
+        title="phase paper",
+        original_filename="phase.pdf",
+        stored_filename="phase.pdf",
+        original_file_path="1/2026/06/phase.pdf",
+        file_size=100,
+        mime_type="application/pdf",
+        source_type="pdf",
+        processing_mode="auto",
+        processing_strategy="pdf_text",
+        status="done",
+        cleaned_text="phase content",
+        created_at=now,
+        updated_at=now,
+        uploaded_at=now,
+        parsed_at=now,
+    )
+    db.add(paper)
+    db.commit()
+    db.refresh(paper)
+    job = ExtractionJob(paper_id=paper.id, query="提取阶段", status="pending")
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    class FakePaperDataAdapter:
+        def build(self, paper, figures, tables):
+            return {"paper_id": paper.id}
+
+    class FakeCoordinatorAdapter:
+        def run(self, *, paper, user_query, on_event=None):
+            events = [
+                {"phase": "PLANNING", "status": "start", "message": "规划中"},
+                {"phase": "MAPPING", "status": "done", "message": "映射完成"},
+                {"phase": "VISUAL_ANALYSIS", "status": "start", "message": "分析 2 张图片", "data": {"figure_count": 2}},
+                {"phase": "VISUAL_ANALYSIS", "status": "figure_done", "message": "Figure 1 完成"},
+                {"phase": "RESULT_REFLECTION", "status": "done", "message": "复核完成"},
+                {"phase": "FINISH", "status": "done", "message": "完成", "results": {"ok": True}},
+            ]
+            for event in events:
+                if on_event:
+                    on_event(event)
+            return {"ok": True}, events
+
+    class FakeResultMapper:
+        def map_results(self, job_id, final_results, figures, tables):
+            return [
+                ExtractionResult(
+                    job_id=job_id,
+                    source_type="text",
+                    field_name="summary",
+                    content="done",
+                    evidence="phase content",
+                )
+            ]
+
+    monkeypatch.setattr(extraction_job_service, "PaperDataAdapter", FakePaperDataAdapter)
+    monkeypatch.setattr(extraction_job_service, "CoordinatorAdapter", FakeCoordinatorAdapter)
+    monkeypatch.setattr(extraction_job_service, "AgentResultMapper", FakeResultMapper)
+
+    extraction_job_service.run_extraction_job(db, job, paper)
+
+    db.refresh(job)
+    assert job.status == "done"
+    events = (
+        db.query(DocumentEvent)
+        .filter(DocumentEvent.document_id == paper.id, DocumentEvent.event_type == "extraction_phase")
+        .order_by(DocumentEvent.id.asc())
+        .all()
+    )
+    phases = [json.loads(event.event_metadata)["phase"] for event in events]
+    assert phases == ["PLANNING", "MAPPING", "VISUAL_ANALYSIS", "VISUAL_ANALYSIS", "RESULT_REFLECTION", "FINISH"]
+    visual_done = json.loads(events[3].event_metadata)
+    assert visual_done["job_id"] == job.id
+    assert visual_done["figures_done"] == 1
+    assert visual_done["figures_total"] == 2
+
+
+def test_list_extractions_returns_phase_progress(client, db, user):
+    now = datetime.now(timezone.utc)
+    paper = Document(
+        user_id=user.id,
+        title="progress paper",
+        original_filename="progress.pdf",
+        stored_filename="progress.pdf",
+        original_file_path="1/2026/06/progress.pdf",
+        file_size=100,
+        mime_type="application/pdf",
+        source_type="pdf",
+        processing_mode="auto",
+        processing_strategy="pdf_text",
+        status="done",
+        cleaned_text="progress content",
+        created_at=now,
+        updated_at=now,
+        uploaded_at=now,
+        parsed_at=now,
+    )
+    db.add(paper)
+    db.commit()
+    db.refresh(paper)
+    job = ExtractionJob(paper_id=paper.id, query="progress", status="running", created_at=now, updated_at=now)
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    db.add_all(
+        [
+            DocumentEvent(
+                document_id=paper.id,
+                user_id=user.id,
+                event_type="extraction_phase",
+                message="阶段3: 并行分析 4 张图片...",
+                event_metadata=json.dumps(
+                    {
+                        "job_id": job.id,
+                        "phase": "VISUAL_ANALYSIS",
+                        "status": "start",
+                        "message": "阶段3: 并行分析 4 张图片...",
+                        "figures_total": 4,
+                        "figures_done": 0,
+                    },
+                    ensure_ascii=False,
+                ),
+                created_at=now,
+            ),
+            DocumentEvent(
+                document_id=paper.id,
+                user_id=user.id,
+                event_type="extraction_phase",
+                message="Figure 2 分析完成",
+                event_metadata=json.dumps(
+                    {
+                        "job_id": job.id,
+                        "phase": "VISUAL_ANALYSIS",
+                        "status": "figure_done",
+                        "message": "Figure 2 分析完成",
+                        "figures_total": 4,
+                        "figures_done": 2,
+                    },
+                    ensure_ascii=False,
+                ),
+                created_at=now,
+            ),
+        ]
+    )
+    db.commit()
+
+    response = client.get(f"/extractions?paper_id={paper.id}")
+
+    assert response.status_code == 200
+    progress = response.json()[0]["progress"]
+    assert progress["phase"] == "VISUAL_ANALYSIS"
+    assert progress["phase_label"] == "视觉分析"
+    assert progress["status"] == "figure_done"
+    assert progress["percent"] == 60
+    assert progress["figures_done"] == 2
+    assert progress["figures_total"] == 4
 
 
 def test_paper_detail_returns_snapshot_asset_and_table_metadata(client, db, user):
@@ -1857,6 +2340,5 @@ def test_get_extraction_enriches_result_evidence_type_and_preview_urls(client, d
     assert by_field["trend"]["bbox"] == [10, 20, 300, 220]
     assert by_field["trend"]["page"] == 2
     assert by_field["trend"]["caption"] == "Fig. 2 chart caption."
-    assert by_field["page_context"]["evidence_type"] == "page_region"
-    assert by_field["page_context"]["image_url"] == f"/papers/assets/{page_region.id}"
+    assert "page_context" not in by_field
     assert by_field["abstract_claim"]["evidence_type"] == "text"

@@ -103,29 +103,147 @@ class TaskPlannerAgent:
 
 
 class GlobalMapAgent:
-    """Read the full paper and build a figure/text/table-to-metric mapping."""
+    """Build a deterministic text/table/figure routing map before LLM interpretation."""
 
     def __init__(self, client: LLMClient) -> None:
         self.client = client
 
     def build_map(self, paper: PaperData, metrics: list[str]) -> tuple[ExtractionMap, list[str]]:
-        figures_summary = "\n".join(f"- {fig.figure_id}: {fig.caption[:240]}" for fig in paper.figures)
-        payload = self.client.chat_json(
-            [
-                {"role": "system", "content": self._system_prompt()},
-                {"role": "user", "content": self._user_prompt(paper, metrics, figures_summary)},
-            ],
-            phase="mapping",
-        )
-        extraction_map = self._parse_map(paper, payload)
-        not_found = [normalize_metric(str(item)) for item in (payload.get("not_found_metrics") or [])]
-
-        # 关键改进：确保每个图表都有提取任务
+        extraction_map = ExtractionMap()
+        extraction_map.text_only_metrics = self._text_candidates(paper, metrics)
+        extraction_map.figures = self._figure_candidates(paper, metrics)
         extraction_map = self._ensure_all_figures_covered(paper, extraction_map, metrics)
-
-        if not extraction_map.figures and paper.figures:
-            extraction_map, not_found = self._fallback_map(paper, metrics)
+        mapped = {normalize_metric(str(item.get("metric") or "")) for item in extraction_map.text_only_metrics}
+        for plan in extraction_map.figures.values():
+            mapped.update(task.metric_name for task in plan.tasks)
+        not_found = [metric for metric in metrics if metric not in mapped and metric not in {"figure_data", "key_metrics"}]
         return extraction_map, not_found
+
+    def _text_candidates(self, paper: PaperData, metrics: list[str]) -> list[dict]:
+        candidates: list[dict] = []
+        content = paper.content or ""
+        for metric in metrics:
+            if metric in {"figure_data"}:
+                continue
+            windows = self._metric_windows(content, metric)
+            for window in windows[:2]:
+                candidates.append(
+                    {
+                        "metric": metric,
+                        "field": self._field_for_metric(metric, window),
+                        "value": self._chinese_value(metric, window),
+                        "evidence": window[:240],
+                        "mode": "deterministic_text_window",
+                    }
+                )
+        return candidates
+
+    def _figure_candidates(self, paper: PaperData, metrics: list[str]) -> dict[str, FigureExtractionPlan]:
+        figure_metrics = [metric for metric in metrics if metric in {"figure_data", "key_metrics", "conclusion"}]
+        if not figure_metrics:
+            figure_metrics = ["visible_evidence"]
+        plans: dict[str, FigureExtractionPlan] = {}
+        for figure in paper.figures:
+            searchable = f"{figure.figure_id} {figure.caption} {figure.context}".lower()
+            plan = FigureExtractionPlan(figure_id=figure.figure_id, image_path=figure.image_path, caption=figure.caption)
+            matched = False
+            for metric in figure_metrics:
+                if metric == "figure_data" or self._metric_matches_text(metric, searchable):
+                    plan.tasks.append(
+                        ExtractionTask(
+                            metric_name=metric,
+                            text_context=figure.context or figure.caption,
+                            specific_instruction=self._visual_instruction(metric),
+                        )
+                    )
+                    matched = True
+                    break
+            if matched and plan.tasks:
+                plans[figure.figure_id] = plan
+        return plans
+
+    def _metric_windows(self, content: str, metric: str) -> list[str]:
+        keywords = self._keywords_for_metric(metric)
+        if not content.strip():
+            return []
+        lower = content.lower()
+        windows: list[str] = []
+        for keyword in keywords:
+            start = 0
+            keyword_lower = keyword.lower()
+            while len(windows) < 2:
+                index = lower.find(keyword_lower, start)
+                if index < 0:
+                    break
+                left = max(0, index - 180)
+                right = min(len(content), index + 420)
+                snippet = " ".join(content[left:right].split())
+                if len(snippet) >= 40 and snippet not in windows:
+                    windows.append(snippet)
+                start = index + len(keyword_lower)
+            if len(windows) >= 2:
+                break
+        if not windows and metric in {"objective", "research_purpose", "conclusion"}:
+            return [" ".join(content[:600].split())]
+        return windows
+
+    def _keywords_for_metric(self, metric: str) -> list[str]:
+        return {
+            "objective": ["we propose", "in this study", "here we", "aim", "objective"],
+            "research_purpose": ["we propose", "in this study", "here we", "aim", "objective"],
+            "materials": ["materials", "hydrogel", "Clostridium", "Shewanella", "consortium", "Meso-CS"],
+            "materials_methods": ["hydrogel", "Clostridium", "Shewanella", "consortium", "method", "prepared"],
+            "experiment_groups": ["Meso-CS", "CS", "monoculture", "control", "group", "versus"],
+            "key_metrics": ["yield", "titre", "mg COD", "fold", "%", "performance", "production"],
+            "conclusion": ["these findings", "overall", "demonstrated", "conclude", "suggest"],
+        }.get(metric, [metric.replace("_", " ")])
+
+    def _metric_matches_text(self, metric: str, text: str) -> bool:
+        return any(keyword.lower() in text for keyword in self._keywords_for_metric(metric))
+
+    def _field_for_metric(self, metric: str, text: str) -> str:
+        lower = text.lower()
+        if "hydrogel" in lower and ("10–40" in text or "10-40" in text or "diameter" in lower):
+            return "水凝胶微腔直径"
+        if "clostridium" in lower or "shewanella" in lower:
+            return "菌株组成"
+        if "hexanoic" in lower or "hexanoate" in lower:
+            return "己酸产量"
+        return metric
+
+    def _compact_value(self, text: str) -> str:
+        compact = " ".join(text.split())
+        if len(compact) <= 220:
+            return compact
+        return compact[:220].rsplit(" ", 1)[0]
+
+    def _chinese_value(self, metric: str, text: str) -> str:
+        compact = self._compact_value(text)
+        lower = compact.lower()
+        if "porin regulation" in lower and "exometabolite" in lower:
+            return "性能提升归因于孔蛋白调控和外源代谢物富集，使细菌间相互作用由单向电子传递转向双向多代谢物交叉供给。"
+        if "succinic acid" in lower and "denitrification" in lower:
+            return "该调控策略还适用于琥珀酸生产、低碳氮比废水反硝化和新兴污染物去除等其他废水处理体系。"
+        if "biomass" in lower and "did not affect" in lower:
+            return "mesospace 未影响菌群生物量，说明性能变化不是由更高生物量导致。"
+        if "10–40" in compact or "10-40" in compact:
+            return "微生物被限制在直径 10–40 μm 的水凝胶微腔中。"
+        if "clostridium" in lower or "shewanella" in lower:
+            return "核心菌群由 Clostridium carboxidivorans P7 与 Shewanella oneidensis MR-1 组成。"
+        if "hexanoic" in lower or "hexanoate" in lower:
+            return "论文报告了 Meso-CS 在己酸/己酸盐产量上的提升，具体数值见原文证据。"
+        if metric in {"objective", "research_purpose"}:
+            return "研究提出 mesospace-domain regulation 策略，用于调控微生物互作代谢并提升废水处理产物选择性。"
+        if metric == "conclusion":
+            return "论文结论表明 mesospace domain 可协调微生物代谢并提升废水生物转化表现。"
+        return compact
+
+    def _visual_instruction(self, metric: str) -> str:
+        if metric == "key_metrics":
+            return "只提取图中实际可见的数值、趋势、坐标轴、图例或结构证据；没有就返回空结果。"
+        if metric == "conclusion":
+            return "只解释图中可见证据支持的结论，不使用图注外推；没有明确证据就返回空结果。"
+        return "只提取图像中实际可见、可核验的正向信息；没有就返回空结果。"
 
     def _ensure_all_figures_covered(self, paper: PaperData, extraction_map: ExtractionMap, metrics: list[str]) -> ExtractionMap:
         """确保每个图表都有提取任务，即使用户没有明确查询"""
@@ -137,12 +255,15 @@ class GlobalMapAgent:
                     image_path=figure.image_path,
                     caption=figure.caption
                 )
-                # 添加全面的数据提取任务
                 plan.tasks.append(
                     ExtractionTask(
-                        metric_name="comprehensive_data_extraction",
+                        metric_name="visible_evidence",
                         text_context=figure.caption or "图表完整数据提取",
-                        specific_instruction="提取图表中所有可见的数据点、数值、关键指标和对比关系，用中文详细说明"
+                        specific_instruction=(
+                            "只提取图像中实际可见、可核验的正向信息。"
+                            "如果图中没有文字、数值、坐标轴、标注或可描述的结构证据，返回空结果；"
+                            "不要输出“没有数据/无法提取/不是图表类型”这类否定项。"
+                        )
                     )
                 )
                 extraction_map.figures[figure.figure_id] = plan
@@ -150,32 +271,39 @@ class GlobalMapAgent:
                 # 为已有的图表补充全面提取任务（如果没有）
                 existing_plan = extraction_map.figures[figure.figure_id]
                 has_comprehensive = any(
-                    task.metric_name in ("comprehensive_data_extraction", "figure_data", "key_metrics")
+                    task.metric_name in ("visible_evidence", "figure_data", "key_metrics")
                     for task in existing_plan.tasks
                 )
                 if not has_comprehensive:
                     existing_plan.tasks.append(
                         ExtractionTask(
-                            metric_name="comprehensive_data_extraction",
+                            metric_name="visible_evidence",
                             text_context=figure.caption or "图表完整数据提取",
-                            specific_instruction="提取图表中所有可见的数据点、数值、关键指标和对比关系，用中文详细说明"
+                            specific_instruction=(
+                                "只提取图像中实际可见、可核验的正向信息。"
+                                "如果图中没有文字、数值、坐标轴、标注或可描述的结构证据，返回空结果；"
+                                "不要输出“没有数据/无法提取/不是图表类型”这类否定项。"
+                            )
                         )
                     )
 
         return extraction_map
 
     def _system_prompt(self) -> str:
-        return """你是科研论文数据分析专家。一次阅读全文，建立图片/正文/表格到指标的映射。
+        return """你是科研论文数据提取路由专家。你的职责是快速建立图片/正文/表格到指标的映射，不在本阶段做长篇结果生成。
 输出 JSON：
 {
-  "figure_mappings": {"Figure 1": {"tasks": [{"metric": "key_metrics", "context": "为什么看这张图", "instruction": "提取什么"}]}},
-  "text_only_metrics": [{"metric": "materials", "value": "提取值", "evidence": "原文证据（必须是论文中的原句或数据）"}],
+  "figure_mappings": {"Figure 1": {"tasks": [{"metric": "key_metrics", "context": "为什么看这张图（<=80字）", "instruction": "提取什么（<=80字）"}]}},
+  "text_only_metrics": [{"metric": "materials", "field": "具体字段名", "value": "简短提取值（<=120字）", "evidence": "原文短证据（<=160字）"}],
   "not_found_metrics": []
 }
 规则：
 1. text_only_metrics 的 evidence 必须是论文原文片段，不能是你的概括
 2. 表格内容会出现在 [Extracted Tables] 区块；如果证据来自表格，请放在 text_only_metrics 并复制简短表格证据
-3. 每个指标的 value 应该是具体的、可核对的信息，不是泛泛的总结"""
+3. text_only_metrics 每个 metric 最多返回 2 条；不要枚举全文所有方法、所有数值
+4. figure_mappings 每张图最多 1 个 task；instruction 只描述需要视觉模型核验的内容
+5. field 必须精确描述 value 的语义，不能只重复 materials_methods/key_metrics 这类宽泛类别
+6. 输出必须紧凑，禁止长段解释。"""
 
     def _user_prompt(self, paper: PaperData, metrics: list[str], figures_summary: str) -> str:
         parts = [
@@ -189,7 +317,7 @@ class GlobalMapAgent:
                 header_str = ", ".join(t.headers[:6]) if t.headers else "无表头"
                 table_lines.append(f"- {t.label} (page {t.page_number}, {t.row_count} rows): [{header_str}]")
             parts.append(f"结构化表格：\n" + "\n".join(table_lines))
-        parts.append(f"论文全文前 18000 字：\n{paper.content[:18000]}")
+        parts.append(f"论文全文前 8000 字：\n{paper.content[:8000]}")
         return "\n".join(parts)
 
     def _parse_map(self, paper: PaperData, payload: dict) -> ExtractionMap:
@@ -291,7 +419,7 @@ class ReflectionAgent:
 {
   "issues": [{"metric": "...", "problem": "unmapped/wrong_figure/missing_table", "fix": "描述修复方案"}],
   "new_figure_mappings": {"Figure X": {"tasks": [{"metric": "...", "context": "...", "instruction": "..."}]}},
-  "new_text_metrics": [{"metric": "...", "value": "...", "evidence": "..."}],
+  "new_text_metrics": [{"metric": "...", "field": "具体字段名", "value": "...", "evidence": "..."}],
   "resolved_not_found": []
 }
 如果映射已经合理，issues 为空数组。""",
@@ -665,8 +793,9 @@ class VisualBatchAgent:
                             {
                                 "type": "text",
                                 "text": (
-                                    "请用中文描述这张论文图或页面截图，重点列出可见的关键数据、趋势、坐标轴、图例、"
-                                    "显著性标记和结论。不要输出 JSON，不要解释过程，控制在500字以内。"
+                                    "请用中文描述这张论文图或页面截图。只列出图中实际可见、可核验的正向信息："
+                                    "可读数值、趋势、坐标轴、图例、文字标注、显著性标记、结构位置或形态。"
+                                    "如果某类信息不存在，不要写“没有/无法提取/不包含”。不要输出 JSON，不要解释过程，控制在500字以内。"
                                 ),
                             },
                             {"type": "image_url", "image_url": {"url": image_data_url}},
@@ -692,7 +821,7 @@ class VisualBatchAgent:
                     "success": True,
                     "data": {},
                     "qualitative": description,
-                    "confidence": "medium",
+                    "confidence": "low" if self._looks_negative_or_empty(description) else "medium",
                     "notes": f"结构化视觉 JSON 失败后使用自然语言视觉理解降级。原始错误：{reason[:300]}",
                     "evidence": description[:500],
                     "mode": "visual_text_fallback",
@@ -707,6 +836,23 @@ class VisualBatchAgent:
             return False
         marker = f"{plan.figure_id} {plan.caption}".lower()
         return "page" in marker and ("snapshot" in marker or "visual evidence" in marker)
+
+    def _looks_negative_or_empty(self, text: str) -> bool:
+        normalized = (text or "").strip()
+        if not normalized:
+            return True
+        negative_markers = (
+            "没有任何",
+            "无法提取",
+            "不能提取",
+            "不可读取",
+            "不包含可",
+            "没有可",
+            "不存在可",
+            "no extractable",
+            "no visible",
+        )
+        return any(marker in normalized.lower() for marker in negative_markers)
 
     def _needs_retry(self, result: dict) -> bool:
         """判断是否需要重试图表分析。

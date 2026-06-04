@@ -22,6 +22,8 @@ services:
       LOG_DIR: /app/logs
       TZ: Asia/Shanghai
       REDIS_URL: redis://redis:6379/0
+      DOCUMENT_QUEUE_NAME: ${DOCUMENT_QUEUE_NAME:-pdf_task_queue}
+      EXTRACTION_QUEUE_NAME: ${EXTRACTION_QUEUE_NAME:-extraction_task_queue}
       DATABASE_URL: sqlite:////app/data/app.db
       ENABLE_BACKGROUND_WORKER: "False"
       JWT_SECRET_KEY: change-me
@@ -78,6 +80,8 @@ services:
       LOG_DIR: /app/logs
       TZ: Asia/Shanghai
       REDIS_URL: redis://redis:6379/0
+      DOCUMENT_QUEUE_NAME: ${DOCUMENT_QUEUE_NAME:-pdf_task_queue}
+      EXTRACTION_QUEUE_NAME: ${EXTRACTION_QUEUE_NAME:-extraction_task_queue}
       DATABASE_URL: sqlite:////app/data/app.db
       ENABLE_BACKGROUND_WORKER: "False"
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
@@ -90,6 +94,44 @@ services:
       VISUAL_LLM_MAX_WORKERS: ${VISUAL_LLM_MAX_WORKERS:-4}
       VISUAL_LLM_MAX_RETRIES: ${VISUAL_LLM_MAX_RETRIES:-1}
       LLM_MAX_CONCURRENCY: ${LLM_MAX_CONCURRENCY:-4}
+      LLM_HTTP_RETRIES: ${LLM_HTTP_RETRIES:-2}
+      LLM_RETRY_BACKOFF_SECONDS: ${LLM_RETRY_BACKOFF_SECONDS:-1.5}
+      LLM_MIN_REQUEST_INTERVAL_SECONDS: ${LLM_MIN_REQUEST_INTERVAL_SECONDS:-1.0}
+      LLM_ALLOW_ROOT_CHAT_FALLBACK: ${LLM_ALLOW_ROOT_CHAT_FALLBACK:-False}
+      LLM_IMAGE_MAX_BYTES: ${LLM_IMAGE_MAX_BYTES:-1500000}
+      LLM_IMAGE_MAX_SIDE: ${LLM_IMAGE_MAX_SIDE:-1000}
+      LLM_IMAGE_JPEG_QUALITY: ${LLM_IMAGE_JPEG_QUALITY:-75}
+      LLM_IMAGE_FORCE_JPEG: ${LLM_IMAGE_FORCE_JPEG:-True}
+    volumes:
+      - .:/app
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  extraction-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python3", "-u", "-m", "app.extraction_worker"]
+    environment:
+      DATA_DIR: /app/data
+      LOG_DIR: /app/logs
+      TZ: Asia/Shanghai
+      REDIS_URL: redis://redis:6379/0
+      DOCUMENT_QUEUE_NAME: ${DOCUMENT_QUEUE_NAME:-pdf_task_queue}
+      EXTRACTION_QUEUE_NAME: ${EXTRACTION_QUEUE_NAME:-extraction_task_queue}
+      DATABASE_URL: sqlite:////app/data/app.db
+      ENABLE_BACKGROUND_WORKER: "False"
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      LLM_API_FORMAT: ${LLM_API_FORMAT:-responses}
+      VISUAL_LLM_MAX_WORKERS: ${VISUAL_LLM_MAX_WORKERS:-3}
+      VISUAL_LLM_MAX_RETRIES: ${VISUAL_LLM_MAX_RETRIES:-1}
+      LLM_MAX_CONCURRENCY: ${LLM_MAX_CONCURRENCY:-3}
       LLM_HTTP_RETRIES: ${LLM_HTTP_RETRIES:-2}
       LLM_RETRY_BACKOFF_SECONDS: ${LLM_RETRY_BACKOFF_SECONDS:-1.5}
       LLM_MIN_REQUEST_INTERVAL_SECONDS: ${LLM_MIN_REQUEST_INTERVAL_SECONDS:-1.0}

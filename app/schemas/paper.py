@@ -112,6 +112,7 @@ class ExtractionJobListItem(BaseModel):
     created_at: datetime
     updated_at: datetime
     result_count: int = 0
+    progress: Optional[dict] = None
 
 
 class PaperAskRequest(BaseModel):

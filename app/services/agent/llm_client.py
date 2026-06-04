@@ -44,6 +44,10 @@ class LLMClient:
         self.model = str(config.get("model") or "gpt-4o-mini")
         self.api_format = str(config.get("api_format") or os.getenv("LLM_API_FORMAT", "responses")).strip().lower()
         self.timeout = float(config.get("timeout") or 60)
+        self.stream_max_seconds = max(
+            1.0,
+            float(config["stream_max_seconds"] if "stream_max_seconds" in config else _env_float("LLM_STREAM_MAX_SECONDS", 90.0)),
+        )
         self.http_retries = max(0, int(config["http_retries"] if "http_retries" in config else _env_int("LLM_HTTP_RETRIES", 2)))
         self.retry_backoff_seconds = max(
             0.0,
@@ -61,6 +65,11 @@ class LLMClient:
             bool(config["allow_root_chat_fallback"])
             if "allow_root_chat_fallback" in config
             else _env_bool("LLM_ALLOW_ROOT_CHAT_FALLBACK", False)
+        )
+        self.allow_non_stream_fallback = (
+            bool(config["allow_non_stream_fallback"])
+            if "allow_non_stream_fallback" in config
+            else _env_bool("LLM_ALLOW_NON_STREAM_FALLBACK", False)
         )
         self.force_jpeg_images = (
             bool(config["force_jpeg_images"])
@@ -156,22 +165,22 @@ class LLMClient:
     def _compatible_request_bodies(self, body: dict) -> list[dict]:
         bodies: list[dict] = []
         seen: set[str] = set()
-        gpt_openai_model = self._is_openai_gpt_model()
-        variants = (
-            (
-                {"stream": False, "response_format": False, "temperature": False},
-                {"stream": False, "response_format": False, "temperature": True},
-                {"stream": False, "response_format": True, "temperature": True},
-                {"stream": True, "response_format": False, "temperature": True},
-                {"stream": True, "response_format": True, "temperature": True},
+        variants = [
+            {"stream": True, "response_format": True, "temperature": True},
+            {"stream": True, "response_format": False, "temperature": True},
+        ]
+        if self.allow_non_stream_fallback:
+            variants.extend(
+                [
+                    {"stream": False, "response_format": True, "temperature": True},
+                    {"stream": False, "response_format": False, "temperature": True},
+                ]
             )
-            if gpt_openai_model
-            else (
-                {"stream": True, "response_format": True, "temperature": True},
-                {"stream": True, "response_format": False, "temperature": True},
-                {"stream": False, "response_format": True, "temperature": True},
-                {"stream": False, "response_format": False, "temperature": True},
-            )
+        variants = tuple(
+            {"stream": item["stream"], "response_format": item["response_format"], "temperature": False}
+            if self._is_openai_gpt_model() and not item["response_format"]
+            else item
+            for item in variants
         )
         for variant in variants:
             candidate = copy.deepcopy(body)
@@ -310,6 +319,7 @@ class LLMClient:
         chunks: list[str] = []
         usage: dict = {}
         raw_lines: list[str] = []
+        started = time.monotonic()
         with httpx.stream(
             "POST",
             url,
@@ -321,6 +331,8 @@ class LLMClient:
                 error_text = response.read().decode("utf-8", errors="replace")
                 raise RuntimeError(self._response_error(response, error_text))
             for line in response.iter_lines():
+                if time.monotonic() - started > self.stream_max_seconds:
+                    raise TimeoutError(f"stream exceeded {self.stream_max_seconds:.0f}s without completion")
                 if line and len(raw_lines) < 3:
                     raw_lines.append(line[:200])
                 if not line:
@@ -345,7 +357,7 @@ class LLMClient:
         content = "".join(chunks).strip()
         if not content:
             raw = " ".join(raw_lines).strip()
-            raise RuntimeError(self._empty_content_error(url, body, raw))
+            raise RuntimeError(self._empty_content_error(url, body, raw, response.headers.get("content-type")))
         return content, usage
 
     def _non_stream_content(self, url: str, body: dict) -> tuple[str, dict]:
@@ -363,7 +375,7 @@ class LLMClient:
         message = choice.get("message") or {}
         content = str(message.get("content") or "").strip()
         if not content:
-            raise RuntimeError(self._empty_content_error(url, body, response.text[:200]))
+            raise RuntimeError(self._empty_content_error(url, body, response.text[:200], response.headers.get("content-type")))
         return content, usage
 
     def _chat_urls(self) -> list[str]:
@@ -427,10 +439,12 @@ class LLMClient:
             f"body={snippet or '(empty)'}"
         )
 
-    def _empty_content_error(self, url: str, body: dict, raw: str) -> str:
+    def _empty_content_error(self, url: str, body: dict, raw: str, content_type: str | None = None) -> str:
         snippet = (raw or "").strip()[:200].replace("\n", " ")
+        non_json = content_type and "json" not in content_type.lower()
+        prefix = f"non-json response content_type={content_type} " if non_json else ""
         return (
-            f"empty assistant content url={url} stream={bool(body.get('stream'))} "
+            f"{prefix}empty assistant content url={url} stream={bool(body.get('stream'))} "
             f"response_format={'response_format' in body} raw={snippet or '(empty)'}"
         )
 

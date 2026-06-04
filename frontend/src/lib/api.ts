@@ -30,6 +30,7 @@ import {
   DocumentUploadResponse,
   ExtractionJob,
   ExtractionJobListItem,
+  ExtractionMetrics,
   HealthResponse,
   LoginRequest,
   MessageResponse,
@@ -223,6 +224,7 @@ export function retryExtraction(jobId: number): Promise<ExtractionJob> { return 
 export function getExtraction(jobId: number): Promise<ExtractionJob> { return request<ExtractionJob>(`/extractions/${jobId}`); }
 export function getStructuredExtraction(jobId: number): Promise<StructuredExtractionResponse> { return request<StructuredExtractionResponse>(`/extractions/${jobId}/structured`); }
 export function getExtractions(): Promise<ExtractionJobListItem[]> { return request<ExtractionJobListItem[]>("/extractions"); }
+export function getExtractionMetrics(): Promise<ExtractionMetrics> { return request<ExtractionMetrics>("/extractions/metrics"); }
 export function getPaperExtractions(paperId: number): Promise<ExtractionJobListItem[]> { return request<ExtractionJobListItem[]>(`/extractions?paper_id=${paperId}`); }
 
 export async function getPaperAssetBlob(assetPath: string): Promise<Blob> {

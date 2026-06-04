@@ -693,6 +693,42 @@ export interface ExtractionJobListItem {
   created_at: string;
   updated_at: string;
   result_count: number;
+  progress?: ExtractionJobProgress | null;
+}
+
+export interface ExtractionJobProgress {
+  phase: string;
+  phase_label: string;
+  status: string;
+  percent: number;
+  message: string;
+  updated_at: string;
+  figures_done: number;
+  figures_total: number;
+}
+
+export interface ExtractionMetrics {
+  queue_name: string;
+  queue_size?: number | null;
+  total_jobs: number;
+  pending_jobs: number;
+  running_jobs: number;
+  done_jobs: number;
+  failed_jobs: number;
+  recent_7_days: number;
+  success_rate?: number | null;
+  avg_duration_seconds?: number | null;
+  active_job_id?: number | null;
+  active_job_status?: string | null;
+  active_job_elapsed_seconds?: number | null;
+  latest_finished_job_id?: number | null;
+  latest_finished_status?: string | null;
+  latest_finished_duration_seconds?: number | null;
+  latest_finished_result_count?: number | null;
+  active_figure_count: number;
+  visual_max_workers: number;
+  llm_max_concurrency: number;
+  llm_min_request_interval_seconds: number;
 }
 
 export interface PaperDetail {

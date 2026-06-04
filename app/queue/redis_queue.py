@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import redis
-from ..core.config import REDIS_URL
+from ..core.config import DOCUMENT_QUEUE_NAME, REDIS_URL
 
 class RedisQueue:
-    def __init__(self, queue_name: str = "pdf_task_queue") -> None:
+    def __init__(self, queue_name: str = DOCUMENT_QUEUE_NAME) -> None:
         self.queue_name = queue_name
         self._redis = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 

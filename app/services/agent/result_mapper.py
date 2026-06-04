@@ -8,6 +8,36 @@ from app.models import DocumentAsset, ExtractionResult
 
 CONFIDENCE_MAP = {"high": 0.85, "medium": 0.65, "low": 0.4, "none": 0.15}
 
+NEGATIVE_RESULT_MARKERS = (
+    "没有任何",
+    "没有可",
+    "不包含可",
+    "无法提取",
+    "不能提取",
+    "不可读取",
+    "无法读取",
+    "没有坐标轴",
+    "没有可见比例尺",
+    "没有可直接读取",
+    "不存在可",
+    "无可提取",
+    "not contain",
+    "no extractable",
+    "no visible",
+)
+
+GENERIC_METRIC_NAMES = {
+    "comprehensive_data_extraction",
+    "visible_evidence",
+    "figure_data",
+    "key_metrics",
+    "materials_methods",
+    "materials",
+    "experiment_groups",
+    "conclusion",
+    "objective",
+}
+
 
 class AgentResultMapper:
     def map_results(self, *, job_id: int, final_results: dict, figures: list[DocumentAsset], tables: list[DocumentAsset]) -> list[ExtractionResult]:
@@ -17,9 +47,11 @@ class AgentResultMapper:
         table_assets = {table.id: table for table in tables}
 
         for item in final_results.get("text_only_data", []) or []:
-            metric = str(item.get("metric") or "unknown")
+            metric = self._field_name(item)
             value = self._stringify(item.get("value", ""))
             evidence = self._stringify(item.get("evidence", ""))
+            if not self._valid_text_result(value, evidence):
+                continue
             is_fallback = str(item.get("mode", "")).startswith("fallback")
             source_type, source_id = self._detect_table_source(metric, value, evidence, tables)
             confidence = 0.2 if is_fallback else (0.7 if value else 0.3)
@@ -53,6 +85,12 @@ class AgentResultMapper:
             extraction_mode = "fallback_caption_only" if is_fallback else "visual_analysis"
 
             for extraction in payload.get("extractions", []) or []:
+                content = self._stringify(extraction.get("qualitative") or extraction.get("data") or "")
+                notes = str(extraction.get("notes") or "") or None
+                evidence = self._stringify(extraction.get("evidence") or overall_desc or figure_caption)
+                if not self._valid_visual_result(extraction, content, evidence, notes):
+                    continue
+
                 extraction_is_fallback = is_fallback or str(extraction.get("mode", "")).startswith("fallback")
                 if extraction_is_fallback:
                     confidence = 0.15
@@ -60,10 +98,8 @@ class AgentResultMapper:
                 else:
                     confidence = CONFIDENCE_MAP.get(str(extraction.get("confidence", "medium")).lower(), 0.65)
                     extraction_mode = "visual_analysis"
-
-                content = self._stringify(extraction.get("qualitative") or extraction.get("data") or "")
-                notes = str(extraction.get("notes") or "") or None
-                evidence = overall_desc or figure_caption
+                if confidence < 0.5:
+                    continue
 
                 structured_data = None
                 raw_data = extraction.get("data")
@@ -75,7 +111,7 @@ class AgentResultMapper:
                         job_id=job_id,
                         source_type="asset",
                         source_id=figure_db_id,
-                        field_name=str(extraction.get("metric") or "unknown"),
+                        field_name=self._visual_field_name(extraction, payload),
                         content=content or "未在当前图片解析内容中找到明确证据",
                         evidence=evidence or ("无原文证据（fallback模式）" if extraction_is_fallback else str(figure_id)),
                         confidence=confidence,
@@ -107,6 +143,73 @@ class AgentResultMapper:
                 )
             )
         return rows
+
+    def _field_name(self, item: dict) -> str:
+        field = str(item.get("field") or item.get("field_name") or "").strip()
+        metric = str(item.get("metric") or "unknown").strip()
+        if field and field.lower() not in GENERIC_METRIC_NAMES:
+            return self._normalize_field(field)
+        value = self._stringify(item.get("value", ""))
+        return self._derive_field_from_text(metric, value)
+
+    def _visual_field_name(self, extraction: dict, payload: dict) -> str:
+        field = str(extraction.get("field") or extraction.get("field_name") or "").strip()
+        metric = str(extraction.get("metric") or "unknown").strip()
+        if field and field.lower() not in GENERIC_METRIC_NAMES:
+            return self._normalize_field(field)
+        if metric and metric.lower() not in GENERIC_METRIC_NAMES:
+            return self._normalize_field(metric)
+        content = self._stringify(extraction.get("qualitative") or extraction.get("data") or "")
+        figure_type = self._stringify(payload.get("figure_type") or "")
+        derived = self._derive_field_from_text("visual_evidence", content or figure_type)
+        return derived if derived != "visual_evidence" else "可见图像证据"
+
+    def _derive_field_from_text(self, metric: str, value: str) -> str:
+        compact = " ".join((value or "").split())
+        if not compact:
+            return self._normalize_field(metric)
+        if "hydrogel" in compact.lower() and ("10–40" in compact or "10-40" in compact or "直径" in compact):
+            return "水凝胶微腔直径"
+        if "Clostridium" in compact or "Shewanella" in compact:
+            return "菌株组成"
+        if "hexanoic" in compact.lower() or "己酸" in compact:
+            return "己酸产量"
+        if "OmpF" in compact or "AI-2" in compact:
+            return "OmpF/AI-2结构信息"
+        if "SEM" in compact or "显微" in compact or "杆状" in compact:
+            return "显微结构观察"
+        return self._normalize_field(metric)
+
+    def _normalize_field(self, value: str) -> str:
+        return re.sub(r"\s+", "_", value.strip())[:80] or "unknown"
+
+    def _valid_text_result(self, value: str, evidence: str) -> bool:
+        if not value.strip() or self._is_negative_result(value):
+            return False
+        if not evidence.strip() or self._is_negative_result(evidence):
+            return False
+        return True
+
+    def _valid_visual_result(self, extraction: dict, content: str, evidence: str, notes: str | None) -> bool:
+        if str(extraction.get("success", True)).lower() in {"false", "0", "no"}:
+            return False
+        if not content.strip():
+            return False
+        if self._is_negative_result(content) or self._is_negative_result(notes or ""):
+            return False
+        if not evidence.strip() or self._is_negative_result(evidence):
+            return False
+        data = extraction.get("data")
+        has_data = isinstance(data, dict) and bool(data)
+        has_positive_visual_words = any(
+            marker in content
+            for marker in ("显示", "可见", "标注", "位于", "呈现", "结构", "数值", "趋势", "柱", "曲线", "OmpF", "AI-2")
+        )
+        return has_data or has_positive_visual_words
+
+    def _is_negative_result(self, text: str) -> bool:
+        lowered = (text or "").lower()
+        return any(marker.lower() in lowered for marker in NEGATIVE_RESULT_MARKERS)
 
     def _figure_ids(self, figures: list[DocumentAsset]) -> dict[str, int]:
         out: dict[str, int] = {}

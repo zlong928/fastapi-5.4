@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import time
 
+from collections.abc import Callable
+
 from app.services.agent.agents import (
     DEFAULT_METRICS,
     GlobalMapAgent,
@@ -164,13 +166,14 @@ class FallbackExtractionCoordinator:
 class OpenAIExtractionCoordinator(FallbackExtractionCoordinator):
     """Orchestrates the full extraction pipeline, delegating to specialized agents."""
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, on_event: Callable[[dict], None] | None = None) -> None:
         self.client = LLMClient(config)
         self.planner = TaskPlannerAgent(self.client)
         self.mapper = GlobalMapAgent(self.client)
         self.reflector = ReflectionAgent(self.client)
         self.visual_batch = VisualBatchAgent(self.client)
         self.result_reflector = ResultReflectionAgent(self.client)
+        self.on_event = on_event
 
     def extract(self, paper: PaperData, user_query: str | None = None, preset_metrics: list[str] | None = None):
         supervisor_state = SupervisorState()
@@ -207,7 +210,11 @@ class OpenAIExtractionCoordinator(FallbackExtractionCoordinator):
         completed_events: list[dict] = []
 
         def _on_done(result: dict) -> None:
-            completed_events.append({"phase": "VISUAL_ANALYSIS", "status": "figure_done", "message": f"{result.get('figure_id', '?')} 分析完成", "data": result})
+            event = {"phase": "VISUAL_ANALYSIS", "status": "figure_done", "message": f"{result.get('figure_id', '?')} 分析完成", "data": result}
+            completed_events.append(event)
+            if self.on_event is not None:
+                event["_emitted_via_callback"] = True
+                self.on_event(event)
 
         visual_results = self.visual_batch.analyze_batch(plans, supervisor_state, on_figure_done=_on_done)
         for event in completed_events:

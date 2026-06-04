@@ -11,6 +11,43 @@ import { BatchExtractionResult, ExtractionJobListItem, PaperListItem } from "@/l
 import { cn } from "@/lib/utils";
 import { DEFAULT_EXTRACTION_QUERY, EXTRACTION_PRESETS, ExtractionStatusBadge, canExtractPaperListItem, extractionStatusLabel, isExtractionBusy } from "@/pages/paperShared";
 
+function progressTone(status: string) {
+  if (status === "failed") return "bg-red-500";
+  if (status === "done") return "bg-emerald-500";
+  return "bg-blue-600";
+}
+
+function progressDetail(job: ExtractionJobListItem) {
+  const progress = job.progress;
+  if (!progress) return extractionStatusLabel(job.status);
+  if (job.status === "done") return `完成 · ${job.result_count} 条结果 · 100%`;
+  if (job.status === "failed") return `失败于 ${progress.phase_label} · 查看错误信息`;
+  if (progress.phase === "VISUAL_ANALYSIS" && progress.figures_total > 0) {
+    return `${progress.phase_label} · ${progress.figures_done}/${progress.figures_total} 张图完成 · ${progress.percent}%`;
+  }
+  return `${progress.phase_label} · ${progress.percent}%`;
+}
+
+function ExtractionProgressBar({ job }: { job: ExtractionJobListItem }) {
+  const progress = job.progress;
+  const percent = progress?.percent ?? (job.status === "done" ? 100 : 0);
+  return (
+    <div className="mt-3 space-y-1.5">
+      <div className="flex items-center justify-between gap-3 text-xs">
+        <span className={cn("min-w-0 truncate", job.status === "failed" ? "text-red-600" : "text-slate-500")}>{progressDetail(job)}</span>
+        <span className="shrink-0 tabular-nums text-slate-400">{Math.round(percent)}%</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
+        <div
+          className={cn("h-full rounded-full transition-all duration-500", progressTone(job.status))}
+          style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
+        />
+      </div>
+      {progress?.message && job.status !== "done" ? <p className="line-clamp-1 text-xs text-slate-400">{progress.message}</p> : null}
+    </div>
+  );
+}
+
 function ExtractionJobCard({ job, onRetry, retrying, selected, onToggle }: { job: ExtractionJobListItem; onRetry: (jobId: number) => void; retrying: boolean; selected: boolean; onToggle: () => void }) {
   return (
     <article className={cn("rounded-md border bg-white p-4 transition", selected ? "border-slate-900 ring-2 ring-slate-900" : "border-slate-200")}>
@@ -36,6 +73,7 @@ function ExtractionJobCard({ job, onRetry, retrying, selected, onToggle }: { job
               <FileText className="h-4 w-4 shrink-0 text-slate-400" />
               <span className="truncate">{job.paper_title}</span>
             </Link>
+            <ExtractionProgressBar job={job} />
             <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-700">{job.query}</p>
             <p className="mt-2 text-xs text-slate-400">{formatChinaDateTime(job.created_at)} · {extractionStatusLabel(job.status)}</p>
             {job.error_message ? (
@@ -103,7 +141,9 @@ export function ExtractionsPage() {
 
   const retryMutation = useMutation({
     mutationFn: (jobId: number) => retryExtraction(jobId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["extractions"] })
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["extractions"] });
+    }
   });
   const [batchResults, setBatchResults] = useState<BatchExtractionResult[] | null>(null);
   const runMutation = useMutation({
