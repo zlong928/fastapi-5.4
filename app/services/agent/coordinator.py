@@ -49,7 +49,12 @@ class FallbackExtractionCoordinator:
         supervisor_state.reflection_notes.append({"stage": "mapping", "approved": True, "notes": "fallback mapping approved", "suggestions": 0})
         yield {"phase": "REFLECTION", "status": "done", "message": "映射复核完成", "data": {"approved": True, "remaining_not_found": not_found}}
 
-        yield {"phase": "VISUAL_ANALYSIS", "status": "start", "message": f"阶段3: 分析 {len(extraction_map.figures)} 张图片..."}
+        yield {
+            "phase": "VISUAL_ANALYSIS",
+            "status": "start",
+            "message": f"阶段3: 分析 {len(extraction_map.figures)} 张图片...",
+            "data": {"figure_count": len(extraction_map.figures)},
+        }
         visual_results = []
         for plan in extraction_map.figures.values():
             result = self._fallback_figure(plan)
@@ -206,7 +211,12 @@ class OpenAIExtractionCoordinator(FallbackExtractionCoordinator):
         }
 
         plans = list(extraction_map.figures.values())
-        yield {"phase": "VISUAL_ANALYSIS", "status": "start", "message": f"阶段3: 并行分析 {len(plans)} 张图片..."}
+        yield {
+            "phase": "VISUAL_ANALYSIS",
+            "status": "start",
+            "message": f"阶段3: 并行分析 {len(plans)} 张图片...",
+            "data": {"figure_count": len(plans)},
+        }
         completed_events: list[dict] = []
 
         def _on_done(result: dict) -> None:

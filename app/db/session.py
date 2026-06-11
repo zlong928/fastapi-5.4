@@ -2,7 +2,7 @@ from collections.abc import Generator
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from sqlalchemy import Column, Integer, String, Text, create_engine, inspect
+from sqlalchemy import Column, Integer, String, Text, create_engine, event, inspect
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import DATABASE_URL
@@ -12,9 +12,20 @@ class Base(DeclarativeBase):
     pass
 
 
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+connect_args = {"check_same_thread": False, "timeout": 30} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+if DATABASE_URL.startswith("sqlite"):
+    @event.listens_for(engine, "connect")
+    def _configure_sqlite(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        run_pragma = cursor.execute
+        run_pragma("PRAGMA journal_mode=WAL")
+        run_pragma("PRAGMA busy_timeout=30000")
+        run_pragma("PRAGMA synchronous=NORMAL")
+        cursor.close()
 
 
 def get_db() -> Generator[Session, None, None]:

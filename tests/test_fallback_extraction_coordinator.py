@@ -417,7 +417,7 @@ def test_llm_client_image_data_url_uses_prepared_jpeg(tmp_path):
     assert data_url.startswith("data:image/jpeg;base64,")
 
 
-def test_visual_agent_uses_text_fallback_when_json_visual_call_fails(tmp_path, monkeypatch):
+def test_visual_agent_uses_single_text_call_when_json_is_unparseable(tmp_path, monkeypatch):
     from PIL import Image
 
     from app.services.agent.agents import VisualBatchAgent
@@ -432,8 +432,17 @@ def test_visual_agent_uses_text_fallback_when_json_visual_call_fails(tmp_path, m
         "min_request_interval_seconds": 0,
     })
 
-    monkeypatch.setattr(client, "chat_json", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("empty assistant content")))
-    monkeypatch.setattr(client, "chat_text", lambda *args, **kwargs: "图中显示柱状图，A组约为10，B组约为20。")
+    calls = {"text": 0}
+
+    def fail_json(*args, **kwargs):
+        raise AssertionError("ordinary visual analysis should not call chat_json")
+
+    def text_once(*args, **kwargs):
+        calls["text"] += 1
+        return "图中显示柱状图，A组约为10，B组约为20。"
+
+    monkeypatch.setattr(client, "chat_json", fail_json)
+    monkeypatch.setattr(client, "chat_text", text_once)
 
     plan = FigureExtractionPlan(
         figure_id="Figure 1 [asset:1]",
@@ -444,10 +453,11 @@ def test_visual_agent_uses_text_fallback_when_json_visual_call_fails(tmp_path, m
 
     result = VisualBatchAgent(client)._analyze_with_retry(plan, SupervisorState())
 
-    assert result["mode"] == "visual_text_fallback"
+    assert calls["text"] == 1
+    assert result["mode"] == "visual_text_single_pass"
     assert result["extractions"][0]["success"] is True
     assert "A组约为10" in result["extractions"][0]["qualitative"]
-    assert "结构化视觉 JSON 失败" in result["extractions"][0]["notes"]
+    assert "未触发二次视觉调用" in result["extractions"][0]["notes"]
 
 
 def test_visual_agent_uses_text_first_for_page_snapshots(tmp_path, monkeypatch):
@@ -528,6 +538,19 @@ def test_visual_batch_agent_analyzes_multiple_figures_in_parallel(monkeypatch):
     assert [result["figure_id"] for result in results] == [plan.figure_id for plan in plans]
     assert max_active > 1
     assert elapsed < 0.45
+
+
+def test_extraction_worker_concurrency_env_is_bounded(monkeypatch):
+    from app import extraction_worker
+
+    monkeypatch.setenv("EXTRACTION_WORKER_CONCURRENCY", "2")
+    assert extraction_worker._worker_concurrency() == 2
+
+    monkeypatch.setenv("EXTRACTION_WORKER_CONCURRENCY", "99")
+    assert extraction_worker._worker_concurrency() == 4
+
+    monkeypatch.setenv("EXTRACTION_WORKER_CONCURRENCY", "bad")
+    assert extraction_worker._worker_concurrency() == 1
 
 
 def test_global_map_agent_routes_deterministically_without_llm():

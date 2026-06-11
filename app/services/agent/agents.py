@@ -649,7 +649,7 @@ class VisualBatchAgent:
             return self._text_visual_fallback(plan, image_data_url, tasks_desc, "page snapshot uses text-first visual analysis", started)
         review = f"\n复核提示：{plan.review_notes}" if plan.review_notes else ""
         try:
-            payload = self.client.chat_json(
+            content = self.client.chat_text(
                 [
                     {
                         "role": "system",
@@ -742,7 +742,9 @@ class VisualBatchAgent:
 4. **结构化**：数据必须结构化存储在data_points数组中
 5. **可验证**：所有结论必须基于图中可见的证据
 6. **完整解释**：key_findings必须包含具体数值和单位，如"A组的转化率为85%，比B组(60%)高出41.7%"
-7. **中文图例**：如果图例是英文，翻译成中文""",
+7. **中文图例**：如果图例是英文，翻译成中文
+
+如果无法稳定输出合法 JSON，也不要空响应；请直接输出一段中文证据描述。系统会使用同一次响应作为降级证据，禁止等待二次分析。""",
                     },
                     {
                         "role": "user",
@@ -775,13 +777,54 @@ class VisualBatchAgent:
                 phase="visual",
             )
         except Exception as exc:
-            return self._text_visual_fallback(plan, image_data_url, tasks_desc, str(exc), started)
+            return self._error_result(plan, str(exc))
+
+        payload = self._parse_single_pass_visual_response(plan, content)
         payload["figure_id"] = plan.figure_id
         payload["image_path"] = plan.image_path
         payload["elapsed"] = round(time.time() - started, 2)
-        if not payload.get("extractions"):
-            return self._text_visual_fallback(plan, image_data_url, tasks_desc, "模型未返回图片提取结果", started)
         return payload
+
+    def _parse_single_pass_visual_response(self, plan: FigureExtractionPlan, content: str) -> dict:
+        try:
+            payload = self.client._parse_json(content)
+        except Exception:
+            return self._single_pass_text_result(plan, content, "visual_text_single_pass")
+
+        if not payload.get("extractions"):
+            description = str(
+                payload.get("overall_description")
+                or payload.get("description")
+                or payload.get("title")
+                or content
+            )
+            return self._single_pass_text_result(plan, description, "visual_json_without_extractions")
+        return payload
+
+    def _single_pass_text_result(self, plan: FigureExtractionPlan, description: str, mode: str) -> dict:
+        cleaned = (description or "").strip()
+        if not cleaned:
+            return self._error_result(plan, "视觉模型未返回可用内容")
+        return {
+            "figure_id": plan.figure_id,
+            "image_path": plan.image_path,
+            "figure_type": "page_or_figure",
+            "overall_description": cleaned,
+            "mode": mode,
+            "extractions": [
+                {
+                    "metric": task.metric_name,
+                    "success": True,
+                    "data": {},
+                    "qualitative": cleaned,
+                    "confidence": "low" if self._looks_negative_or_empty(cleaned) else "medium",
+                    "notes": "单次视觉调用未返回可用结构化 JSON，已使用同一次响应文本作为证据，未触发二次视觉调用。",
+                    "evidence": cleaned[:500],
+                    "mode": mode,
+                }
+                for task in plan.tasks
+            ],
+        }
 
     def _text_visual_fallback(self, plan: FigureExtractionPlan, image_data_url: str, tasks_desc: str, reason: str, started: float) -> dict:
         try:
@@ -871,9 +914,9 @@ class VisualBatchAgent:
             if not item.get("success") and not item.get("qualitative") and not item.get("data")
         )
 
-        # 只有超过一半提取项完全失败才重试，避免因低置信度就重试
+        # 只有超过一半提取项完全失败才重试，避免因低置信度或单次文本结果就重试
         # 这样可以保留更多低置信度但有内容的结果
-        return failed_count >= len(extractions) // 2
+        return failed_count > 0 and failed_count > len(extractions) / 2
 
     def _diagnose_failure(self, result: dict) -> dict:
         if result.get("error"):
