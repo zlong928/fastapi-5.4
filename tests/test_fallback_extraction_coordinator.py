@@ -13,11 +13,12 @@ from sqlalchemy.pool import StaticPool
 from app.api.deps import get_current_user
 from app.db.session import Base, get_db
 from app.main import app
-from app.models import Document, DocumentAsset, DocumentEvent, ExtractionJob, ExtractionResult, PaperTable, User
+from app.models import Document, DocumentAsset, DocumentChunk, DocumentEvent, ExtractionJob, ExtractionResult, PaperTable, User
 from app.services.agent.paper_data_adapter import PaperDataAdapter
 from app.services.paper_demo_service import PaperDemoService
 from app.services.agent.coordinator import FallbackExtractionCoordinator
 from app.services.agent.types import FigureInfo, PaperData
+from app.services.export_service import ExportService
 
 
 class _FakeStreamResponse:
@@ -654,9 +655,10 @@ def test_structured_extraction_hides_existing_negative_visual_rows(client, db, u
     figure = DocumentAsset(
         document_id=paper.id,
         asset_type="figure",
+        page_number=4,
         file_path="fig.png",
         mime_type="image/png",
-        metadata_json=json.dumps({"figure_label": "Fig. 1", "caption": "Schematic"}),
+        metadata_json=json.dumps({"figure_label": "Fig. 1", "caption": "Schematic", "source": "rendered_figure_region", "evidence_type": "chart"}),
     )
     db.add(figure)
     db.commit()
@@ -696,6 +698,9 @@ def test_structured_extraction_hides_existing_negative_visual_rows(client, db, u
     assert response.status_code == 200
     figure_results = response.json()["figure_results"]
     assert [item["metric"] for item in figure_results] == ["中央结构"]
+    assert figure_results[0]["page"] == 4
+    assert figure_results[0]["evidence_type"] == "chart"
+    assert figure_results[0]["source"] == "rendered_figure_region"
 
 
 def test_structured_extraction_hides_low_confidence_and_localizes_english_text(client, db, user):
@@ -756,6 +761,137 @@ def test_structured_extraction_hides_low_confidence_and_localizes_english_text(c
     assert payload["figure_results"] == []
     assert payload["text_results"][0]["value"].startswith("性能提升归因于孔蛋白调控")
     assert "The improvement" not in payload["text_results"][0]["value"]
+
+
+def test_selected_markdown_export_locates_evidence_in_original_pdf(db, user):
+    now = datetime.now(timezone.utc)
+    paper = Document(
+        user_id=user.id,
+        title="export location paper",
+        original_filename="export.pdf",
+        stored_filename="export.pdf",
+        original_file_path="1/2026/06/export.pdf",
+        file_size=100,
+        mime_type="application/pdf",
+        source_type="pdf",
+        processing_mode="auto",
+        processing_strategy="pdf_text",
+        status="done",
+        cleaned_text="body",
+        created_at=now,
+        updated_at=now,
+        uploaded_at=now,
+        parsed_at=now,
+    )
+    db.add(paper)
+    db.commit()
+    db.refresh(paper)
+    figure = DocumentAsset(
+        document_id=paper.id,
+        asset_type="figure",
+        page_number=6,
+        file_path="figures/figure-2.png",
+        mime_type="image/png",
+        label="Fig. 2",
+        metadata_json=json.dumps({"source": "rendered_figure_region", "evidence_type": "chart", "bbox": [10, 20, 300, 420]}),
+    )
+    db.add(figure)
+    db.commit()
+    db.refresh(figure)
+    job = ExtractionJob(paper_id=paper.id, query="extract", status="done")
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    selected = ExtractionResult(
+        job_id=job.id,
+        source_type="asset",
+        source_id=figure.id,
+        field_name="Chart Finding",
+        content="The chart shows a clear increase.",
+        evidence="The upward trend is visible in Fig. 2.",
+        confidence=0.9,
+        figure_id="Fig. 2",
+    )
+    unselected = ExtractionResult(
+        job_id=job.id,
+        source_type="text",
+        field_name="Unselected Finding",
+        content="This should not be exported.",
+        evidence="Unselected evidence.",
+        confidence=0.8,
+    )
+    db.add_all([selected, unselected])
+    db.commit()
+    db.refresh(selected)
+    db.refresh(job)
+
+    md_content = ExportService.export_extraction_to_markdown(db, job, result_ids=[selected.id])
+
+    assert "## Chart Finding" in md_content
+    assert "## Unselected Finding" not in md_content
+    assert "**Filtered:** Yes" in md_content
+    assert "- Type: 图表 (`chart`)" in md_content
+    assert "- Source: 图注裁剪 (`rendered_figure_region`)" in md_content
+    assert f"- Original PDF: [p.6](/documents/{paper.id}/file#page=6)" in md_content
+    assert f"- Asset Preview: [open image](/papers/assets/{figure.id})" in md_content
+    assert "- Figure/Table ID: Fig. 2" in md_content
+
+
+def test_text_markdown_export_locates_evidence_page_from_chunk(db, user):
+    now = datetime.now(timezone.utc)
+    paper = Document(
+        user_id=user.id,
+        title="text export paper",
+        original_filename="text-export.pdf",
+        stored_filename="text-export.pdf",
+        original_file_path="1/2026/06/text-export.pdf",
+        file_size=100,
+        mime_type="application/pdf",
+        source_type="pdf",
+        processing_mode="auto",
+        processing_strategy="pdf_text",
+        status="done",
+        cleaned_text="body",
+        created_at=now,
+        updated_at=now,
+        uploaded_at=now,
+        parsed_at=now,
+    )
+    db.add(paper)
+    db.commit()
+    db.refresh(paper)
+    db.add(
+        DocumentChunk(
+            document_id=paper.id,
+            chunk_index=3,
+            chunk_type="body",
+            page_start=8,
+            page_end=8,
+            text="The paper states Method Alpha reached 91 percent accuracy on the benchmark.",
+            cleaned_text="The paper states Method Alpha reached 91 percent accuracy on the benchmark.",
+        )
+    )
+    job = ExtractionJob(paper_id=paper.id, query="extract", status="done")
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    result = ExtractionResult(
+        job_id=job.id,
+        source_type="text",
+        field_name="Accuracy",
+        content="Method Alpha reached 91 percent accuracy.",
+        evidence="The paper states Method Alpha reached 91 percent accuracy on the benchmark.",
+        confidence=0.9,
+    )
+    db.add(result)
+    db.commit()
+    db.refresh(result)
+    db.refresh(job)
+
+    md_content = ExportService.export_extraction_to_markdown(db, job, result_ids=[result.id])
+
+    assert f"- Original PDF: [p.8](/documents/{paper.id}/file#page=8)" in md_content
+    assert "- Text Chunk: #3 (p.8)" in md_content
 
 
 def test_parse_generates_page_snapshot_when_pdf_has_no_figures(db, user, tmp_path, monkeypatch):

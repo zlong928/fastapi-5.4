@@ -7,16 +7,47 @@ from __future__ import annotations
 import csv
 import json
 import logging
-from datetime import datetime, timezone, timezone
+import re
+from datetime import datetime, timezone
 from io import BytesIO, StringIO
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models import Document, ExtractionJob, ExtractionResult, DocumentAsset
+from app.models import Document, DocumentAsset, DocumentChunk, ExtractionJob, ExtractionResult
 from app.services.paper.evidence import asset_metadata, asset_image_url, normalize_evidence_type
 
 logger = logging.getLogger(__name__)
+
+
+def _source_label(source: str | None) -> str:
+    labels = {
+        "extracted_image": "嵌入图片",
+        "rendered_figure_region": "图注裁剪",
+        "page_visual_snapshot": "页面快照",
+        "fallback_snapshot": "兜底快照",
+        "table": "表格资产",
+        "figure": "图片资产",
+        "page_snapshot": "页面快照",
+    }
+    return labels.get(source or "", source or "unknown")
+
+
+def _evidence_type_label(evidence_type: str) -> str:
+    labels = {
+        "text": "正文",
+        "table": "表格",
+        "figure": "图片",
+        "chart": "图表",
+        "equation": "公式",
+        "page_region": "页面区域",
+        "unknown": "未知",
+    }
+    return labels.get(evidence_type, evidence_type)
+
+
+def _compact_text(value: str | None) -> str:
+    return re.sub(r"\s+", " ", value or "").strip().lower()
 
 
 class ExportService:
@@ -177,6 +208,72 @@ class ExportService:
         return json.dumps(export_data, ensure_ascii=False, indent=2)
 
     @staticmethod
+    def _matching_text_chunk(db: Session, paper_id: int, result: ExtractionResult) -> DocumentChunk | None:
+        evidence = _compact_text(result.evidence)
+        content = _compact_text(result.content)
+        candidates = [text for text in (evidence, content) if len(text) >= 20]
+        if not candidates:
+            return None
+
+        chunks = (
+            db.query(DocumentChunk)
+            .filter(DocumentChunk.document_id == paper_id)
+            .order_by(DocumentChunk.page_start.asc().nullslast(), DocumentChunk.chunk_index.asc(), DocumentChunk.id.asc())
+            .all()
+        )
+        for chunk in chunks:
+            chunk_text = _compact_text(chunk.cleaned_text or chunk.text)
+            if any(candidate[:120] in chunk_text or chunk_text[:120] in candidate for candidate in candidates):
+                return chunk
+        return None
+
+    @staticmethod
+    def _markdown_location_lines(
+        db: Session,
+        *,
+        paper: Document | None,
+        result: ExtractionResult,
+        asset: DocumentAsset | None,
+        metadata: dict,
+        evidence_type: str,
+    ) -> list[str]:
+        paper_id = paper.id if paper else result.job.paper_id
+        page = asset.page_number if asset else None
+        chunk = None
+        if page is None and paper_id is not None:
+            chunk = ExportService._matching_text_chunk(db, paper_id, result)
+            page = chunk.page_start if chunk else None
+
+        source = str(metadata.get("source") or asset.asset_type) if asset else ("document_chunk" if chunk else result.source_type)
+        lines = [
+            "**Evidence Location:**",
+            f"- Type: {_evidence_type_label(evidence_type)} (`{evidence_type}`)",
+            f"- Source: {_source_label(source)} (`{source}`)",
+        ]
+        if page:
+            lines.append(f"- Original PDF: [p.{page}](/documents/{paper_id}/file#page={page})")
+        else:
+            lines.append("- Original PDF: page not resolved")
+        if chunk:
+            chunk_page = f"p.{chunk.page_start}" if chunk.page_start else "page unknown"
+            lines.append(f"- Text Chunk: #{chunk.chunk_index} ({chunk_page})")
+        if asset:
+            lines.append(f"- Asset: #{asset.id}")
+            if asset.label:
+                lines.append(f"- Asset Label: {asset.label}")
+            if asset.page_number:
+                lines.append(f"- Asset Page: p.{asset.page_number}")
+            image_url = asset_image_url(asset)
+            if image_url:
+                lines.append(f"- Asset Preview: [open image]({image_url})")
+            bbox = metadata.get("bbox")
+            if bbox:
+                lines.append(f"- Bounding Box: `{json.dumps(bbox, ensure_ascii=False)}`")
+        if result.figure_id:
+            lines.append(f"- Figure/Table ID: {result.figure_id}")
+        return lines
+
+    @staticmethod
     def export_extraction_to_markdown(db: Session, job: ExtractionJob, result_ids: list[int] | None = None) -> str:
         """Export extraction job results to Markdown format.
 
@@ -227,6 +324,17 @@ class ExportService:
             lines.append(f"**Content:** {result.content}")
             lines.append("")
             lines.append(f"**Evidence:** {result.evidence}")
+            lines.append("")
+            lines.extend(
+                ExportService._markdown_location_lines(
+                    db,
+                    paper=paper,
+                    result=result,
+                    asset=asset,
+                    metadata=metadata,
+                    evidence_type=evidence_type,
+                )
+            )
             lines.append("")
 
             if result.confidence is not None:

@@ -524,6 +524,13 @@ def _confidence_label(value: float | None) -> str | None:
     return "low"
 
 
+def _asset_source(asset: DocumentAsset | None, metadata: dict | None = None) -> str | None:
+    if asset is None:
+        return None
+    metadata = metadata if metadata is not None else asset_metadata(asset)
+    return str(metadata.get("source") or asset.asset_type) or None
+
+
 @router.get("/{job_id}/structured", response_model=StructuredExtractionResponse)
 async def get_structured_extraction(job_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> StructuredExtractionResponse:
     job = _job_or_404(db, job_id, current_user)
@@ -568,6 +575,9 @@ async def get_structured_extraction(job_id: int, current_user: User = Depends(ge
                 figure_id=r.figure_id or str(img_metadata.get("figure_label") or (f"Asset {img_asset.id}" if img_asset else "")),
                 caption=r.caption or str(img_metadata.get("caption") or ""),
                 image_url=asset_image_url(img_asset),
+                page=img_asset.page_number if img_asset else None,
+                evidence_type=ev_type,
+                source=_asset_source(img_asset, img_metadata),
                 metric=_display_field_name(r),
                 value=r.content,
                 evidence=r.evidence,
@@ -580,6 +590,9 @@ async def get_structured_extraction(job_id: int, current_user: User = Depends(ge
                 table_id=str(asset.label or f"Table {asset.id}") if asset else None,
                 structured_data=r.structured_data,
                 parse_status=r.parse_status,
+                page=asset.page_number if asset else None,
+                evidence_type=ev_type,
+                source=_asset_source(asset, metadata),
                 metric=_display_field_name(r),
                 value=r.content,
                 evidence=r.evidence,
@@ -591,6 +604,9 @@ async def get_structured_extraction(job_id: int, current_user: User = Depends(ge
                 metric=_display_field_name(r),
                 value=_display_content(r),
                 evidence=r.evidence,
+                page=asset.page_number if asset else None,
+                evidence_type=ev_type,
+                source=_asset_source(asset, metadata),
                 confidence=_confidence_label(r.confidence),
             ))
 

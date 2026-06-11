@@ -190,6 +190,9 @@ class StructuredFigureResult(BaseModel):
     figure_id: Optional[str] = None
     caption: Optional[str] = None
     image_url: Optional[str] = None
+    page: Optional[int] = None
+    evidence_type: str = "unknown"
+    source: Optional[str] = None
     metric: str
     value: str
     evidence: str
@@ -202,6 +205,9 @@ class StructuredTableResult(BaseModel):
     table_id: Optional[str] = None
     structured_data: Optional[str] = None
     parse_status: Optional[str] = None
+    page: Optional[int] = None
+    evidence_type: str = "table"
+    source: Optional[str] = None
     metric: str
     value: str
     evidence: str
@@ -213,6 +219,9 @@ class StructuredTextResult(BaseModel):
     metric: str
     value: str
     evidence: str
+    page: Optional[int] = None
+    evidence_type: str = "text"
+    source: Optional[str] = None
     confidence: Optional[str] = None
 
 

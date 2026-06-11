@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Braces, Check, CheckCircle2, Download, FileText, Image, Loader2, RefreshCw, RotateCw, Table2, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Braces, Check, CheckCircle2, Download, FileText, Image, Loader2, MapPin, RefreshCw, RotateCw, Table2, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -25,6 +25,52 @@ function ConfidenceBadge({ confidence }: { confidence?: string | null }) {
   if (!confidence) return null;
   const labels: Record<string, string> = { high: "高置信", medium: "中置信", low: "低置信" };
   return <Badge variant="outline" className={`border-transparent ring-1 text-[10px] ${confidenceColor(confidence)}`}>{labels[confidence] ?? confidence}</Badge>;
+}
+
+function evidenceTypeLabel(type?: string | null) {
+  const labels: Record<string, string> = {
+    text: "正文",
+    table: "表格",
+    figure: "图片",
+    chart: "图表",
+    equation: "公式",
+    page_region: "页面区域",
+    unknown: "未知",
+  };
+  return labels[type || ""] ?? type;
+}
+
+function sourceLabel(source?: string | null) {
+  const labels: Record<string, string> = {
+    extracted_image: "嵌入图片",
+    rendered_figure_region: "图注裁剪",
+    page_visual_snapshot: "页面快照",
+    fallback_snapshot: "兜底快照",
+    table: "表格资产",
+    figure: "图片资产",
+    page_snapshot: "页面快照",
+  };
+  return source ? labels[source] ?? source : null;
+}
+
+function EvidenceMeta({ page, evidenceType, source, identifier }: { page?: number | null; evidenceType?: string | null; source?: string | null; identifier?: string | null }) {
+  const items = [
+    page ? `p.${page}` : null,
+    evidenceTypeLabel(evidenceType),
+    sourceLabel(source),
+    identifier,
+  ].filter(Boolean);
+  if (!items.length) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+      <MapPin className="h-3.5 w-3.5 text-slate-400" />
+      {items.map((item, index) => (
+        <Badge key={`${item}-${index}`} variant="outline" className="border-slate-200 bg-white px-1.5 py-0 text-[10px] font-normal text-slate-500">
+          {item}
+        </Badge>
+      ))}
+    </div>
+  );
 }
 
 /* ─── Image Preview ─── */
@@ -105,6 +151,7 @@ function FigureResultCard({ item, index, selected, onToggle, selectionMode }: { 
           <ConfidenceBadge confidence={item.confidence} />
         </div>
         {item.caption ? <p className="text-xs leading-5 text-slate-500">{item.caption}</p> : null}
+        <EvidenceMeta page={item.page} evidenceType={item.evidence_type} source={item.source} identifier={item.figure_id} />
         <p className="whitespace-pre-wrap text-sm leading-6 text-slate-800">{item.value}</p>
         {item.evidence ? (
           <div className="rounded-lg bg-slate-50 p-2.5">
@@ -154,6 +201,7 @@ function TableResultCard({ item, index, selected, onToggle, selectionMode }: { i
           {item.parse_status === "failed" ? <Badge variant="outline" className="border-transparent bg-red-50 text-red-600 ring-1 ring-red-200 text-[10px]">解析失败</Badge> : null}
         </div>
       </div>
+      <EvidenceMeta page={item.page} evidenceType={item.evidence_type} source={item.source} identifier={item.table_id} />
       {rows.length >= 2 ? (
         <div className="overflow-auto rounded-lg border border-slate-200">
           <table className="w-full text-xs">
@@ -200,6 +248,7 @@ function TextResultCard({ item, index, selected, onToggle, selectionMode }: { it
         <h3 className="text-sm font-semibold text-slate-900">{fieldLabel(item.metric)}</h3>
         <ConfidenceBadge confidence={item.confidence} />
       </div>
+      <EvidenceMeta page={item.page} evidenceType={item.evidence_type} source={item.source} />
       <p className="whitespace-pre-wrap text-sm leading-7 text-slate-800">{item.value}</p>
       {item.evidence ? (
         <div className="rounded-lg bg-slate-50 p-2.5">

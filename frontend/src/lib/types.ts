@@ -791,6 +791,9 @@ export interface StructuredFigureResult {
   figure_id?: string | null;
   caption?: string | null;
   image_url?: string | null;
+  page?: number | null;
+  evidence_type?: "text" | "table" | "figure" | "chart" | "equation" | "page_region" | "unknown" | string;
+  source?: string | null;
   metric: string;
   value: string;
   evidence: string;
@@ -803,6 +806,9 @@ export interface StructuredTableResult {
   table_id?: string | null;
   structured_data?: string | null;
   parse_status?: string | null;
+  page?: number | null;
+  evidence_type?: "text" | "table" | "figure" | "chart" | "equation" | "page_region" | "unknown" | string;
+  source?: string | null;
   metric: string;
   value: string;
   evidence: string;
@@ -814,6 +820,9 @@ export interface StructuredTextResult {
   metric: string;
   value: string;
   evidence: string;
+  page?: number | null;
+  evidence_type?: "text" | "table" | "figure" | "chart" | "equation" | "page_region" | "unknown" | string;
+  source?: string | null;
   confidence?: string | null;
 }
 
