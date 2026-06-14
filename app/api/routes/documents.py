@@ -508,7 +508,17 @@ async def retry_parse_document(document_id: int, current_user: User = Depends(ge
     return retry_document_or_raise(document_id, current_user, db)
 
 
-@router.delete("/{document_id}", response_model=dict)
+@router.delete(
+    "/{document_id}",
+    response_model=dict,
+    summary="Soft delete a document",
+    description=explain_interface(
+        responsibility="Mark one owned document as deleted while preserving recoverable metadata.",
+        database="Writes the document lifecycle fields through SoftDeleteService; does not hard-delete the row.",
+        files="No immediate file deletion; permanent cleanup belongs to the permanent deletion path.",
+        future="Use the permanent endpoint only when irreversible deletion is intended.",
+    ),
+)
 async def delete_document(document_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
     """Soft delete a document. Use /permanent endpoint for permanent deletion."""
     service = DocumentService(db)
@@ -624,7 +634,16 @@ async def get_document_kg(document_id: int, current_user: User = Depends(get_cur
     return DocumentKgResponse(document_id=document_id, entities=entities, relations=relations)
 
 
-@router.get("/deleted", response_model=DocumentListResponse)
+@router.get(
+    "/deleted",
+    response_model=DocumentListResponse,
+    summary="List deleted documents",
+    description=explain_interface(
+        responsibility="List soft-deleted documents that belong to the authenticated user.",
+        database="Reads documents scoped to the current user where soft-delete metadata marks them deleted.",
+        files="does not touch files.",
+    ),
+)
 async def list_deleted_documents(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
@@ -649,7 +668,15 @@ async def list_deleted_documents(
     )
 
 
-@router.post("/{document_id}/restore")
+@router.post(
+    "/{document_id}/restore",
+    summary="Restore deleted document",
+    description=explain_interface(
+        responsibility="Restore one soft-deleted document owned by the authenticated user.",
+        database="Updates the document soft-delete metadata for the selected user-owned document.",
+        files="does not touch files.",
+    ),
+)
 async def restore_document(
     document_id: int,
     current_user: User = Depends(get_current_user),
@@ -672,7 +699,15 @@ async def restore_document(
     return {"message": "Document restored successfully", "document_id": restored_document.id}
 
 
-@router.delete("/{document_id}/permanent")
+@router.delete(
+    "/{document_id}/permanent",
+    summary="Permanently delete document",
+    description=explain_interface(
+        responsibility="Permanently delete one already-soft-deleted document owned by the authenticated user.",
+        database="Deletes the selected user-owned document row and related database state through the soft-delete service.",
+        files="May remove file-backed document assets through the permanent delete service path.",
+    ),
+)
 async def permanent_delete_document(
     document_id: int,
     current_user: User = Depends(get_current_user),
@@ -698,7 +733,15 @@ async def permanent_delete_document(
     return {"message": "Document permanently deleted", "document_id": document_id}
 
 
-@router.post("/batch-restore")
+@router.post(
+    "/batch-restore",
+    summary="Batch restore deleted documents",
+    description=explain_interface(
+        responsibility="Restore multiple soft-deleted documents owned by the authenticated user.",
+        database="Updates soft-delete metadata for the requested user-owned document rows.",
+        files="does not touch files.",
+    ),
+)
 async def batch_restore_documents(
     document_ids: list[int],
     current_user: User = Depends(get_current_user),

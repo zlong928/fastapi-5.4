@@ -561,3 +561,60 @@ class ExportService:
         }
 
         return json.dumps(export_data, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def export_extraction_to_excel(db: Session, job: ExtractionJob, result_ids: list[int] | None = None) -> bytes:
+        """Export extraction job results to Excel format (chart data).
+
+        Args:
+            db: Database session
+            job: Extraction job to export
+            result_ids: Optional list of result IDs to export. If None, exports all results.
+
+        Returns:
+            Excel file bytes
+        """
+        from app.services.agent.excel_exporter import ChartExcelExporter
+
+        # Filter results if result_ids provided
+        results = job.results
+        if result_ids is not None:
+            result_ids_set = set(result_ids)
+            results = [r for r in results if r.id in result_ids_set]
+
+        # 从 structured_data 重建 extraction_results 格式
+        by_figure = {}
+        for result in results:
+            if not result.structured_data or not result.figure_id:
+                continue
+
+            # 解析 structured_data
+            try:
+                chart_data = json.loads(result.structured_data)
+            except Exception:
+                continue
+
+            # 确保 chart_data 包含 chart_type
+            if not isinstance(chart_data, dict):
+                continue
+
+            figure_id = result.figure_id
+            if figure_id not in by_figure:
+                by_figure[figure_id] = {
+                    "figure_id": figure_id,
+                    "chart_data": chart_data,
+                    "extractions": []
+                }
+            else:
+                # 如果已存在，使用最新的 chart_data
+                by_figure[figure_id]["chart_data"] = chart_data
+
+        extraction_results = {"by_figure": by_figure}
+
+        # 获取文档标题
+        paper = db.get(Document, job.paper_id)
+        filename = paper.title if paper else f"extraction_{job.id}"
+
+        # 导出
+        exporter = ChartExcelExporter()
+        return exporter.export(extraction_results, filename)

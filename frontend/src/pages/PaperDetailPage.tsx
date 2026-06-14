@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, CalendarClock, CheckCircle2, FileText, Image as ImageIcon, Loader2, RefreshCw, Table2, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CalendarClock, CheckCircle2, Download, FileText, Image as ImageIcon, Loader2, RefreshCw, Table2, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { deletePaper, getDocumentAssets, getDocumentClaims, getDocumentEvents, getPaper, getPaperAssetBlob, parsePaper } from "@/lib/api";
+import { API_BASE_URL, deletePaper, getDocumentAssets, getDocumentClaims, getDocumentEvents, getPaper, getPaperAssetBlob, getToken, parsePaper } from "@/lib/api";
 import { formatChinaDateTime } from "@/lib/time";
 import { DocumentAsset, DocumentClaim, PaperDetail } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -36,6 +36,47 @@ function imageKind(asset: DocumentAsset) {
   if (source === "extracted_image") return "PDF 图片对象";
   if (source === "rendered_figure_region") return "图像区域";
   return "论文图片";
+}
+
+function coordinatePreviewStatusLabel(status?: string | null) {
+  const labels: Record<string, string> = {
+    accepted: "已标定",
+    review_required: "需复核",
+    skipped: "已跳过",
+    failed: "失败",
+  };
+  return labels[status || ""] ?? status ?? "";
+}
+
+function coordinatePreviewTone(status?: string | null) {
+  if (status === "accepted") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "review_required") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-slate-200 bg-slate-50 text-slate-600";
+}
+
+function downloadCoordinatePreview(asset: DocumentAsset) {
+  const token = getToken();
+  fetch(`${API_BASE_URL}/papers/assets/${asset.id}/coordinate-preview.csv`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  })
+    .then((response) => {
+      if (!response.ok) throw new Error("CSV 下载失败");
+      return response.blob();
+    })
+    .then((blob) => {
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const safeLabel = (asset.label || `asset-${asset.id}`).replace(/[^\w.-]+/g, "_");
+      link.href = url;
+      link.download = `${safeLabel}_coordinate_preview.csv`;
+      document.body.appendChild(link);
+      link.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(link);
+    })
+    .catch((error) => {
+      alert(error.message || "CSV 下载失败");
+    });
 }
 
 function Stat({ icon: Icon, label, value }: { icon: typeof FileText; label: string; value: string | number }) {
@@ -108,6 +149,7 @@ function ImageAssetCard({ asset, onOpen }: { asset: DocumentAsset; onOpen: (src:
   const uncertainties = Array.isArray(asset.metadata?.uncertainties) ? asset.metadata.uncertainties.map(String).filter(Boolean) : [];
   const analysisStatus = asset.metadata?.agent_analysis_status as string | undefined;
   const analysisError = asset.metadata?.agent_analysis_error as string | undefined;
+  const coordinatePreview = asset.metadata?.coordinate_preview as { status?: string; row_count?: number; data_quality?: string } | undefined;
   return (
     <article id={`asset-${asset.id}`} className="rounded-md border border-slate-200 bg-white p-3">
       <AssetImage asset={asset} onOpen={onOpen} />
@@ -125,6 +167,22 @@ function ImageAssetCard({ asset, onOpen }: { asset: DocumentAsset; onOpen: (src:
       </div>
       {asset.caption ? <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">{asset.caption}</p> : null}
       {asset.summary || asset.text_content ? <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-800">{asset.summary || asset.text_content}</p> : null}
+      {coordinatePreview ? (
+        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2">
+          <div className="flex items-center justify-between gap-2">
+            <Badge variant="outline" className={cn("border text-[10px]", coordinatePreviewTone(coordinatePreview.status))}>
+              {coordinatePreviewStatusLabel(coordinatePreview.status)}
+            </Badge>
+            <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={() => downloadCoordinatePreview(asset)}>
+              <Download className="h-3.5 w-3.5" />
+              CSV
+            </Button>
+          </div>
+          <p className="mt-1 text-[10px] leading-4 text-slate-500">
+            {coordinatePreview.row_count ?? 0} 点 · {coordinatePreview.data_quality || "未标注质量"}
+          </p>
+        </div>
+      ) : null}
       {analysisError ? (
         <p className="mt-3 rounded-md bg-red-50 p-2 text-xs leading-5 text-red-800">{analysisError}</p>
       ) : null}

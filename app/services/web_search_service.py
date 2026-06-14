@@ -123,8 +123,8 @@ class WebSearchService:
             return True
 
         # 2. 知识库有结果但质量很低（所有结果分数都<0.3）-> 触发网页搜索
+        max_score = max((self._local_result_score(r) for r in local_results), default=0.0)
         if local_results:
-            max_score = max((r.get("score", 0.0) for r in local_results), default=0.0)
             if max_score < min_score_threshold:
                 logger.info(f"Local results have low quality (max_score={max_score:.3f} < {min_score_threshold}), enabling web search")
                 return True
@@ -150,5 +150,13 @@ class WebSearchService:
             return True
 
         # 默认：知识库有足够结果，不触发网页搜索
-        logger.info(f"Local results sufficient ({len(local_results)} results, max_score={(max((r.get('score', 0) for r in local_results), default=0)):.3f}), skipping web search")
+        logger.info(f"Local results sufficient ({len(local_results)} results, max_score={max_score:.3f}), skipping web search")
         return False
+
+    def _local_result_score(self, result: Any) -> float:
+        if isinstance(result, dict):
+            try:
+                return float(result.get("score", 1.0))
+            except (TypeError, ValueError):
+                return 0.0
+        return 1.0 if result is not None else 0.0

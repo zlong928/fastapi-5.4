@@ -14,7 +14,22 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
 
 from app.services.agent.llm_client import LLMClient
-from app.services.agent.types import ExtractionMap, ExtractionTask, FigureExtractionPlan, PaperData, SupervisorState
+from app.services.agent.types import ExtractionMap, ExtractionTask, FigureExtractionPlan, ImageType, PaperData, SupervisorState
+from app.services.agent.visual_agents import (
+    BarChartAgent,
+    CoordinateExtractionAgent,
+    HeatmapAgent,
+    ImageClassifierAgent,
+    NonDataVisualAgent,
+    TableImageAgent,
+    image_classification_prompt,
+    image_type_from_string,
+)
+from app.services.agent.visual_contracts import (
+    generic_visual_system_prompt,
+    generic_visual_user_prompt,
+    visual_text_fallback_prompt,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -575,12 +590,18 @@ class VisualBatchAgent:
     """Analyze multiple figures in parallel using ThreadPoolExecutor."""
 
     MAX_WORKERS = 4
-    MAX_RETRIES = 3  # 从2增加到3，提高图表分析成功率
+    MAX_RETRIES = 3
 
     def __init__(self, client: LLMClient) -> None:
         self.client = client
         self.max_workers = max(1, int(os.getenv("VISUAL_LLM_MAX_WORKERS", str(self.MAX_WORKERS))))
         self.max_retries = max(0, int(os.getenv("VISUAL_LLM_MAX_RETRIES", "1")))
+        self.classifier = ImageClassifierAgent(client)
+        self.coordinate_extractor = CoordinateExtractionAgent(client)
+        self.bar_chart_agent = BarChartAgent(client)
+        self.heatmap_agent = HeatmapAgent(client)
+        self.table_image_agent = TableImageAgent(client)
+        self.non_data_agent = NonDataVisualAgent(client)
 
     def analyze_batch(
         self,
@@ -615,7 +636,13 @@ class VisualBatchAgent:
         return results  # type: ignore[return-value]
 
     def _analyze_with_retry(self, plan: FigureExtractionPlan, supervisor_state: SupervisorState) -> dict:
-        result = self._analyze_figure(plan)
+        # 先分类图片类型
+        if not plan.image_type:
+            plan.image_type = self.classifier.classify(plan)
+
+        # 根据类型选择处理方式
+        result = self._route_to_agent(plan)
+
         retry_count = 0
         while self._needs_retry(result) and retry_count < self.max_retries:
             retry_count += 1
@@ -630,11 +657,216 @@ class VisualBatchAgent:
                     f"第{retry_count}次重试。上次失败原因：{diagnosis['reason']}。"
                     f"建议策略：{diagnosis['strategy']}"
                 ),
+                image_type=plan.image_type,
             )
-            result = self._analyze_figure(retry_plan)
+            result = self._route_to_agent(retry_plan)
             result["retry_count"] = retry_count
             result["failure_diagnosis"] = diagnosis
         return result
+
+    def _route_to_agent(self, plan: FigureExtractionPlan) -> dict:
+        """根据图表类型路由到对应的专用 agent"""
+        image_type = plan.image_type
+
+        # 坐标/时序/谱图类型路由
+        if image_type in (
+            ImageType.LINE_PLOT,
+            ImageType.BIPHASIC_TIME_SERIES,
+            ImageType.MULTI_LINE_PLOT,
+            ImageType.SCATTER_PLOT,
+            ImageType.SPECTRUM_CURVE,
+            ImageType.BAR_OR_LINE_WITH_ERRORBAR,
+            ImageType.GENERIC_COORDINATE_PLOT,
+            ImageType.COORDINATE_PLOT,
+        ):
+            return self._analyze_coordinate_figure(plan)
+
+        # 双轴图
+        elif image_type == ImageType.DUAL_AXIS_PLOT:
+            return self._analyze_coordinate_figure(plan)
+
+        # 条形图
+        elif image_type in (ImageType.BAR_CHART, ImageType.GROUPED_BAR):
+            return self._analyze_bar_chart(plan)
+
+        # 热图/二维颜色场
+        elif image_type in (ImageType.HEATMAP, ImageType.HEATMAP_MATRIX, ImageType.FIELD_2D_MAP):
+            return self._analyze_heatmap(plan)
+
+        # 表格图
+        elif image_type == ImageType.TABLE_IMAGE:
+            return self._analyze_table_image(plan)
+
+        # 非数据视觉证据
+        elif image_type in (
+            ImageType.NON_DATA_IMAGE,
+            ImageType.MICROSCOPY_QUANT,
+            ImageType.IMAGE_EVIDENCE,
+            ImageType.SCHEMATIC,
+            ImageType.SCHEMATIC_OR_PHOTO,
+        ):
+            return self._analyze_non_data_visual(plan)
+
+        # 未知类型，使用通用分析
+        else:
+            return self._analyze_figure(plan)
+
+    def _analyze_coordinate_figure(self, plan: FigureExtractionPlan) -> dict:
+        """使用专用agent提取坐标数据"""
+        started = time.time()
+        coordinate_data = self.coordinate_extractor.extract_coordinates(plan)
+
+        if "error" in coordinate_data:
+            return self._error_result(plan, coordinate_data["error"])
+        coordinate_data.setdefault("chart_type", plan.image_type.value if plan.image_type else "generic_coordinate_plot")
+
+        # 转换为标准格式
+        return {
+            "figure_id": plan.figure_id,
+            "image_path": plan.image_path,
+            "figure_type": "coordinate_plot",
+            "image_type": plan.image_type.value if plan.image_type else "unknown",
+            "coordinate_data": coordinate_data,
+            "chart_data": coordinate_data,
+            "overall_description": f"坐标数据图：{coordinate_data.get('figure', plan.figure_id)}",
+            "extractions": [
+                {
+                    "metric": task.metric_name,
+                    "success": True,
+                    "data": coordinate_data,
+                    "qualitative": f"已提取坐标数据，共{len(coordinate_data.get('panels', []))}个子图",
+                    "confidence": "high",
+                    "notes": "使用专用坐标提取agent",
+                    "mode": "coordinate_extraction",
+                }
+                for task in plan.tasks
+            ],
+            "elapsed": round(time.time() - started, 2),
+        }
+
+    def _analyze_bar_chart(self, plan: FigureExtractionPlan) -> dict:
+        """使用专用agent提取条形图数据"""
+        started = time.time()
+        chart_data = self.bar_chart_agent.extract_bars(plan)
+
+        if "error" in chart_data:
+            return self._error_result(plan, chart_data["error"])
+        chart_data.setdefault("chart_type", plan.image_type.value if plan.image_type else "bar_chart")
+
+        return {
+            "figure_id": plan.figure_id,
+            "image_path": plan.image_path,
+            "figure_type": "bar_chart",
+            "image_type": plan.image_type.value if plan.image_type else "unknown",
+            "chart_data": chart_data,
+            "overall_description": f"条形图：{chart_data.get('figure', plan.figure_id)}",
+            "extractions": [
+                {
+                    "metric": task.metric_name,
+                    "success": True,
+                    "data": chart_data,
+                    "qualitative": f"已提取条形图数据",
+                    "confidence": "high",
+                    "notes": "使用专用条形图提取agent",
+                    "mode": "bar_chart_extraction",
+                }
+                for task in plan.tasks
+            ],
+            "elapsed": round(time.time() - started, 2),
+        }
+
+    def _analyze_heatmap(self, plan: FigureExtractionPlan) -> dict:
+        """使用专用agent提取热图数据"""
+        started = time.time()
+        chart_data = self.heatmap_agent.extract_heatmap(plan)
+
+        if "error" in chart_data:
+            return self._error_result(plan, chart_data["error"])
+        chart_data.setdefault("chart_type", plan.image_type.value if plan.image_type else "heatmap_matrix")
+
+        return {
+            "figure_id": plan.figure_id,
+            "image_path": plan.image_path,
+            "figure_type": "heatmap",
+            "image_type": plan.image_type.value if plan.image_type else "unknown",
+            "chart_data": chart_data,
+            "overall_description": f"热图：{chart_data.get('figure', plan.figure_id)}",
+            "extractions": [
+                {
+                    "metric": task.metric_name,
+                    "success": True,
+                    "data": chart_data,
+                    "qualitative": f"已提取热图数据",
+                    "confidence": "medium",
+                    "notes": "使用专用热图提取agent",
+                    "mode": "heatmap_extraction",
+                }
+                for task in plan.tasks
+            ],
+            "elapsed": round(time.time() - started, 2),
+        }
+
+    def _analyze_table_image(self, plan: FigureExtractionPlan) -> dict:
+        """使用专用agent提取表格图数据"""
+        started = time.time()
+        chart_data = self.table_image_agent.extract_table_image(plan)
+
+        if "error" in chart_data:
+            return self._error_result(plan, chart_data["error"])
+        chart_data.setdefault("chart_type", "table_image")
+
+        return {
+            "figure_id": plan.figure_id,
+            "image_path": plan.image_path,
+            "figure_type": "table_image",
+            "image_type": plan.image_type.value if plan.image_type else "unknown",
+            "chart_data": chart_data,
+            "overall_description": f"表格图：{chart_data.get('figure', plan.figure_id)}",
+            "extractions": [
+                {
+                    "metric": task.metric_name,
+                    "success": True,
+                    "data": chart_data,
+                    "qualitative": f"已提取表格图数据",
+                    "confidence": "high",
+                    "notes": "使用专用表格图提取agent",
+                    "mode": "table_image_extraction",
+                }
+                for task in plan.tasks
+            ],
+            "elapsed": round(time.time() - started, 2),
+        }
+
+    def _analyze_non_data_visual(self, plan: FigureExtractionPlan) -> dict:
+        """处理非数据视觉证据"""
+        started = time.time()
+        chart_data = self.non_data_agent.describe_visual(plan)
+
+        if "error" in chart_data:
+            return self._error_result(plan, chart_data["error"])
+        chart_data.setdefault("chart_type", plan.image_type.value if plan.image_type else "non_data_image")
+
+        return {
+            "figure_id": plan.figure_id,
+            "image_path": plan.image_path,
+            "figure_type": "non_data_visual",
+            "image_type": plan.image_type.value if plan.image_type else "unknown",
+            "chart_data": chart_data,
+            "overall_description": chart_data.get("description", "非数据视觉证据"),
+            "extractions": [
+                {
+                    "metric": task.metric_name,
+                    "success": True,
+                    "data": chart_data,
+                    "qualitative": chart_data.get("description", ""),
+                    "confidence": "medium",
+                    "notes": "非数据视觉证据，无数值可提取",
+                    "mode": "visual_descriptive",
+                }
+                for task in plan.tasks
+            ],
+            "elapsed": round(time.time() - started, 2),
+        }
 
     def _analyze_figure(self, plan: FigureExtractionPlan) -> dict:
         started = time.time()
@@ -647,129 +879,25 @@ class VisualBatchAgent:
         )
         if self._prefer_text_fallback_first(plan):
             return self._text_visual_fallback(plan, image_data_url, tasks_desc, "page snapshot uses text-first visual analysis", started)
-        review = f"\n复核提示：{plan.review_notes}" if plan.review_notes else ""
         try:
             content = self.client.chat_text(
                 [
                     {
                         "role": "system",
-                        "content": """你是顶级科研图表数据提取专家。你的任务是从图片中提取**所有**可见的数据和信息，并用中文详细解释。
-
-## 分析步骤（必须逐步完成）：
-
-### 第一步：识别图表类型和结构
-- 图表类型：柱状图/折线图/散点图/显微镜图/流程图/结构示意图/表格/组合图/其他
-- 坐标轴信息：X轴标签、单位、刻度值；Y轴标签、单位、刻度值
-- 图例信息：所有系列的名称、颜色、标记符号
-- 标题和注释：主标题、子标题、图中所有文字标注
-
-### 第二步：提取所有数据点（关键！）
-**必须提取图中每个可见的数据点**：
-- 柱状图：每个柱子的高度数值
-- 折线图：每个数据点的X、Y坐标
-- 散点图：每个点的位置
-- 显微镜图/示意图：关键尺寸、标注的数值
-- 表格：所有单元格的数据
-
-如果数值清晰可读：记录精确数值
-如果数值模糊：估算范围（如"约50-60"）
-如果无法读取：标注"数值不可读"但描述大致位置和趋势
-
-### 第三步：提取文本标注
-记录图中所有文字：
-- 数据标签（如柱子上的数字）
-- 统计显著性标记（*, **, ***, p<0.05, p<0.01等）
-- 箭头指向的说明文字
-- 误差线的数值
-- 百分比、倍数关系
-
-### 第四步：总结关键发现
-用中文总结：
-- 最大值和最小值及其对应的条件
-- 各组之间的对比关系（谁比谁高/低多少，倍数关系）
-- 变化趋势（上升/下降/先升后降等）
-- 统计显著性结论
-- 关键数据点的具体数值
-
-## 输出JSON格式：
-{
-  "figure_type": "具体图表类型",
-  "title": "图表标题（中文）",
-  "axes": {
-    "x_axis": {"label": "X轴标签（中文）", "unit": "单位", "visible_values": ["刻度1", "刻度2"]},
-    "y_axis": {"label": "Y轴标签（中文）", "unit": "单位", "range": "范围（如0-100）"}
-  },
-  "legend": [
-    {"name": "系列名（中文）", "color": "颜色描述", "marker": "标记类型"}
-  ],
-  "data_points": [
-    {
-      "series": "所属系列（中文）",
-      "x": "X值或分类",
-      "y": "Y值",
-      "value_label": "数据标签",
-      "error_bar": "误差值（如有）",
-      "significance": "显著性标记（如有）"
-    }
-  ],
-  "annotations": ["图中所有文字标注（中文）"],
-  "statistics": {
-    "max_value": {"value": 数值, "condition": "条件（中文）"},
-    "min_value": {"value": 数值, "condition": "条件（中文）"},
-    "comparisons": ["对比1：A比B高50%", "对比2：C显著低于D (p<0.05)"]
-  },
-  "overall_description": "完整的中文描述，包括：图表展示了什么、主要数据点、关键趋势、重要对比",
-  "extractions": [{
-    "metric": "提取的指标名",
-    "success": true,
-    "data": {"具体数值字段": 数值},
-    "qualitative": "用中文详细描述该指标的数值、趋势、对比关系",
-    "confidence": "high/medium/low",
-    "notes": "补充说明（中文）",
-    "evidence": "图中可见的证据（坐标轴数值、标注文字等）"
-  }],
-  "key_findings": [
-    "关键发现1：具体数值+单位+对比（中文）",
-    "关键发现2：趋势+幅度+显著性（中文）"
-  ],
-  "extraction_completeness": "完整度评估（如：已提取所有可见数据点/部分数据点模糊）"
-}
-
-## 严格要求：
-1. **全部中文**：所有描述、标签、结论必须用中文，包括overall_description、qualitative、notes、evidence、key_findings
-2. **不遗漏数据**：提取图中**每一个**可见的数据点，不要只提取部分
-3. **精确优先**：能看清数值就记录精确数值，不要只说"较高"、"增加"等模糊描述
-4. **结构化**：数据必须结构化存储在data_points数组中
-5. **可验证**：所有结论必须基于图中可见的证据
-6. **完整解释**：key_findings必须包含具体数值和单位，如"A组的转化率为85%，比B组(60%)高出41.7%"
-7. **中文图例**：如果图例是英文，翻译成中文
-
-如果无法稳定输出合法 JSON，也不要空响应；请直接输出一段中文证据描述。系统会使用同一次响应作为降级证据，禁止等待二次分析。""",
+                        "content": generic_visual_system_prompt(),
                     },
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": f"""# 图表信息
-- 图表编号：{plan.figure_id}
-- 图注：{plan.caption}
-
-# 提取任务
-{tasks_desc}
-
-# 分析要求
-请严格按照系统提示的步骤，**完整提取**这个图表中的所有信息：
-
-1. **完整识别结构**：图表类型、坐标轴（标签+刻度值）、图例（所有系列）
-2. **提取所有数据点**：图中每个柱/点/线的具体数值，不要遗漏
-3. **记录所有文字**：标题、标签、数据标签、统计标记、注释
-4. **总结关键发现**：用中文说明主要数据、对比关系、显著性，必须包含具体数值
-
-**关键要求**：
-- 提取图中**每一个**可见的数据点
-- 所有描述必须用**中文**
-- 数值必须**精确记录**（能看清就记数值）
-- 结论必须**具体**（如"A组85%，比B组60%高41.7%"，而不是"A组较高"）
-{review}"""},
+                            {
+                                "type": "text",
+                                "text": generic_visual_user_prompt(
+                                    plan.figure_id,
+                                    plan.caption,
+                                    tasks_desc,
+                                    plan.review_notes,
+                                ),
+                            },
                             {"type": "image_url", "image_url": {"url": image_data_url}},
                         ],
                     },
@@ -782,6 +910,7 @@ class VisualBatchAgent:
         payload = self._parse_single_pass_visual_response(plan, content)
         payload["figure_id"] = plan.figure_id
         payload["image_path"] = plan.image_path
+        payload["image_type"] = plan.image_type.value if plan.image_type else "unknown"
         payload["elapsed"] = round(time.time() - started, 2)
         return payload
 
@@ -790,6 +919,10 @@ class VisualBatchAgent:
             payload = self.client._parse_json(content)
         except Exception:
             return self._single_pass_text_result(plan, content, "visual_text_single_pass")
+
+        # 确保所有返回的字典都有image_type
+        if "image_type" not in payload:
+            payload["image_type"] = plan.image_type.value if plan.image_type else "unknown"
 
         if not payload.get("extractions"):
             description = str(
@@ -809,6 +942,7 @@ class VisualBatchAgent:
             "figure_id": plan.figure_id,
             "image_path": plan.image_path,
             "figure_type": "page_or_figure",
+            "image_type": plan.image_type.value if plan.image_type else "unknown",
             "overall_description": cleaned,
             "mode": mode,
             "extractions": [
@@ -835,11 +969,7 @@ class VisualBatchAgent:
                         "content": [
                             {
                                 "type": "text",
-                                "text": (
-                                    "请用中文描述这张论文图或页面截图。只列出图中实际可见、可核验的正向信息："
-                                    "可读数值、趋势、坐标轴、图例、文字标注、显著性标记、结构位置或形态。"
-                                    "如果某类信息不存在，不要写“没有/无法提取/不包含”。不要输出 JSON，不要解释过程，控制在500字以内。"
-                                ),
+                                "text": visual_text_fallback_prompt(),
                             },
                             {"type": "image_url", "image_url": {"url": image_data_url}},
                         ],
@@ -855,6 +985,7 @@ class VisualBatchAgent:
             "figure_id": plan.figure_id,
             "image_path": plan.image_path,
             "figure_type": "page_or_figure",
+            "image_type": plan.image_type.value if plan.image_type else "unknown",
             "overall_description": description,
             "mode": "visual_text_fallback",
             "json_failure_reason": reason,
@@ -939,6 +1070,7 @@ class VisualBatchAgent:
             "figure_id": plan.figure_id,
             "image_path": plan.image_path,
             "figure_type": "unknown",
+            "image_type": plan.image_type.value if plan.image_type else "unknown",
             "overall_description": plan.caption or "图片分析失败",
             "error": reason,
             "extractions": [

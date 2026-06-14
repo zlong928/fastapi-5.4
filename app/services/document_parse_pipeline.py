@@ -5,7 +5,7 @@ import hashlib
 import time
 from uuid import uuid4
 
-from app.core.config import DOCUMENT_PARSE_TIMEOUT_SECONDS, ENABLE_DOCLING_PARSER
+from app.core.config import DOCUMENT_PARSE_TIMEOUT_SECONDS, ENABLE_DOCLING_PARSER, ENABLE_MINERU_PARSER, RESULT_DIR
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -21,6 +21,8 @@ from app.services.document_processing_modes import ProcessingStrategy, select_pa
 from app.services.document_input import build_document_input, DocumentInput
 from app.services.job_run_service import JobRunService
 from app.services.file_storage import FileStorageService
+from app.services.mineru_asset_ingestion import MinerUVisualAssetIngestion
+from app.services.mineru_parser import MinerUParserService, MinerUParserUnavailable
 from app.services.ocr_service import OcrService
 from app.services.paper.asset_understanding_service import AssetUnderstandingService
 from app.services.paper.claim_extraction_service import ClaimExtractionService
@@ -62,6 +64,7 @@ class DocumentParsePipeline:
         self.chunker = ChunkingService()
         self.asset_understanding = AssetUnderstandingService()
         self.claim_extractor = ClaimExtractionService()
+        self.mineru_asset_ingestion = MinerUVisualAssetIngestion(self.file_storage)
 
     def run(
         self,
@@ -262,6 +265,17 @@ class DocumentParsePipeline:
                     self.asset_understanding.understand(asset)
                     db.add(asset)
 
+                mineru_visual_assets = self._mineru_visual_assets(
+                    document=document,
+                    parse_job_id=job_run.id,
+                    strategy_metadata=strategy_metadata,
+                )
+                for asset in mineru_visual_assets:
+                    self.asset_understanding.understand(asset)
+                    db.add(asset)
+
+                db.flush()
+
                 self._log_event(
                     db,
                     document,
@@ -269,10 +283,10 @@ class DocumentParsePipeline:
                     "证据资产摘要完成",
                     metadata={
                         "table_count": len(table_assets),
-                        "asset_count": len(ocr_assets) + len(table_assets),
+                        "mineru_visual_asset_count": len(mineru_visual_assets),
+                        "asset_count": len(ocr_assets) + len(table_assets) + len(mineru_visual_assets),
                     },
                 )
-                db.flush()
 
                 persisted_chunks = (
                     db.query(DocumentChunk)
@@ -307,7 +321,7 @@ class DocumentParsePipeline:
                         "job_run_id": job_run.id,
                         "job_id": job_run.job_id,
                         "chunk_count": len(chunks),
-                        "asset_count": len(ocr_assets) + len(table_assets),
+                        "asset_count": len(ocr_assets) + len(table_assets) + len(mineru_visual_assets),
                     },
                 )
                 db.commit()
@@ -406,6 +420,50 @@ class DocumentParsePipeline:
         }
 
         if source_type == "pdf":
+            if ENABLE_MINERU_PARSER:
+                try:
+                    mineru_result = MinerUParserService().parse_pdf_file(
+                        file_path,
+                        data_id=f"document-{document_id}",
+                        output_root=RESULT_DIR / "mineru",
+                    )
+                    metadata.update(
+                        {
+                            "processing_strategy": "mineru",
+                            "mineru_enabled": True,
+                            "mineru_used": True,
+                            "mineru_batch_id": mineru_result.batch_id,
+                            "mineru_file_name": mineru_result.file_name,
+                            "mineru_markdown_file": mineru_result.markdown_file,
+                            "mineru_full_zip_url": mineru_result.full_zip_url,
+                            "mineru_artifact_dir": mineru_result.artifact_dir or "",
+                            "mineru_zip_path": mineru_result.zip_path or "",
+                            "mineru_extract_dir": mineru_result.extract_dir or "",
+                            "mineru_content_list_path": mineru_result.content_list_path or "",
+                            "mineru_layout_path": mineru_result.layout_path or "",
+                        }
+                    )
+                    return mineru_result.parsed_document, [], metadata
+                except MinerUParserUnavailable as exc:
+                    metadata.update(
+                        {
+                            "mineru_enabled": True,
+                            "mineru_used": False,
+                            "mineru_error": str(exc),
+                        }
+                    )
+                except Exception as exc:
+                    metadata.update(
+                        {
+                            "mineru_enabled": True,
+                            "mineru_used": False,
+                            "mineru_error": f"{type(exc).__name__}: {exc}",
+                        }
+                    )
+                    metadata.setdefault("warnings", []).append("mineru_parse_failed_falling_back")
+            else:
+                metadata.update({"mineru_enabled": False, "mineru_used": False})
+
             if ENABLE_DOCLING_PARSER:
                 docling_parsed, docling_metadata = self._try_docling_parse(file_path)
                 if docling_parsed is not None:
@@ -700,6 +758,23 @@ class DocumentParsePipeline:
                     )
                 )
         return assets
+
+    def _mineru_visual_assets(
+        self,
+        *,
+        document: Document,
+        parse_job_id: int,
+        strategy_metadata: dict,
+    ) -> list[DocumentAsset]:
+        if not strategy_metadata.get("mineru_used"):
+            return []
+        return self.mineru_asset_ingestion.ingest(
+            document=document,
+            parse_job_id=parse_job_id,
+            content_list_path=str(strategy_metadata.get("mineru_content_list_path") or ""),
+            extract_dir=str(strategy_metadata.get("mineru_extract_dir") or ""),
+            generate_coordinate_preview=True,
+        )
 
     def _parsed_document_from_ocr_pages(self, pages: list[str], source_type: str) -> ParsedDocument:
         parsed_pages = []

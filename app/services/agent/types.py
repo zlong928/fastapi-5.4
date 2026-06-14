@@ -1,6 +1,54 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
+
+
+class ImageType(Enum):
+    """图表类型分类（生产核心版）"""
+    # 数据图表类型
+    LINE_PLOT = "line_plot"  # 折线图
+    BIPHASIC_TIME_SERIES = "biphasic_time_series"  # 双相/分阶段时序图
+    MULTI_LINE_PLOT = "multi_line_plot"  # 多曲线图，需要 legend 绑定
+    SCATTER_PLOT = "scatter_plot"  # 散点图
+    BAR_CHART = "bar_chart"  # 条形图/柱状图
+    GROUPED_BAR = "grouped_bar"  # 分组柱状图
+    BAR_OR_LINE_WITH_ERRORBAR = "bar_or_line_with_errorbar"  # 带误差棒的柱状/折线图
+    BOX_PLOT = "box_plot"  # 箱线图/violin图
+    DUAL_AXIS_PLOT = "dual_axis_plot"  # 双Y轴图
+    HEATMAP = "heatmap"  # 热图
+    HEATMAP_MATRIX = "heatmap_matrix"  # 热图/矩阵图，需 colorbar 映射
+    SPECTRUM_CURVE = "spectrum_curve"  # 光谱/谱图类曲线
+    FIELD_2D_MAP = "2d_field_map"  # 二维颜色场/模拟场
+    TABLE_IMAGE = "table_image"  # 表格图（栅格化表格）
+    GENERIC_COORDINATE_PLOT = "generic_coordinate_plot"  # 通用坐标图（复杂/罕见图形）
+
+    # 向后兼容别名
+    COORDINATE_PLOT = "generic_coordinate_plot"  # 向后兼容
+
+    # 非数据类型
+    NON_DATA_IMAGE = "non_data_image"  # 照片、荧光图、SEM/TEM
+    MICROSCOPY_QUANT = "microscopy_quant"  # 显微/SEM/EDS mapping，做面积/孔径/计数等
+    IMAGE_EVIDENCE = "non_data_image"  # 向后兼容
+    SCHEMATIC = "schematic"  # 示意图/流程图
+    SCHEMATIC_OR_PHOTO = "schematic_or_photo"  # 示意图/流程图/照片/结构渲染
+    UNKNOWN = "unknown"  # 无法识别
+
+
+class VisualCategory(Enum):
+    """视觉证据大类"""
+    DATA_CHART = "data_chart"  # 数据图表
+    NON_DATA_VISUAL = "non_data_visual"  # 非数据视觉证据
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class ChartMetadata:
+    """图表元数据（扩展 FigureExtractionPlan）"""
+    visual_category: VisualCategory
+    chart_type: ImageType
+    panel_count: int = 1
+    confidence: float = 0.0
 
 
 @dataclass
@@ -36,6 +84,7 @@ class FigureExtractionPlan:
     caption: str
     tasks: list[ExtractionTask] = field(default_factory=list)
     review_notes: str = ""
+    image_type: ImageType | None = None
 
 
 @dataclass

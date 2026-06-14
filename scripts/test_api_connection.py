@@ -263,6 +263,6 @@ if __name__ == "__main__":
         print("   pkill -f uvicorn")
         print("   python -m uvicorn app.main:app --reload")
         print()
-        print("2. 测试图表提取:")
-        print("   python scripts/quick_verify_extraction.py --document-id <ID>")
+        print("2. 测试图像坐标提取链路:")
+        print("   docker compose run --rm api pytest tests/test_mineru_image_coordinate_extraction.py tests/test_chart_types.py")
         print()

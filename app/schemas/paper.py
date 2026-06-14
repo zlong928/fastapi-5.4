@@ -24,6 +24,18 @@ class PaperListItem(BaseModel):
     updated_at: datetime
 
 
+class CoordinatePreviewRead(BaseModel):
+    status: str = ""
+    row_count: int = 0
+    data_quality: str = ""
+    sample_limit: int = 15
+    csv_url: Optional[str] = None
+    overlay_path: Optional[str] = None
+    summary_csv_path: Optional[str] = None
+    quality_audit_csv_path: Optional[str] = None
+    run_manifest_path: Optional[str] = None
+
+
 class PaperFigureRead(BaseModel):
     id: int
     paper_id: int
@@ -43,6 +55,7 @@ class PaperFigureRead(BaseModel):
     notes: Optional[str] = None
     analysis_status: Optional[str] = None
     analysis_error: Optional[str] = None
+    coordinate_preview: Optional[CoordinatePreviewRead] = None
     created_at: datetime
 
 
@@ -185,6 +198,52 @@ class PaperStatisticsResponse(BaseModel):
     recent_7_days_extractions: int = 0
 
 
+class ChartTypeCatalogItem(BaseModel):
+    image_type: str
+    label: str
+    suitable_for_csv: bool
+    processing_chain: str
+    typical_content: list[str] = Field(default_factory=list)
+    coordinate_output: str = ""
+    binding_requirements: list[str] = Field(default_factory=list)
+    requires_review: bool = False
+
+
+class ChartRecipePanelRead(BaseModel):
+    panel_id: str
+    y_top_px: float
+    y_bottom_px: float
+    y_axis_label: str
+    y_axis_unit: str = ""
+
+
+class ChartRecipeCatalogItem(BaseModel):
+    recipe_id: str
+    image_type: str
+    filename_prefixes: list[str] = Field(default_factory=list)
+    caption_hints: list[str] = Field(default_factory=list)
+    x_axis_label: str
+    x_axis_unit: str = ""
+    x_axis_type: str = "linear"
+    y_axis_type: str = "linear"
+    axis_calibration_method: str = ""
+    known_x_axis_calibrated: bool = False
+    known_y_axis_calibrated: bool = False
+    y_right_axis_type: str = ""
+    source_path: str = ""
+    panels: list[ChartRecipePanelRead] = Field(default_factory=list)
+
+
+class ChartTypeRuntimeStats(BaseModel):
+    image_type: str
+    total: int = 0
+    accepted: int = 0
+    review_required: int = 0
+    skipped: int = 0
+    failed: int = 0
+    row_count: int = 0
+
+
 class StructuredFigureResult(BaseModel):
     id: int
     figure_id: Optional[str] = None
@@ -233,6 +292,7 @@ class PaperFigureAsset(BaseModel):
     page: Optional[int] = None
     source: Optional[str] = None
     asset_type: str
+    coordinate_preview: Optional[CoordinatePreviewRead] = None
 
 
 class StructuredExtractionResponse(BaseModel):
@@ -247,5 +307,6 @@ class StructuredExtractionResponse(BaseModel):
     text_results: list[StructuredTextResult] = Field(default_factory=list)
     not_found: list[str] = Field(default_factory=list)
     paper_figures: list[PaperFigureAsset] = Field(default_factory=list)
+    chart_type_stats: list[ChartTypeRuntimeStats] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

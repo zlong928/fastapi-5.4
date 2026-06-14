@@ -82,7 +82,10 @@ class AgentResultMapper:
             figure_caption = figure_captions.get(str(figure_id), "")
             overall_desc = self._stringify(payload.get("overall_description", ""))
             is_fallback = str(payload.get("mode", "")).startswith("fallback")
-            extraction_mode = "fallback_caption_only" if is_fallback else "visual_analysis"
+
+            # 提取 chart_data（新增）
+            chart_data = payload.get("chart_data") or payload.get("coordinate_data")
+            chart_type = chart_data.get("chart_type", "") if isinstance(chart_data, dict) else ""
 
             for extraction in payload.get("extractions", []) or []:
                 content = self._stringify(extraction.get("qualitative") or extraction.get("data") or "")
@@ -97,12 +100,14 @@ class AgentResultMapper:
                     extraction_mode = "fallback_caption_only"
                 else:
                     confidence = CONFIDENCE_MAP.get(str(extraction.get("confidence", "medium")).lower(), 0.65)
-                    extraction_mode = "visual_analysis"
+                    # 根据图表类型设置 extraction_mode
+                    extraction_mode = self._map_extraction_mode(extraction, chart_type, payload)
                 if confidence < 0.5:
                     continue
 
+                # 优先使用 chart_data，回退到 extraction.data
                 structured_data = None
-                raw_data = extraction.get("data")
+                raw_data = chart_data if chart_data else extraction.get("data")
                 if raw_data and isinstance(raw_data, dict) and raw_data:
                     structured_data = json.dumps(raw_data, ensure_ascii=False)
 
@@ -277,3 +282,43 @@ class AgentResultMapper:
         if isinstance(value, str):
             return value
         return json.dumps(value, ensure_ascii=False)
+
+    def _map_extraction_mode(self, extraction: dict, chart_type: str, payload: dict) -> str:
+        """根据图表类型和提取模式映射 extraction_mode"""
+        mode = str(extraction.get("mode", ""))
+
+        # 优先使用 extraction 中的 mode
+        if "coordinate_extraction" in mode:
+            return "chart_coordinate_extraction"
+        elif "bar_chart" in mode:
+            return "chart_bar_extraction"
+        elif "heatmap" in mode:
+            return "chart_heatmap_extraction"
+        elif "table_image" in mode:
+            return "chart_table_extraction"
+        elif "visual_descriptive" in mode or "non_data" in mode:
+            return "visual_descriptive"
+
+        # 根据 chart_type 推断
+        if chart_type in (
+            "line_plot",
+            "biphasic_time_series",
+            "multi_line_plot",
+            "scatter_plot",
+            "spectrum_curve",
+            "bar_or_line_with_errorbar",
+            "generic_coordinate_plot",
+            "dual_axis_plot",
+        ):
+            return "chart_coordinate_extraction"
+        elif chart_type in ("bar_chart", "grouped_bar"):
+            return "chart_bar_extraction"
+        elif chart_type in ("heatmap", "heatmap_matrix", "2d_field_map"):
+            return "chart_heatmap_extraction"
+        elif chart_type == "table_image":
+            return "chart_table_extraction"
+        elif chart_type in ("non_data_image", "microscopy_quant", "schematic", "schematic_or_photo"):
+            return "visual_descriptive"
+
+        # 默认使用通用视觉分析
+        return "visual_analysis"

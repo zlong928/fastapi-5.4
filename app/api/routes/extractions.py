@@ -18,9 +18,11 @@ from app.db.session import get_db
 from app.models import Document, DocumentAsset, DocumentEvent, ExtractionJob, ExtractionResult, User
 from app.queue.extraction_queue import enqueue_extraction
 from app.queue.redis_queue import RedisQueue
-from app.schemas.paper import BatchExtractionResultItem, BatchExtractionRunRequest, ExtractionJobListItem, ExtractionJobRead, ExtractionResultRead, ExtractionRunRequest, PaperFigureAsset, StructuredExtractionResponse, StructuredFigureResult, StructuredTableResult, StructuredTextResult
+from app.schemas.paper import BatchExtractionResultItem, BatchExtractionRunRequest, ChartTypeRuntimeStats, ExtractionJobListItem, ExtractionJobRead, ExtractionResultRead, ExtractionRunRequest, PaperFigureAsset, StructuredExtractionResponse, StructuredFigureResult, StructuredTableResult, StructuredTextResult
 from app.services.extraction_job_service import ensure_extractable, log_extraction_event
 from app.services.export_service import ExportService
+from app.services.chart_extraction import CHART_TYPE_CATALOG
+from app.services.paper.coordinate_preview import coordinate_preview_read
 from app.services.paper.evidence import asset_bbox, asset_image_url, asset_metadata, is_visual_evidence, normalize_evidence_type
 
 router = APIRouter(prefix="/extractions", tags=["extractions"])
@@ -531,6 +533,42 @@ def _asset_source(asset: DocumentAsset | None, metadata: dict | None = None) -> 
     return str(metadata.get("source") or asset.asset_type) or None
 
 
+def _chart_type_stats(figure_assets: list[DocumentAsset]) -> list[ChartTypeRuntimeStats]:
+    buckets = {
+        spec.image_type: {
+            "image_type": spec.image_type,
+            "total": 0,
+            "accepted": 0,
+            "review_required": 0,
+            "skipped": 0,
+            "failed": 0,
+            "row_count": 0,
+        }
+        for spec in CHART_TYPE_CATALOG
+    }
+    for asset in figure_assets:
+        metadata = asset_metadata(asset)
+        preview = metadata.get("coordinate_preview")
+        if not isinstance(preview, dict):
+            continue
+        image_type = str(preview.get("image_type") or metadata.get("image_type") or metadata.get("chart_type") or "")
+        if image_type not in buckets:
+            continue
+        bucket = buckets[image_type]
+        status_value = str(preview.get("status") or "")
+        bucket["total"] += 1
+        bucket["row_count"] += int(preview.get("row_count") or 0)
+        if status_value == "accepted":
+            bucket["accepted"] += 1
+        elif status_value == "review_required":
+            bucket["review_required"] += 1
+        elif status_value == "skipped":
+            bucket["skipped"] += 1
+        elif status_value == "failed":
+            bucket["failed"] += 1
+    return [ChartTypeRuntimeStats(**bucket) for bucket in buckets.values()]
+
+
 @router.get("/{job_id}/structured", response_model=StructuredExtractionResponse)
 async def get_structured_extraction(job_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> StructuredExtractionResponse:
     job = _job_or_404(db, job_id, current_user)
@@ -633,6 +671,7 @@ async def get_structured_extraction(job_id: int, current_user: User = Depends(ge
             page=fa.page_number,
             source=fa_source or fa.asset_type,
             asset_type=fa.asset_type,
+            coordinate_preview=coordinate_preview_read(fa, fa_meta),
         ))
     paper_figures.sort(key=lambda x: (x.page or 999, x.id))
 
@@ -648,6 +687,7 @@ async def get_structured_extraction(job_id: int, current_user: User = Depends(ge
         text_results=text_results,
         not_found=not_found,
         paper_figures=paper_figures,
+        chart_type_stats=_chart_type_stats(list(all_figure_assets.values())),
         created_at=job.created_at,
         updated_at=job.updated_at,
     )
@@ -656,12 +696,12 @@ async def get_structured_extraction(job_id: int, current_user: User = Depends(ge
 @router.post("/{job_id}/export")
 async def export_extraction(
     job_id: int,
-    format: str = Query("csv", pattern="^(csv|json|markdown)$"),
+    format: str = Query("csv", pattern="^(csv|json|markdown|xlsx)$"),
     result_ids: list[int] | None = Query(None, description="Optional list of result IDs to export. If not provided, exports all results."),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> Response:
-    """Export a single extraction job to CSV, JSON, or Markdown format.
+    """Export a single extraction job to CSV, JSON, Markdown, or Excel format.
 
     Optionally filter by result IDs to export only selected results.
     """
@@ -676,6 +716,10 @@ async def export_extraction(
         content = ExportService.export_extraction_to_json(db, job, result_ids=result_ids)
         media_type = "application/json"
         filename = f"extraction_{job_id}_{paper.title[:30] if paper else 'unknown'}.json"
+    elif format == "xlsx":
+        content = ExportService.export_extraction_to_excel(db, job, result_ids=result_ids)
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        filename = f"extraction_{job_id}_{paper.title[:30] if paper else 'unknown'}.xlsx"
     else:  # markdown
         content = ExportService.export_extraction_to_markdown(db, job, result_ids=result_ids)
         media_type = "text/markdown"

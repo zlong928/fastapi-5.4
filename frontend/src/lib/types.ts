@@ -633,7 +633,20 @@ export interface PaperFigure {
   notes?: string | null;
   analysis_status?: string | null;
   analysis_error?: string | null;
+  coordinate_preview?: CoordinatePreview | null;
   created_at: string;
+}
+
+export interface CoordinatePreview {
+  status: string;
+  row_count: number;
+  data_quality: string;
+  sample_limit: number;
+  csv_url?: string | null;
+  overlay_path?: string | null;
+  summary_csv_path?: string | null;
+  quality_audit_csv_path?: string | null;
+  run_manifest_path?: string | null;
 }
 
 export interface PaperTable {
@@ -778,6 +791,42 @@ export interface PaperStatistics {
   recent_7_days_extractions: number;
 }
 
+export interface ChartTypeCatalogItem {
+  image_type: string;
+  label: string;
+  suitable_for_csv: boolean;
+  processing_chain: string;
+  typical_content: string[];
+  coordinate_output: string;
+  binding_requirements: string[];
+  requires_review: boolean;
+}
+
+export interface ChartRecipePanel {
+  panel_id: string;
+  y_top_px: number;
+  y_bottom_px: number;
+  y_axis_label: string;
+  y_axis_unit: string;
+}
+
+export interface ChartRecipeCatalogItem {
+  recipe_id: string;
+  image_type: string;
+  filename_prefixes: string[];
+  caption_hints: string[];
+  x_axis_label: string;
+  x_axis_unit: string;
+  x_axis_type: string;
+  y_axis_type: string;
+  axis_calibration_method: string;
+  known_x_axis_calibrated: boolean;
+  known_y_axis_calibrated: boolean;
+  y_right_axis_type: string;
+  source_path: string;
+  panels: ChartRecipePanel[];
+}
+
 export interface BatchExtractionResult {
   paper_id: number;
   paper_title: string;
@@ -845,8 +894,19 @@ export interface StructuredExtractionResponse {
   text_results: StructuredTextResult[];
   not_found: string[];
   paper_figures: PaperFigureAssetItem[];
+  chart_type_stats: ChartTypeRuntimeStats[];
   created_at: string;
   updated_at: string;
+}
+
+export interface ChartTypeRuntimeStats {
+  image_type: string;
+  total: number;
+  accepted: number;
+  review_required: number;
+  skipped: number;
+  failed: number;
+  row_count: number;
 }
 
 export interface PaperFigureAssetItem {
@@ -857,4 +917,5 @@ export interface PaperFigureAssetItem {
   page?: number | null;
   source?: string | null;
   asset_type: string;
+  coordinate_preview?: CoordinatePreview | null;
 }

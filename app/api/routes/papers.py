@@ -14,6 +14,8 @@ from app.core.time import app_now
 from app.db.session import get_db
 from app.models import Document, DocumentAsset, DocumentClaim, DocumentEvent, ExtractionJob, ExtractionResult, PaperTable, User
 from app.schemas.paper import (
+    ChartRecipeCatalogItem,
+    ChartTypeCatalogItem,
     PaperAskEvidence,
     PaperAskRequest,
     PaperAskResponse,
@@ -24,9 +26,11 @@ from app.schemas.paper import (
     PaperTableRead,
     PaperUploadResponse,
 )
+from app.services.chart_extraction import CHART_TYPE_CATALOG, chart_recipe_catalog
 from app.services.export_service import ExportService
 from app.services.file_storage import FileStorageService
 from app.services.paper_demo_service import PaperDemoService
+from app.services.paper.coordinate_preview import coordinate_preview_read
 from app.services.paper.evidence import asset_bbox, asset_image_url, asset_metadata, normalize_evidence_type
 
 router = APIRouter(prefix="/papers", tags=["papers"])
@@ -77,6 +81,7 @@ def _figure_read(asset: DocumentAsset) -> PaperFigureRead:
         notes=str(metadata.get("notes") or metadata.get("context") or "") or None,
         analysis_status=str(metadata.get("agent_analysis_status") or "") or None,
         analysis_error=str(metadata.get("agent_analysis_error") or "") or None,
+        coordinate_preview=coordinate_preview_read(asset, metadata),
         created_at=asset.created_at,
     )
 
@@ -435,6 +440,28 @@ async def get_paper_statistics(current_user: User = Depends(get_current_user), d
     )
 
 
+@router.get("/chart-types", response_model=list[ChartTypeCatalogItem])
+async def get_chart_type_catalog(current_user: User = Depends(get_current_user)) -> list[ChartTypeCatalogItem]:
+    return [
+        ChartTypeCatalogItem(
+            image_type=spec.image_type,
+            label=spec.label,
+            suitable_for_csv=spec.suitable_for_csv,
+            processing_chain=spec.processing_chain,
+            typical_content=list(spec.typical_content),
+            coordinate_output=spec.coordinate_output,
+            binding_requirements=list(spec.binding_requirements),
+            requires_review=spec.requires_review,
+        )
+        for spec in CHART_TYPE_CATALOG
+    ]
+
+
+@router.get("/chart-recipes", response_model=list[ChartRecipeCatalogItem])
+async def get_chart_recipe_catalog(current_user: User = Depends(get_current_user)) -> list[ChartRecipeCatalogItem]:
+    return [ChartRecipeCatalogItem(**item) for item in chart_recipe_catalog()]
+
+
 @router.get("/{paper_id}", response_model=PaperDetailResponse)
 async def get_paper(paper_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> PaperDetailResponse:
     return _detail(db, _paper_or_404(db, paper_id, current_user))
@@ -466,6 +493,31 @@ async def get_paper_asset(asset_id: int, current_user: User = Depends(get_curren
     if not path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset file not found.")
     return FileResponse(path=path, media_type=asset.mime_type or "image/png")
+
+
+@router.get("/assets/{asset_id}/coordinate-preview.csv")
+async def get_paper_coordinate_preview(asset_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> FileResponse:
+    asset = db.get(DocumentAsset, asset_id)
+    if asset is None or asset.asset_type not in PAPER_ASSET_TYPES:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Coordinate preview not found.")
+    paper = _paper_or_404(db, asset.document_id, current_user)
+    if paper.id != asset.document_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Coordinate preview not found.")
+    metadata = asset_metadata(asset)
+    preview = metadata.get("coordinate_preview")
+    if not isinstance(preview, dict):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Coordinate preview not found.")
+    csv_path = str(preview.get("coordinate_csv_path") or metadata.get("chart_data_csv_path") or "")
+    if not csv_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Coordinate preview not found.")
+    path = FileStorageService().get_file_path(csv_path)
+    if not path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Coordinate preview file not found.")
+    return FileResponse(
+        path=path,
+        media_type="text/csv; charset=utf-8",
+        filename=f"asset-{asset.id}-coordinate-preview.csv",
+    )
 
 
 @router.get("/export")

@@ -9,6 +9,8 @@ import {
   ChatSessionDetail,
   ChatSessionListItem,
   ChatStreamSession,
+  ChartRecipeCatalogItem,
+  ChartTypeCatalogItem,
   BookmarkCreate,
   BookmarkCreateResponse,
   ChatStreamSource,
@@ -218,6 +220,8 @@ export function getPaper(paperId: number): Promise<PaperDetail> { return request
 export function parsePaper(paperId: number): Promise<PaperDetail> { return request<PaperDetail>(`/papers/${paperId}/parse`, { method: "POST" }); }
 export function deletePaper(paperId: number): Promise<MessageResponse> { return request<MessageResponse>(`/papers/${paperId}`, { method: "DELETE" }); }
 export function getPaperStatistics(): Promise<PaperStatistics> { return request<PaperStatistics>("/papers/statistics"); }
+export function getPaperChartTypes(): Promise<ChartTypeCatalogItem[]> { return request<ChartTypeCatalogItem[]>("/papers/chart-types"); }
+export function getPaperChartRecipes(): Promise<ChartRecipeCatalogItem[]> { return request<ChartRecipeCatalogItem[]>("/papers/chart-recipes"); }
 export function runExtraction(paperId: number, query: string): Promise<ExtractionJob> { return request<ExtractionJob>("/extractions/run", { method: "POST", body: JSON.stringify({ paperId, query }) }); }
 export function batchRunExtraction(paperIds: number[], query: string): Promise<BatchExtractionResult[]> { return request<BatchExtractionResult[]>("/extractions/batch", { method: "POST", body: JSON.stringify({ paper_ids: paperIds, query }) }); }
 export function retryExtraction(jobId: number): Promise<ExtractionJob> { return request<ExtractionJob>(`/extractions/${jobId}/retry`, { method: "POST" }); }

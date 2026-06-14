@@ -17,6 +17,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.deps import get_current_user
 from app.core.config import EMBEDDING_DIM
+from app.core.time import app_now
 from app.db.session import Base, get_db
 from app.main import app
 from app.models import Document, DocumentAsset, DocumentChunk, DocumentEvent, FileCleanupJob, JobRun, User
@@ -136,7 +137,7 @@ def create_document(
     return document
 
 
-def test_delete_own_document_hard_deletes_database_record_and_creates_cleanup_jobs(client, db, storage, user, monkeypatch):
+def test_delete_own_document_soft_deletes_database_record_without_cleanup_jobs(client, db, storage, user, monkeypatch):
     monkeypatch.setattr("app.services.document_service.FileStorageService", lambda: storage)
     document = create_document(db, storage, user)
     asset_relative_path, _ = storage.store_file(
@@ -164,18 +165,18 @@ def test_delete_own_document_hard_deletes_database_record_and_creates_cleanup_jo
     assert response.status_code == 200
     assert response.json()["status"] == "deleted"
     db.expire_all()
-    assert db.get(Document, document_id) is None
-    assert db.query(DocumentAsset).filter(DocumentAsset.document_id == document_id).count() == 0
-    cleanup_jobs = db.query(FileCleanupJob).order_by(FileCleanupJob.file_path).all()
-    assert [(job.user_id, job.file_path, job.status) for job in cleanup_jobs] == [
-        (user.id, asset_relative_path, "pending"),
-        (user.id, original_relative_path, "pending"),
-    ]
+    deleted_document = db.get(Document, document_id)
+    assert deleted_document is not None
+    assert deleted_document.is_deleted is True
+    assert deleted_document.deleted_by == user.id
+    assert deleted_document.deleted_at is not None
+    assert db.query(DocumentAsset).filter(DocumentAsset.document_id == document_id).count() == 1
+    assert db.query(FileCleanupJob).count() == 0
     assert original_path.exists()
     assert asset_path.exists()
 
 
-def test_delete_missing_physical_file_still_deletes_database_record(client, db, storage, user, monkeypatch):
+def test_delete_missing_physical_file_still_soft_deletes_database_record(client, db, storage, user, monkeypatch):
     monkeypatch.setattr("app.services.document_service.FileStorageService", lambda: storage)
     document = create_document(db, storage, user)
     original_relative_path = document.original_file_path
@@ -187,10 +188,11 @@ def test_delete_missing_physical_file_still_deletes_database_record(client, db, 
     assert response.status_code == 200
     assert response.json()["status"] == "deleted"
     db.expire_all()
-    assert db.get(Document, document_id) is None
-    cleanup_job = db.query(FileCleanupJob).one()
-    assert cleanup_job.file_path == original_relative_path
-    assert cleanup_job.status == "pending"
+    deleted_document = db.get(Document, document_id)
+    assert deleted_document is not None
+    assert deleted_document.is_deleted is True
+    assert deleted_document.deleted_by == user.id
+    assert db.query(FileCleanupJob).count() == 0
 
 
 def test_hard_delete_bookmark_does_not_create_cleanup_job(db, user):
@@ -261,7 +263,7 @@ def test_cleanup_missing_physical_file_marks_job_done(db, storage, user):
     assert cleanup_job.last_error is None
 
 
-def test_cleanup_delete_double_dot_filename_removes_physical_file(client, db, storage, user, monkeypatch):
+def test_soft_delete_double_dot_filename_preserves_physical_file(client, db, storage, user, monkeypatch):
     monkeypatch.setattr("app.services.document_service.FileStorageService", lambda: storage)
     document = create_document(db, storage, user, filename="foo..bar.txt")
     original_path = storage.get_file_path(document.original_file_path)
@@ -271,11 +273,11 @@ def test_cleanup_delete_double_dot_filename_removes_physical_file(client, db, st
 
     assert response.status_code == 200
     db.expire_all()
-    assert db.get(Document, document_id) is None
-    processed = FileCleanupService(db, storage).run_once()
-    assert processed == 1
-    assert not original_path.exists()
-    assert db.query(FileCleanupJob).one().status == "done"
+    deleted_document = db.get(Document, document_id)
+    assert deleted_document is not None
+    assert deleted_document.is_deleted is True
+    assert original_path.exists()
+    assert db.query(FileCleanupJob).count() == 0
 
 
 def test_cleanup_delete_failure_records_error_and_retries(db, storage, user, monkeypatch, caplog):
@@ -948,10 +950,11 @@ def test_upload_syncs_to_obsidian_when_enabled(client, db, monkeypatch):
     assert enqueued == [(payload["document_id"], payload["parse_job_id"])]
     assert "test-api-key" not in response.text
 
+    expected_month_path = app_now().strftime("%Y/%m")
     written_paths = [unquote(request["url"].split("/vault/", 1)[1]) for request in requests]
     assert written_paths == [
-        f"Uploads/2026/05/{payload['document_id']}-Unsafe - Title- 01/original/source bad.txt",
-        f"Uploads/2026/05/{payload['document_id']}-Unsafe - Title- 01/index.md",
+        f"Uploads/{expected_month_path}/{payload['document_id']}-Unsafe - Title- 01/original/source bad.txt",
+        f"Uploads/{expected_month_path}/{payload['document_id']}-Unsafe - Title- 01/index.md",
     ]
     assert all(request["headers"]["Authorization"] == "Bearer test-api-key" for request in requests)
     assert all(request["url"].startswith("http://127.0.0.1:27123/vault/") for request in requests)
@@ -981,9 +984,9 @@ def test_upload_syncs_to_obsidian_when_enabled(client, db, monkeypatch):
     assert "Obsidian" in event.message
     metadata = json.loads(event.event_metadata)
     assert metadata == {
-        "directory_path": f"Uploads/2026/05/{payload['document_id']}-Unsafe - Title- 01",
-        "original_file_path": f"Uploads/2026/05/{payload['document_id']}-Unsafe - Title- 01/original/source bad.txt",
-        "index_path": f"Uploads/2026/05/{payload['document_id']}-Unsafe - Title- 01/index.md",
+        "directory_path": f"Uploads/{expected_month_path}/{payload['document_id']}-Unsafe - Title- 01",
+        "original_file_path": f"Uploads/{expected_month_path}/{payload['document_id']}-Unsafe - Title- 01/original/source bad.txt",
+        "index_path": f"Uploads/{expected_month_path}/{payload['document_id']}-Unsafe - Title- 01/index.md",
     }
 
 

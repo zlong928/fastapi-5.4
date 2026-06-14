@@ -6,9 +6,9 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { API_BASE_URL, getPaper, getPaperAssetBlob, getStructuredExtraction, getToken, retryExtraction } from "@/lib/api";
+import { API_BASE_URL, getPaper, getPaperAssetBlob, getPaperChartTypes, getStructuredExtraction, getToken, retryExtraction } from "@/lib/api";
 import { formatChinaDateTime } from "@/lib/time";
-import { PaperFigureAssetItem, StructuredExtractionResponse, StructuredFigureResult, StructuredTableResult, StructuredTextResult } from "@/lib/types";
+import { ChartTypeCatalogItem, ChartTypeRuntimeStats, CoordinatePreview, PaperFigureAssetItem, StructuredExtractionResponse, StructuredFigureResult, StructuredTableResult, StructuredTextResult } from "@/lib/types";
 import { ExtractionStatusBadge, fieldLabel, isExtractionBusy, shouldPollPaper } from "@/pages/paperShared";
 import { cn } from "@/lib/utils";
 
@@ -71,6 +71,48 @@ function EvidenceMeta({ page, evidenceType, source, identifier }: { page?: numbe
       ))}
     </div>
   );
+}
+
+function coordinatePreviewStatusLabel(status?: string | null) {
+  const labels: Record<string, string> = {
+    accepted: "已标定",
+    review_required: "需复核",
+    skipped: "已跳过",
+    failed: "失败",
+  };
+  return labels[status || ""] ?? status ?? "";
+}
+
+function coordinatePreviewTone(status?: string | null) {
+  if (status === "accepted") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "review_required") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-slate-200 bg-slate-50 text-slate-600";
+}
+
+function downloadCoordinatePreview(preview: CoordinatePreview, figureLabel: string) {
+  if (!preview.csv_url) return;
+  const token = getToken();
+  fetch(`${API_BASE_URL}${preview.csv_url}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  })
+    .then((response) => {
+      if (!response.ok) throw new Error("CSV 下载失败");
+      return response.blob();
+    })
+    .then((blob) => {
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const safeLabel = figureLabel.replace(/[^\w.-]+/g, "_") || "figure";
+      link.href = url;
+      link.download = `${safeLabel}_coordinate_preview.csv`;
+      document.body.appendChild(link);
+      link.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(link);
+    })
+    .catch((error) => {
+      alert(error.message || "CSV 下载失败");
+    });
 }
 
 /* ─── Image Preview ─── */
@@ -279,9 +321,106 @@ function PaperFiguresGallery({ figures }: { figures: PaperFigureAssetItem[] }) {
               <p className="truncate text-xs font-medium text-slate-900">{fig.figure_label}</p>
               <p className="mt-0.5 text-[10px] text-slate-400">page {fig.page ?? "-"} · {fig.source || fig.asset_type}</p>
               {fig.caption ? <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-500">{fig.caption}</p> : null}
+              {fig.coordinate_preview ? (
+                <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <Badge variant="outline" className={cn("border text-[10px]", coordinatePreviewTone(fig.coordinate_preview.status))}>
+                      {coordinatePreviewStatusLabel(fig.coordinate_preview.status)}
+                    </Badge>
+                    {fig.coordinate_preview.csv_url ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2 text-[11px]"
+                        onClick={() => downloadCoordinatePreview(fig.coordinate_preview!, fig.figure_label)}
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        CSV
+                      </Button>
+                    ) : null}
+                  </div>
+                  <p className="mt-1 text-[10px] leading-4 text-slate-500">
+                    {fig.coordinate_preview.row_count} 点 · {fig.coordinate_preview.data_quality || "未标注质量"}
+                  </p>
+                </div>
+              ) : null}
             </div>
           </article>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function ChartTypeMatrix({ items, stats }: { items: ChartTypeCatalogItem[]; stats: ChartTypeRuntimeStats[] }) {
+  if (!items.length) return null;
+  const statsByType = new Map(stats.map((item) => [item.image_type, item]));
+  return (
+    <section>
+      <div className="mb-3 flex items-center gap-2">
+        <Braces className="h-4 w-4 text-slate-500" />
+        <h2 className="text-sm font-semibold text-slate-900">图片处理矩阵</h2>
+        <Badge variant="outline" className="text-[10px]">{items.length}</Badge>
+      </div>
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-auto">
+          <table className="w-full min-w-[760px] text-xs">
+            <thead className="bg-slate-50 text-left text-[11px] text-slate-500">
+              <tr>
+                <th className="px-3 py-2 font-medium">类型</th>
+                <th className="px-3 py-2 font-medium">处理链路</th>
+                <th className="px-3 py-2 font-medium">CSV</th>
+                <th className="px-3 py-2 font-medium">复核</th>
+                <th className="px-3 py-2 font-medium">当前结果</th>
+                <th className="px-3 py-2 font-medium">典型内容</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {items.map((item) => (
+                <tr key={item.image_type}>
+                  {(() => {
+                    const stat = statsByType.get(item.image_type);
+                    return (
+                      <>
+                  <td className="px-3 py-2">
+                    <p className="font-medium text-slate-900">{item.label}</p>
+                    <p className="mt-0.5 font-mono text-[10px] text-slate-400">{item.image_type}</p>
+                  </td>
+                  <td className="px-3 py-2 font-mono text-[11px] text-slate-600">{item.processing_chain}</td>
+                  <td className="px-3 py-2">
+                    <Badge variant="outline" className={cn("border text-[10px]", item.suitable_for_csv ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-50 text-slate-500")}>
+                      {item.suitable_for_csv ? "可导出" : "不适合"}
+                    </Badge>
+                  </td>
+                  <td className="px-3 py-2">
+                    <Badge variant="outline" className={cn("border text-[10px]", item.requires_review ? "border-amber-200 bg-amber-50 text-amber-700" : "border-slate-200 bg-white text-slate-500")}>
+                      {item.requires_review ? "需要" : "低"}
+                    </Badge>
+                  </td>
+                  <td className="px-3 py-2">
+                    {stat && stat.total > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        <Badge variant="outline" className="border-slate-200 bg-slate-50 text-[10px] text-slate-600">{stat.total} 图</Badge>
+                        {stat.accepted ? <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-[10px] text-emerald-700">{stat.accepted} 已标定</Badge> : null}
+                        {stat.review_required ? <Badge variant="outline" className="border-amber-200 bg-amber-50 text-[10px] text-amber-700">{stat.review_required} 复核</Badge> : null}
+                        {stat.skipped ? <Badge variant="outline" className="border-slate-200 bg-white text-[10px] text-slate-500">{stat.skipped} 跳过</Badge> : null}
+                        {stat.failed ? <Badge variant="outline" className="border-red-200 bg-red-50 text-[10px] text-red-600">{stat.failed} 失败</Badge> : null}
+                        {stat.row_count ? <Badge variant="outline" className="border-blue-200 bg-blue-50 text-[10px] text-blue-700">{stat.row_count} 点</Badge> : null}
+                      </div>
+                    ) : (
+                      <span className="text-[11px] text-slate-400">-</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-slate-500">{item.typical_content.slice(0, 3).join(" · ")}</td>
+                      </>
+                    );
+                  })()}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
   );
@@ -291,6 +430,7 @@ function ResultBody({ data, jobId }: { data: StructuredExtractionResponse; jobId
   const [showRaw, setShowRaw] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedResultIds, setSelectedResultIds] = useState<number[]>([]);
+  const chartTypesQuery = useQuery({ queryKey: ["paper-chart-types"], queryFn: getPaperChartTypes });
 
   const hasFigures = data.figure_results.length > 0;
   const hasTables = data.table_results.length > 0;
@@ -317,7 +457,7 @@ function ResultBody({ data, jobId }: { data: StructuredExtractionResponse; jobId
     setSelectedResultIds([]);
   }
 
-  function exportResults(format: "csv" | "json" | "markdown") {
+  function exportResults(format: "csv" | "json" | "markdown" | "xlsx") {
     const token = getToken();
 
     // Build URL with result_ids if in selection mode and items are selected
@@ -389,6 +529,7 @@ function ResultBody({ data, jobId }: { data: StructuredExtractionResponse; jobId
           <DropdownMenuContent align="end">
             <DropdownMenuItem onClick={() => exportResults("csv")}>导出为 CSV</DropdownMenuItem>
             <DropdownMenuItem onClick={() => exportResults("json")}>导出为 JSON</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => exportResults("xlsx")}>导出为 Excel (图表数据)</DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => exportResults("markdown")}>导出为 Markdown</DropdownMenuItem>
           </DropdownMenuContent>
@@ -396,6 +537,8 @@ function ResultBody({ data, jobId }: { data: StructuredExtractionResponse; jobId
       </div>
 
       <SummaryBar data={data} />
+
+      <ChartTypeMatrix items={chartTypesQuery.data ?? []} stats={data.chart_type_stats ?? []} />
 
       {hasPaperFigures ? <PaperFiguresGallery figures={data.paper_figures} /> : null}
 

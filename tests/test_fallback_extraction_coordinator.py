@@ -460,6 +460,51 @@ def test_visual_agent_uses_single_text_call_when_json_is_unparseable(tmp_path, m
     assert "未触发二次视觉调用" in result["extractions"][0]["notes"]
 
 
+def test_visual_agent_uses_shared_generic_visual_prompts(tmp_path, monkeypatch):
+    from PIL import Image
+
+    from app.services.agent.agents import VisualBatchAgent
+    from app.services.agent.llm_client import LLMClient
+    from app.services.agent.types import ExtractionTask, FigureExtractionPlan
+    from app.services.agent.visual_contracts import generic_visual_system_prompt, generic_visual_user_prompt
+
+    image_path = tmp_path / "figure.png"
+    Image.new("RGB", (300, 200), color=(255, 255, 255)).save(image_path)
+    client = LLMClient({
+        "api_key": "test-key",
+        "force_jpeg_images": True,
+        "min_request_interval_seconds": 0,
+    })
+
+    captured: dict[str, object] = {}
+
+    def text_once(messages, **kwargs):
+        captured["messages"] = messages
+        return "图中显示柱状图，A组约为10，B组约为20。"
+
+    monkeypatch.setattr(client, "chat_text", text_once)
+
+    plan = FigureExtractionPlan(
+        figure_id="Figure 1 [asset:1]",
+        image_path=str(image_path),
+        caption="Bar chart",
+        tasks=[ExtractionTask(metric_name="key_metrics", text_context="extract bars")],
+        review_notes="previous attempt failed",
+    )
+
+    VisualBatchAgent(client)._analyze_figure(plan)
+
+    messages = captured["messages"]
+    tasks_desc = "1. key_metrics: extract bars"
+    assert messages[0]["content"] == generic_visual_system_prompt()
+    assert messages[1]["content"][0]["text"] == generic_visual_user_prompt(
+        "Figure 1 [asset:1]",
+        "Bar chart",
+        tasks_desc,
+        "previous attempt failed",
+    )
+
+
 def test_visual_agent_uses_text_first_for_page_snapshots(tmp_path, monkeypatch):
     from PIL import Image
 
@@ -507,7 +552,7 @@ def test_visual_batch_agent_analyzes_multiple_figures_in_parallel(monkeypatch):
     lock = threading.Lock()
 
     class FakeVisualBatchAgent(VisualBatchAgent):
-        def _analyze_figure(self, plan: FigureExtractionPlan) -> dict:
+        def _analyze_with_retry(self, plan: FigureExtractionPlan, supervisor_state) -> dict:
             nonlocal active, max_active
             with lock:
                 active += 1
@@ -589,6 +634,51 @@ def test_global_map_agent_routes_deterministically_without_llm():
     assert any(item["field"] == "水凝胶微腔直径" for item in extraction_map.text_only_metrics)
     assert "Fig. 1 [asset:1]" in extraction_map.figures
     assert extraction_map.figures["Fig. 1 [asset:1]"].tasks[0].metric_name == "figure_data"
+
+
+def test_visual_batch_agent_routes_specialized_image_types_without_generic_fallback():
+    from app.services.agent.agents import VisualBatchAgent
+    from app.services.agent.types import ExtractionTask, FigureExtractionPlan, ImageType
+
+    class FakeCoordinateExtractor:
+        def extract_coordinates(self, plan):
+            return {"figure": plan.figure_id, "panels": [], "confidence": 0.9}
+
+    class FakeBarAgent:
+        def extract_bars(self, plan):
+            return {"figure": plan.figure_id, "series": [], "confidence": 0.9}
+
+    class FakeHeatmapAgent:
+        def extract_heatmap(self, plan):
+            return {"figure": plan.figure_id, "matrix": [], "confidence": 0.9}
+
+    class FakeNonDataAgent:
+        def describe_visual(self, plan):
+            return {"figure": plan.figure_id, "description": "visible scale bar", "confidence": 0.8}
+
+    agent = VisualBatchAgent(client=object())
+    agent.coordinate_extractor = FakeCoordinateExtractor()
+    agent.bar_chart_agent = FakeBarAgent()
+    agent.heatmap_agent = FakeHeatmapAgent()
+    agent.non_data_agent = FakeNonDataAgent()
+
+    def route(image_type: ImageType) -> dict:
+        plan = FigureExtractionPlan(
+            figure_id=f"{image_type.value} [asset:1]",
+            image_path="/tmp/fig.png",
+            caption="",
+            image_type=image_type,
+            tasks=[ExtractionTask(metric_name="figure_data", text_context="extract figure data")],
+        )
+        return agent._route_to_agent(plan)
+
+    assert route(ImageType.BIPHASIC_TIME_SERIES)["chart_data"]["chart_type"] == "biphasic_time_series"
+    assert route(ImageType.MULTI_LINE_PLOT)["chart_data"]["chart_type"] == "multi_line_plot"
+    assert route(ImageType.SPECTRUM_CURVE)["chart_data"]["chart_type"] == "spectrum_curve"
+    assert route(ImageType.GROUPED_BAR)["chart_data"]["chart_type"] == "grouped_bar"
+    assert route(ImageType.HEATMAP_MATRIX)["chart_data"]["chart_type"] == "heatmap_matrix"
+    assert route(ImageType.FIELD_2D_MAP)["chart_data"]["chart_type"] == "2d_field_map"
+    assert route(ImageType.MICROSCOPY_QUANT)["chart_data"]["chart_type"] == "microscopy_quant"
 
 
 def test_result_mapper_filters_negative_visual_outputs_and_derives_specific_text_fields():
@@ -724,6 +814,74 @@ def test_structured_extraction_hides_existing_negative_visual_rows(client, db, u
     assert figure_results[0]["page"] == 4
     assert figure_results[0]["evidence_type"] == "chart"
     assert figure_results[0]["source"] == "rendered_figure_region"
+
+
+def test_structured_extraction_paper_figures_include_coordinate_preview(client, db, user):
+    now = datetime.now(timezone.utc)
+    paper = Document(
+        user_id=user.id,
+        title="coordinate preview paper",
+        original_filename="coordinate.pdf",
+        stored_filename="coordinate.pdf",
+        original_file_path="1/2026/06/coordinate.pdf",
+        file_size=100,
+        mime_type="application/pdf",
+        source_type="pdf",
+        processing_mode="auto",
+        processing_strategy="mineru",
+        status="done",
+        cleaned_text="body",
+        created_at=now,
+        updated_at=now,
+        uploaded_at=now,
+        parsed_at=now,
+    )
+    db.add(paper)
+    db.commit()
+    db.refresh(paper)
+    figure = DocumentAsset(
+        document_id=paper.id,
+        asset_type="figure",
+        page_number=3,
+        file_path="fig.png",
+        mime_type="image/png",
+        label="Fig. 3",
+        metadata_json=json.dumps(
+            {
+                "source": "mineru_chart",
+                "figure_label": "Fig. 3",
+                "coordinate_preview": {
+                    "image_type": "biphasic_time_series",
+                    "status": "review_required",
+                    "row_count": 15,
+                    "data_quality": "ocr_axis_unbound",
+                    "coordinate_csv_path": "1/mineru-coordinate-csv/3/03_coordinates.csv",
+                    "sample_limit": 15,
+                },
+            }
+        ),
+    )
+    db.add(figure)
+    db.commit()
+    db.refresh(figure)
+    job = ExtractionJob(paper_id=paper.id, query="extract", status="done")
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    response = client.get(f"/extractions/{job.id}/structured")
+
+    assert response.status_code == 200
+    paper_figures = response.json()["paper_figures"]
+    assert paper_figures[0]["figure_label"] == "Fig. 3"
+    assert paper_figures[0]["coordinate_preview"]["status"] == "review_required"
+    assert paper_figures[0]["coordinate_preview"]["row_count"] == 15
+    assert paper_figures[0]["coordinate_preview"]["csv_url"] == f"/papers/assets/{figure.id}/coordinate-preview.csv"
+    stats = {item["image_type"]: item for item in response.json()["chart_type_stats"]}
+    assert stats["biphasic_time_series"]["total"] == 1
+    assert stats["biphasic_time_series"]["review_required"] == 1
+    assert stats["biphasic_time_series"]["row_count"] == 15
+    assert stats["line_plot"]["total"] == 0
 
 
 def test_structured_extraction_hides_low_confidence_and_localizes_english_text(client, db, user):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.time import app_now
@@ -125,6 +126,10 @@ class PaperEnhancementService:
         self.db.query(DocumentAsset).filter(
             DocumentAsset.document_id == paper.id,
             DocumentAsset.asset_type.in_(["table", "figure", "page_snapshot"]),
+            or_(
+                DocumentAsset.metadata_json.is_(None),
+                ~DocumentAsset.metadata_json.like('%"source": "mineru_%'),
+            ),
         ).delete(synchronize_session=False)
         self.db.query(PaperTable).filter(PaperTable.paper_id == paper.id).delete(synchronize_session=False)
 

@@ -122,7 +122,9 @@ def openai_chat_tokens(messages: list[dict[str, str]]) -> Iterable[str]:
         try:
             with httpx.stream("POST", url, headers=headers, json=body, timeout=CHAT_TIMEOUT_SECONDS) as response:
                 # Try to extract error details before raising
-                if not response.is_success:
+                status_code = int(getattr(response, "status_code", 200) or 200)
+                is_success = bool(getattr(response, "is_success", 200 <= status_code < 300))
+                if not is_success:
                     try:
                         error_body = response.read().decode("utf-8")
                         error_json = json.loads(error_body)
