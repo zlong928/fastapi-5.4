@@ -163,6 +163,8 @@ def _parse_axis_label(text: str) -> tuple[str, str]:
         return "Viscosity", _unit_from_text(normalized, "mPa*s")
     if "strain" in lower:
         return "Strain", _unit_from_text(normalized, "%")
+    if "storage" in lower and "modulus" in lower:
+        return "Storage Modulus G'", _unit_from_text(normalized, "kPa")
     if "g'" in lower or "g''" in lower:
         return "G' and G''", _unit_from_text(normalized, "Pa")
     if "od" in lower and "600" in lower:
@@ -193,6 +195,8 @@ def _looks_like_unit(word: str) -> bool:
 
 def _unit_from_text(text: str, fallback: str) -> str:
     lower = text.lower()
+    if "kpa" in lower:
+        return "kPa"
     if "mpa" in lower:
         return "mPa*s"
     if fallback == "mPa*s" and "pa" in lower:

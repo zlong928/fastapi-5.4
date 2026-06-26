@@ -77,7 +77,7 @@ class FileCleanupService:
         try:
             self.file_storage.delete_file(relative_path)
         except FileNotFoundError:
-            pass
+            logger.debug("File already removed: %s", relative_path)
         self._remove_empty_parent_dirs(relative_path)
 
     def _path_is_still_referenced(self, relative_path: str) -> bool:

@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { ComponentType, ReactNode } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
-import { useAuth } from "@/auth/AuthContext";
+import { useAuth } from "@/auth/useAuth";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 

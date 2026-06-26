@@ -5,7 +5,7 @@ import hashlib
 import time
 from uuid import uuid4
 
-from app.core.config import DOCUMENT_PARSE_TIMEOUT_SECONDS, ENABLE_DOCLING_PARSER, ENABLE_MINERU_PARSER, RESULT_DIR
+from app.core.config import DOCUMENT_PARSE_TIMEOUT_SECONDS, ENABLE_MINERU_PARSER, RESULT_DIR
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -72,14 +72,18 @@ class DocumentParsePipeline:
         job_run_id: int | None = None,
         job_type: str = "initial_parse",
         parse_job_id: int | None = None,
+        require_mineru: bool = False,
+        preserve_outputs_on_failure: bool = False,
     ) -> Document:
         if job_run_id is None and parse_job_id is not None:
             job_run_id = parse_job_id
         job_id: int | None = job_run_id
+        previous_status: str | None = None
         with self.session_factory() as db:
             document = db.get(Document, document_id)
             if document is None:
                 raise ValueError(f"Document not found: {document_id}")
+            previous_status = document.status
 
             job_service = JobRunService(db)
             if job_run_id is None:
@@ -97,8 +101,9 @@ class DocumentParsePipeline:
                         "processing_mode": document.processing_mode,
                         "processing_strategy": document.processing_strategy,
                         "retry": job_type == "retry_parse",
+                        "require_mineru": require_mineru,
                     },
-                    metadata={"job_type": job_type},
+                    metadata={"job_type": job_type, "require_mineru": require_mineru},
                 )
                 job_id = job_run.id
             else:
@@ -122,7 +127,11 @@ class DocumentParsePipeline:
             strategy = self.select_parser_strategy(document.processing_mode, document.source_type)
             document.processing_strategy = strategy.name
             job_service.mark_running(job_run, worker_name="document_parse_pipeline")
-            job_service.update_progress(job_run, 10, metadata=self._processing_metadata(document, strategy))
+            job_service.update_progress(
+                job_run,
+                10,
+                metadata={**self._processing_metadata(document, strategy), "require_mineru": require_mineru},
+            )
             document.status = STATUS_PROCESSING
             document.error_message = None
             document.fail_reason = None
@@ -269,6 +278,7 @@ class DocumentParsePipeline:
                     document=document,
                     parse_job_id=job_run.id,
                     strategy_metadata=strategy_metadata,
+                    markdown_text=document.cleaned_text or document.parsed_text or "",
                 )
                 for asset in mineru_visual_assets:
                     self.asset_understanding.understand(asset)
@@ -383,14 +393,24 @@ class DocumentParsePipeline:
                     return final_document
 
         except Exception as exc:
-            self._record_processing_failure(document_id, job_id, "parse_failed", exc)
+            self._record_processing_failure(
+                document_id,
+                job_id,
+                "parse_failed",
+                exc,
+                clear_outputs=not preserve_outputs_on_failure,
+                restore_status=previous_status if preserve_outputs_on_failure else None,
+            )
             return self._get_document(document_id)
 
     @staticmethod
     def select_parser_strategy(processing_mode: str, detected_source_type: str) -> ProcessingStrategy:
         return select_parser_strategy(processing_mode, detected_source_type)
 
-    def _extract_document(self, document_id: int) -> tuple[ParsedDocument, list[dict[str, str | int | None]], dict[str, bool | str | int | list]]:
+    def _extract_document(
+        self,
+        document_id: int,
+    ) -> tuple[ParsedDocument, list[dict[str, str | int | None]], dict[str, bool | str | int | list]]:
         with self.session_factory() as db:
             document = db.get(Document, document_id)
             if document is None:
@@ -420,132 +440,44 @@ class DocumentParsePipeline:
         }
 
         if source_type == "pdf":
-            if ENABLE_MINERU_PARSER:
-                try:
-                    mineru_result = MinerUParserService().parse_pdf_file(
-                        file_path,
-                        data_id=f"document-{document_id}",
-                        output_root=RESULT_DIR / "mineru",
-                    )
-                    metadata.update(
-                        {
-                            "processing_strategy": "mineru",
-                            "mineru_enabled": True,
-                            "mineru_used": True,
-                            "mineru_batch_id": mineru_result.batch_id,
-                            "mineru_file_name": mineru_result.file_name,
-                            "mineru_markdown_file": mineru_result.markdown_file,
-                            "mineru_full_zip_url": mineru_result.full_zip_url,
-                            "mineru_artifact_dir": mineru_result.artifact_dir or "",
-                            "mineru_zip_path": mineru_result.zip_path or "",
-                            "mineru_extract_dir": mineru_result.extract_dir or "",
-                            "mineru_content_list_path": mineru_result.content_list_path or "",
-                            "mineru_layout_path": mineru_result.layout_path or "",
-                        }
-                    )
-                    return mineru_result.parsed_document, [], metadata
-                except MinerUParserUnavailable as exc:
-                    metadata.update(
-                        {
-                            "mineru_enabled": True,
-                            "mineru_used": False,
-                            "mineru_error": str(exc),
-                        }
-                    )
-                except Exception as exc:
-                    metadata.update(
-                        {
-                            "mineru_enabled": True,
-                            "mineru_used": False,
-                            "mineru_error": f"{type(exc).__name__}: {exc}",
-                        }
-                    )
-                    metadata.setdefault("warnings", []).append("mineru_parse_failed_falling_back")
-            else:
-                metadata.update({"mineru_enabled": False, "mineru_used": False})
-
-            if ENABLE_DOCLING_PARSER:
-                docling_parsed, docling_metadata = self._try_docling_parse(file_path)
-                if docling_parsed is not None:
-                    metadata.update(docling_metadata)
-                    return docling_parsed, [], metadata
-                metadata.update(docling_metadata)
-            else:
-                metadata.update({"docling_enabled": False, "docling_used": False})
-
-            if strategy.ocr_first:
-                try:
-                    ocr_pages = self.ocr_service.ocr_pdf_pages(file_path)
-                except TimeoutError:
-                    raise
-                except Exception as exc:
-                    raise DocumentProcessingFailure(PROCESSING_ERROR_PDF_DAMAGED, error_type="pdf_parse_failed") from exc
-                metadata["used_ocr"] = True
-                parsed_document = self._parsed_document_from_ocr_pages(ocr_pages, source_type="pdf")
-                return parsed_document, [
-                    {
-                        "asset_type": "pdf_page_ocr",
-                        "page_number": index + 1,
-                        "file_path": relative_path,
-                        "mime_type": mime_type,
-                        "ocr_text": page_text,
-                    }
-                    for index, page_text in enumerate(ocr_pages)
-                ], metadata
+            if not ENABLE_MINERU_PARSER:
+                raise DocumentProcessingFailure(
+                    "MinerU parser is required for PDF documents but is currently disabled.",
+                    error_type="mineru_required_disabled",
+                )
             try:
-                parsed_document = self.parser.parse_pdf_document(file_path)
-            except TimeoutError:
-                raise
+                mineru_result = MinerUParserService().parse_pdf_file(
+                    file_path,
+                    data_id=f"document-{document_id}",
+                    output_root=RESULT_DIR / "mineru",
+                )
+                metadata.update(
+                    {
+                        "processing_strategy": "mineru",
+                        "mineru_enabled": True,
+                        "mineru_used": True,
+                        "mineru_batch_id": mineru_result.batch_id,
+                        "mineru_file_name": mineru_result.file_name,
+                        "mineru_markdown_file": mineru_result.markdown_file,
+                        "mineru_full_zip_url": mineru_result.full_zip_url,
+                        "mineru_artifact_dir": mineru_result.artifact_dir or "",
+                        "mineru_zip_path": mineru_result.zip_path or "",
+                        "mineru_extract_dir": mineru_result.extract_dir or "",
+                        "mineru_content_list_path": mineru_result.content_list_path or "",
+                        "mineru_layout_path": mineru_result.layout_path or "",
+                    }
+                )
+                return mineru_result.parsed_document, [], metadata
+            except MinerUParserUnavailable as exc:
+                raise DocumentProcessingFailure(
+                    f"MinerU 解析不可用：{exc}",
+                    error_type="mineru_required_failed",
+                ) from exc
             except Exception as exc:
-                raise DocumentProcessingFailure(PROCESSING_ERROR_PDF_DAMAGED, error_type="pdf_parse_failed") from exc
-            ocr_assets: list[dict[str, str | int | None]] = []
-            for page in parsed_document.pages:
-                if not page.profile or not page.profile.needs_ocr:
-                    continue
-                try:
-                    ocr_text = self.ocr_service.ocr_pdf_page(file_path, page.page_number)
-                    if ocr_text.strip():
-                        retained_elements = [
-                            element for element in page.elements if element.element_type == "table"
-                        ]
-                        page.elements = retained_elements
-                        page.elements.append(
-                            ParsedElement(
-                                element_type="ocr_text",
-                                text=ocr_text,
-                                page_number=page.page_number,
-                                extractor="ocr",
-                                metadata={
-                                    "source_type": "pdf",
-                                    "ocr_used": True,
-                                    "warnings": page.profile.warnings.copy(),
-                                },
-                            )
-                        )
-                        page.profile.extraction_method = "hybrid" if retained_elements else "ocr"
-                    else:
-                        warning = "ocr_returned_empty_text"
-                        page.warnings.append(warning)
-                        page.profile.warnings.append(warning)
-                    ocr_assets.append(
-                        {
-                            "asset_type": "pdf_page_ocr",
-                            "page_number": page.page_number,
-                            "file_path": relative_path,
-                            "mime_type": mime_type,
-                            "ocr_text": ocr_text,
-                        }
-                    )
-                    metadata["used_ocr"] = True
-                    metadata["ocr_fallback_used"] = True
-                except Exception as exc:
-                    warning = f"ocr_failed: {type(exc).__name__}: {exc}"
-                    page.warnings.append(warning)
-                    if page.profile:
-                        page.profile.warnings.append(warning)
-                    metadata["ocr_fallback_used"] = True
-                    metadata.setdefault("warnings", []).append(warning)
-            return parsed_document, ocr_assets, metadata
+                raise DocumentProcessingFailure(
+                    f"MinerU 解析失败：{exc}",
+                    error_type="mineru_required_failed",
+                ) from exc
         if source_type == "image":
             try:
                 text = self.ocr_service.ocr_image(file_path)
@@ -610,86 +542,6 @@ class DocumentParsePipeline:
             ],
             source_type=source_type,
         ), [], metadata
-
-    def _try_docling_parse(self, file_path) -> tuple[ParsedDocument | None, dict[str, bool | str | int | list]]:
-        try:
-            from docling.document_converter import DocumentConverter
-        except Exception as exc:
-            return None, {
-                "docling_enabled": True,
-                "docling_available": False,
-                "docling_used": False,
-                "docling_error": f"{type(exc).__name__}: {exc}",
-            }
-
-        try:
-            result = DocumentConverter().convert(file_path)
-            document = result.document
-            markdown = document.export_to_markdown()
-        except Exception as exc:
-            return None, {
-                "docling_enabled": True,
-                "docling_available": True,
-                "docling_used": False,
-                "docling_error": f"{type(exc).__name__}: {exc}",
-            }
-
-        if not str(markdown or "").strip():
-            return None, {
-                "docling_enabled": True,
-                "docling_available": True,
-                "docling_used": False,
-                "docling_error": "empty_markdown",
-            }
-
-        page_count = self._docling_page_count(document)
-        metadata = {
-            "source_type": "pdf",
-            "parser_engine": "docling",
-            "docling_enabled": True,
-            "docling_used": True,
-            "docling_available": True,
-        }
-        parsed_document = ParsedDocument(
-            pages=[
-                ParsedPage(
-                    page_number=1,
-                    profile=None,
-                    elements=[
-                        ParsedElement(
-                            element_type="paragraph",
-                            text=str(markdown),
-                            page_number=None,
-                            extractor="docling",
-                            metadata=metadata,
-                        )
-                    ],
-                )
-            ],
-            source_type="pdf",
-            parser_version="docling_optional_v1",
-            parser_engine="docling",
-            pymupdf_available=True,
-            table_extraction_enabled=True,
-            table_extraction_reason=None,
-        )
-        if page_count:
-            parsed_document.warnings.append(f"docling_page_count={page_count}")
-        return parsed_document, {
-            "processing_strategy": "docling",
-            "docling_enabled": True,
-            "docling_available": True,
-            "docling_used": True,
-            "docling_page_count": page_count or 0,
-        }
-
-    def _docling_page_count(self, document) -> int | None:
-        pages = getattr(document, "pages", None)
-        if isinstance(pages, dict):
-            return len(pages)
-        if isinstance(pages, list):
-            return len(pages)
-        return None
 
     def _chunk_parsed_pdf(self, parsed_document: ParsedDocument):
         chunks = []
@@ -765,36 +617,17 @@ class DocumentParsePipeline:
         document: Document,
         parse_job_id: int,
         strategy_metadata: dict,
+        markdown_text: str = "",
     ) -> list[DocumentAsset]:
         if not strategy_metadata.get("mineru_used"):
             return []
         return self.mineru_asset_ingestion.ingest(
             document=document,
             parse_job_id=parse_job_id,
-            content_list_path=str(strategy_metadata.get("mineru_content_list_path") or ""),
+            markdown_text=markdown_text,
             extract_dir=str(strategy_metadata.get("mineru_extract_dir") or ""),
             generate_coordinate_preview=True,
         )
-
-    def _parsed_document_from_ocr_pages(self, pages: list[str], source_type: str) -> ParsedDocument:
-        parsed_pages = []
-        for index, text in enumerate(pages, start=1):
-            parsed_pages.append(
-                ParsedPage(
-                    page_number=index,
-                    profile=None,
-                    elements=[
-                        ParsedElement(
-                            element_type="ocr_text",
-                            text=text,
-                            page_number=index,
-                            extractor="ocr",
-                            metadata={"source_type": source_type, "ocr_used": True},
-                        )
-                    ],
-                )
-            )
-        return ParsedDocument(pages=parsed_pages, source_type=source_type)
 
     def _build_document_input(self, document_id: int, page_content: str) -> DocumentInput:
         with self.session_factory() as db:
@@ -970,38 +803,42 @@ class DocumentParsePipeline:
         job_run_id: int | None,
         event_type: str,
         exc: Exception,
+        *,
+        clear_outputs: bool = True,
+        restore_status: str | None = None,
     ) -> None:
         with self.session_factory() as db:
             reason, error_type = self._failure_reason(exc)
             document = db.get(Document, document_id)
             job_run = db.get(JobRun, job_run_id) if job_run_id is not None else None
             if document is not None:
-                (
-                    db.query(DocumentChunk)
-                    .filter(DocumentChunk.document_id == document.id)
-                    .delete(synchronize_session=False)
-                )
-                (
-                    db.query(DocumentAsset)
-                    .filter(DocumentAsset.document_id == document.id)
-                    .delete(synchronize_session=False)
-                )
-                (
-                    db.query(DocumentClaim)
-                    .filter(DocumentClaim.document_id == document.id)
-                    .delete(synchronize_session=False)
-                )
-                document.status = STATUS_FAILED
+                if clear_outputs:
+                    (
+                        db.query(DocumentChunk)
+                        .filter(DocumentChunk.document_id == document.id)
+                        .delete(synchronize_session=False)
+                    )
+                    (
+                        db.query(DocumentAsset)
+                        .filter(DocumentAsset.document_id == document.id)
+                        .delete(synchronize_session=False)
+                    )
+                    (
+                        db.query(DocumentClaim)
+                        .filter(DocumentClaim.document_id == document.id)
+                        .delete(synchronize_session=False)
+                    )
+                    document.parsed_at = None
+                    document.chunk_count = 0
+                document.status = restore_status or STATUS_FAILED
                 document.error_message = reason
                 document.fail_reason = reason
-                document.parsed_at = None
-                document.chunk_count = 0
                 self._log_event(
                     db,
                     document,
                     event_type,
                     reason[:500],
-                    metadata={"error_type": error_type},
+                    metadata={"error_type": error_type, "outputs_preserved": not clear_outputs},
                 )
             if job_run is not None:
                 JobRunService(db).mark_failed(

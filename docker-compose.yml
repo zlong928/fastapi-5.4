@@ -1,4 +1,23 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: fastapi_user
+      POSTGRES_PASSWORD: fastapi_pass
+      POSTGRES_DB: fastapi_app
+      TZ: Asia/Shanghai
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fastapi_user -d fastapi_app"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
   redis:
     image: redis:7.4-alpine
     command: ["redis-server", "--appendonly", "yes"]
@@ -24,7 +43,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       DOCUMENT_QUEUE_NAME: ${DOCUMENT_QUEUE_NAME:-pdf_task_queue}
       EXTRACTION_QUEUE_NAME: ${EXTRACTION_QUEUE_NAME:-extraction_task_queue}
-      DATABASE_URL: sqlite:////app/data/app.db
+      DATABASE_URL: postgresql://fastapi_user:fastapi_pass@postgres:5432/fastapi_app
       ENABLE_BACKGROUND_WORKER: "False"
       TESSERACT_CMD: ${TESSERACT_CMD:-tesseract}
       OCR_TICK_MIN_CONFIDENCE: ${OCR_TICK_MIN_CONFIDENCE:-45}
@@ -49,13 +68,26 @@ services:
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-hash}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://muyuan.do}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
-      LLM_API_FORMAT: ${LLM_API_FORMAT:-responses}
+      OPENAI_MODEL: ${OPENAI_MODEL:-claude-opus-4-6}
+      LLM_LORA_ID: ${LLM_LORA_ID:-}
+      VLM_BASE_URL: ${VLM_BASE_URL:-}
+      VLM_API_KEY: ${VLM_API_KEY:-}
+      VLM_MODEL: ${VLM_MODEL:-}
+      VLM_LORA_ID: ${VLM_LORA_ID:-}
+      VLM_FALLBACK_MODELS: ${VLM_FALLBACK_MODELS:-}
+      VLM_API_FORMAT: ${VLM_API_FORMAT:-openai_chat}
+      VLM_ALLOW_NON_STREAM_FALLBACK: ${VLM_ALLOW_NON_STREAM_FALLBACK:-}
+      VLM_ALLOW_ROOT_CHAT_FALLBACK: ${VLM_ALLOW_ROOT_CHAT_FALLBACK:-}
+      LLM_FALLBACK_MODELS: ${LLM_FALLBACK_MODELS:-}
+      LLM_API_FORMAT: ${LLM_API_FORMAT:-openai_chat}
+      LLM_ALLOW_NON_STREAM_FALLBACK: ${LLM_ALLOW_NON_STREAM_FALLBACK:-}
+      FALLBACK_MIMO_BASE_URL: ${FALLBACK_MIMO_BASE_URL:-}
+      FALLBACK_MIMO_API_KEY: ${FALLBACK_MIMO_API_KEY:-}
+      FALLBACK_MIMO_MODEL: ${FALLBACK_MIMO_MODEL:-}
       VISUAL_LLM_MAX_WORKERS: ${VISUAL_LLM_MAX_WORKERS:-4}
       VISUAL_LLM_MAX_RETRIES: ${VISUAL_LLM_MAX_RETRIES:-1}
       LLM_MAX_CONCURRENCY: ${LLM_MAX_CONCURRENCY:-4}
@@ -67,6 +99,7 @@ services:
       LLM_IMAGE_MAX_SIDE: ${LLM_IMAGE_MAX_SIDE:-1000}
       LLM_IMAGE_JPEG_QUALITY: ${LLM_IMAGE_JPEG_QUALITY:-75}
       LLM_IMAGE_FORCE_JPEG: ${LLM_IMAGE_FORCE_JPEG:-True}
+      BATCH_EXTRACTION_QUEUE_NAME: ${BATCH_EXTRACTION_QUEUE_NAME:-batch_extraction_queue}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       WEB_SEARCH_ENABLED: ${WEB_SEARCH_ENABLED:-True}
       WEB_SEARCH_MAX_RESULTS: ${WEB_SEARCH_MAX_RESULTS:-5}
@@ -74,10 +107,13 @@ services:
       - .:/app
       - ./data:/app/data
       - ./logs:/app/logs
+      - ./data/uploads:/app/data/uploads
     ports:
       - "8000:8000"
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     restart: unless-stopped
 
@@ -93,7 +129,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       DOCUMENT_QUEUE_NAME: ${DOCUMENT_QUEUE_NAME:-pdf_task_queue}
       EXTRACTION_QUEUE_NAME: ${EXTRACTION_QUEUE_NAME:-extraction_task_queue}
-      DATABASE_URL: sqlite:////app/data/app.db
+      DATABASE_URL: postgresql://fastapi_user:fastapi_pass@postgres:5432/fastapi_app
       ENABLE_BACKGROUND_WORKER: "False"
       TESSERACT_CMD: ${TESSERACT_CMD:-tesseract}
       OCR_TICK_MIN_CONFIDENCE: ${OCR_TICK_MIN_CONFIDENCE:-45}
@@ -106,13 +142,26 @@ services:
       MINERU_TIMEOUT_SECONDS: ${MINERU_TIMEOUT_SECONDS:-1800}
       MINERU_SUBMIT_RATE_LIMIT_PER_MINUTE: ${MINERU_SUBMIT_RATE_LIMIT_PER_MINUTE:-50}
       MINERU_RESULT_RATE_LIMIT_PER_MINUTE: ${MINERU_RESULT_RATE_LIMIT_PER_MINUTE:-1000}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-hash}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://muyuan.do}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
-      LLM_API_FORMAT: ${LLM_API_FORMAT:-responses}
+      OPENAI_MODEL: ${OPENAI_MODEL:-claude-opus-4-6}
+      LLM_LORA_ID: ${LLM_LORA_ID:-}
+      VLM_BASE_URL: ${VLM_BASE_URL:-}
+      VLM_API_KEY: ${VLM_API_KEY:-}
+      VLM_MODEL: ${VLM_MODEL:-}
+      VLM_LORA_ID: ${VLM_LORA_ID:-}
+      VLM_FALLBACK_MODELS: ${VLM_FALLBACK_MODELS:-}
+      VLM_API_FORMAT: ${VLM_API_FORMAT:-openai_chat}
+      VLM_ALLOW_NON_STREAM_FALLBACK: ${VLM_ALLOW_NON_STREAM_FALLBACK:-}
+      VLM_ALLOW_ROOT_CHAT_FALLBACK: ${VLM_ALLOW_ROOT_CHAT_FALLBACK:-}
+      LLM_FALLBACK_MODELS: ${LLM_FALLBACK_MODELS:-}
+      LLM_API_FORMAT: ${LLM_API_FORMAT:-openai_chat}
+      LLM_ALLOW_NON_STREAM_FALLBACK: ${LLM_ALLOW_NON_STREAM_FALLBACK:-}
+      FALLBACK_MIMO_BASE_URL: ${FALLBACK_MIMO_BASE_URL:-}
+      FALLBACK_MIMO_API_KEY: ${FALLBACK_MIMO_API_KEY:-}
+      FALLBACK_MIMO_MODEL: ${FALLBACK_MIMO_MODEL:-}
       VISUAL_LLM_MAX_WORKERS: ${VISUAL_LLM_MAX_WORKERS:-4}
       VISUAL_LLM_MAX_RETRIES: ${VISUAL_LLM_MAX_RETRIES:-1}
       LLM_MAX_CONCURRENCY: ${LLM_MAX_CONCURRENCY:-4}
@@ -128,8 +177,11 @@ services:
       - .:/app
       - ./data:/app/data
       - ./logs:/app/logs
+      - ./data/uploads:/app/data/uploads
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     restart: unless-stopped
 
@@ -146,12 +198,26 @@ services:
       DOCUMENT_QUEUE_NAME: ${DOCUMENT_QUEUE_NAME:-pdf_task_queue}
       EXTRACTION_QUEUE_NAME: ${EXTRACTION_QUEUE_NAME:-extraction_task_queue}
       EXTRACTION_WORKER_CONCURRENCY: ${EXTRACTION_WORKER_CONCURRENCY:-2}
-      DATABASE_URL: sqlite:////app/data/app.db
+      DATABASE_URL: postgresql://fastapi_user:fastapi_pass@postgres:5432/fastapi_app
       ENABLE_BACKGROUND_WORKER: "False"
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://muyuan.do}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
-      LLM_API_FORMAT: ${LLM_API_FORMAT:-responses}
+      OPENAI_MODEL: ${OPENAI_MODEL:-claude-opus-4-6}
+      LLM_LORA_ID: ${LLM_LORA_ID:-}
+      VLM_BASE_URL: ${VLM_BASE_URL:-}
+      VLM_API_KEY: ${VLM_API_KEY:-}
+      VLM_MODEL: ${VLM_MODEL:-}
+      VLM_LORA_ID: ${VLM_LORA_ID:-}
+      VLM_FALLBACK_MODELS: ${VLM_FALLBACK_MODELS:-}
+      VLM_API_FORMAT: ${VLM_API_FORMAT:-openai_chat}
+      VLM_ALLOW_NON_STREAM_FALLBACK: ${VLM_ALLOW_NON_STREAM_FALLBACK:-}
+      VLM_ALLOW_ROOT_CHAT_FALLBACK: ${VLM_ALLOW_ROOT_CHAT_FALLBACK:-}
+      LLM_FALLBACK_MODELS: ${LLM_FALLBACK_MODELS:-}
+      LLM_API_FORMAT: ${LLM_API_FORMAT:-openai_chat}
+      LLM_ALLOW_NON_STREAM_FALLBACK: ${LLM_ALLOW_NON_STREAM_FALLBACK:-}
+      FALLBACK_MIMO_BASE_URL: ${FALLBACK_MIMO_BASE_URL:-}
+      FALLBACK_MIMO_API_KEY: ${FALLBACK_MIMO_API_KEY:-}
+      FALLBACK_MIMO_MODEL: ${FALLBACK_MIMO_MODEL:-}
       VISUAL_LLM_MAX_WORKERS: ${VISUAL_LLM_MAX_WORKERS:-3}
       VISUAL_LLM_MAX_RETRIES: ${VISUAL_LLM_MAX_RETRIES:-1}
       LLM_MAX_CONCURRENCY: ${LLM_MAX_CONCURRENCY:-3}
@@ -167,8 +233,49 @@ services:
       - .:/app
       - ./data:/app/data
       - ./logs:/app/logs
+      - ./data/uploads:/app/data/uploads
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  batch-extraction-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python3", "-u", "-m", "app.batch_extraction_worker"]
+    environment:
+      DATA_DIR: /app/data
+      LOG_DIR: /app/logs
+      TZ: Asia/Shanghai
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql://fastapi_user:fastapi_pass@postgres:5432/fastapi_app
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://muyuan.do}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-claude-opus-4-6}
+      VLM_BASE_URL: ${VLM_BASE_URL:-}
+      VLM_API_KEY: ${VLM_API_KEY:-}
+      VLM_MODEL: ${VLM_MODEL:-}
+      FALLBACK_MIMO_BASE_URL: ${FALLBACK_MIMO_BASE_URL:-}
+      FALLBACK_MIMO_API_KEY: ${FALLBACK_MIMO_API_KEY:-}
+      FALLBACK_MIMO_MODEL: ${FALLBACK_MIMO_MODEL:-}
+      VISUAL_LLM_MAX_WORKERS: ${VISUAL_LLM_MAX_WORKERS:-2}
+      LLM_MAX_CONCURRENCY: ${LLM_MAX_CONCURRENCY:-2}
+      BATCH_EXTRACTION_QUEUE_NAME: ${BATCH_EXTRACTION_QUEUE_NAME:-batch_extraction_queue}
+      BATCH_CONCURRENCY: ${BATCH_CONCURRENCY:-20}
+      BATCH_PROGRESS_INTERVAL: ${BATCH_PROGRESS_INTERVAL:-5.0}
+      BATCH_WORKER_MAX_JOBS: ${BATCH_WORKER_MAX_JOBS:-3}
+      IMAGE_EXTRACT_TIMEOUT: ${IMAGE_EXTRACT_TIMEOUT:-300}
+    volumes:
+      - .:/app
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     restart: unless-stopped
 
@@ -188,22 +295,6 @@ services:
       - api
     restart: unless-stopped
 
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    environment:
-      OLLAMA_KEEP_ALIVE: "24h"
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 40s
-    restart: unless-stopped
-
 volumes:
   frontend_node_modules:
-  ollama_data:
+  pgdata:

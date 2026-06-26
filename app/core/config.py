@@ -20,20 +20,40 @@ ALLOWED_EXTENSIONS = {ext.strip() for ext in _allowed_ext.split(",")}
 DEFAULT_MAX_UPLOAD_SIZE_BYTES = 100 * 1024 * 1024
 _max_size = os.getenv("MAX_UPLOAD_SIZE") or os.getenv("MAX_UPLOAD_SIZE_BYTES")
 MAX_UPLOAD_SIZE_BYTES: int = int(_max_size) if _max_size else DEFAULT_MAX_UPLOAD_SIZE_BYTES
-DOCUMENT_PARSE_TIMEOUT_SECONDS = int(os.getenv("DOCUMENT_PARSE_TIMEOUT_SECONDS", "1800"))
-OCR_TIMEOUT_SECONDS = int(os.getenv("OCR_TIMEOUT_SECONDS", str(DOCUMENT_PARSE_TIMEOUT_SECONDS)))
+
+
+def _safe_int(env_key: str, default: int) -> int:
+    """Safely parse environment variable to int with fallback."""
+    try:
+        value = os.getenv(env_key)
+        return int(value) if value else default
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_float(env_key: str, default: float) -> float:
+    """Safely parse environment variable to float with fallback."""
+    try:
+        value = os.getenv(env_key)
+        return float(value) if value else default
+    except (ValueError, TypeError):
+        return default
+
+
+DOCUMENT_PARSE_TIMEOUT_SECONDS = _safe_int("DOCUMENT_PARSE_TIMEOUT_SECONDS", 1800)
+OCR_TIMEOUT_SECONDS = _safe_int("OCR_TIMEOUT_SECONDS", DOCUMENT_PARSE_TIMEOUT_SECONDS)
 TESSERACT_CMD = os.getenv("TESSERACT_CMD", "tesseract")
-OCR_TICK_MIN_CONFIDENCE = float(os.getenv("OCR_TICK_MIN_CONFIDENCE", "45"))
+OCR_TICK_MIN_CONFIDENCE = _safe_float("OCR_TICK_MIN_CONFIDENCE", 45.0)
 ENABLE_DOCLING_PARSER = os.getenv("ENABLE_DOCLING_PARSER", "False").lower() in ("true", "1", "t", "yes", "on")
 ENABLE_MINERU_PARSER = os.getenv("ENABLE_MINERU_PARSER", "True").lower() in ("true", "1", "t", "yes", "on")
 MINERU_API_BASE_URL = os.getenv("MINERU_API_BASE_URL", "https://mineru.net")
 MINERU_API_KEY = os.getenv("MINERU_API_KEY", "")
 MINERU_MODEL_VERSION = os.getenv("MINERU_MODEL_VERSION", "vlm")
 MINERU_LANGUAGE = os.getenv("MINERU_LANGUAGE", "en")
-MINERU_POLL_INTERVAL_SECONDS = float(os.getenv("MINERU_POLL_INTERVAL_SECONDS", "5"))
-MINERU_TIMEOUT_SECONDS = int(os.getenv("MINERU_TIMEOUT_SECONDS", str(DOCUMENT_PARSE_TIMEOUT_SECONDS)))
-MINERU_SUBMIT_RATE_LIMIT_PER_MINUTE = int(os.getenv("MINERU_SUBMIT_RATE_LIMIT_PER_MINUTE", "50"))
-MINERU_RESULT_RATE_LIMIT_PER_MINUTE = int(os.getenv("MINERU_RESULT_RATE_LIMIT_PER_MINUTE", "1000"))
+MINERU_POLL_INTERVAL_SECONDS = _safe_float("MINERU_POLL_INTERVAL_SECONDS", 5.0)
+MINERU_TIMEOUT_SECONDS = _safe_int("MINERU_TIMEOUT_SECONDS", DOCUMENT_PARSE_TIMEOUT_SECONDS)
+MINERU_SUBMIT_RATE_LIMIT_PER_MINUTE = _safe_int("MINERU_SUBMIT_RATE_LIMIT_PER_MINUTE", 50)
+MINERU_RESULT_RATE_LIMIT_PER_MINUTE = _safe_int("MINERU_RESULT_RATE_LIMIT_PER_MINUTE", 1000)
 
 # 处理布尔类型的环境变量
 _enable_worker = os.getenv("ENABLE_BACKGROUND_WORKER", "False")
@@ -42,10 +62,29 @@ ENABLE_BACKGROUND_WORKER = _enable_worker.lower() in ("true", "1", "t", "yes", "
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 DOCUMENT_QUEUE_NAME = os.getenv("DOCUMENT_QUEUE_NAME", "pdf_task_queue")
 EXTRACTION_QUEUE_NAME = os.getenv("EXTRACTION_QUEUE_NAME", "extraction_task_queue")
+BATCH_EXTRACTION_QUEUE_NAME = os.getenv("BATCH_EXTRACTION_QUEUE_NAME", "batch_extraction_queue")
+BATCH_EXTRACTION_STALE_AFTER_SECONDS = _safe_int("BATCH_EXTRACTION_STALE_AFTER_SECONDS", 300)
+
+# 批量提取并发：单个 worker 内同时处理的图片数
+# LLM 最大 100 路并发，每张图平均 ~1.3 次 LLM 调用（分类 + 可能提取）
+# 公式: LLM_MAX_CONCURRENCY / avg_llm_calls_per_image ≈ 100/1.3 ≈ 76
+# 留余量给其他 worker 进程，单进程设为 20，用 5 个 worker 可打满 100 路 LLM
+BATCH_CONCURRENCY = _safe_int("BATCH_CONCURRENCY", 20)
+
+# 单图提取超时（秒），替代原先写死的 120 秒
+IMAGE_EXTRACT_TIMEOUT = _safe_int("IMAGE_EXTRACT_TIMEOUT", 300)
+
+# 进度同步间隔（秒）：每 N 秒输出一次当前完成进度
+BATCH_PROGRESS_INTERVAL = _safe_float("BATCH_PROGRESS_INTERVAL", 5.0)
+
+# 进程级线程池大小 = BATCH_CONCURRENCY + 少量余量
+BATCH_THREAD_POOL_SIZE = _safe_int("BATCH_THREAD_POOL_SIZE", BATCH_CONCURRENCY + 4)
+# 单个 worker 同时处理的 job 数量（默认 3 个 job × 20 并发 = 60 线程）
+BATCH_WORKER_MAX_JOBS = _safe_int("BATCH_WORKER_MAX_JOBS", 3)
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR / 'app.db'}")
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-me-in-production")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
+ACCESS_TOKEN_EXPIRE_MINUTES = _safe_int("ACCESS_TOKEN_EXPIRE_MINUTES", 1440)
 
 
 def normalize_url(url: str) -> str:
@@ -73,6 +112,9 @@ if IS_PRODUCTION and not _raw_frontend_url:
 
 if IS_PRODUCTION and is_localhost_url(FRONTEND_URL):
     raise RuntimeError("FRONTEND_URL must be set to the deployed frontend URL in production.")
+
+if IS_PRODUCTION and JWT_SECRET_KEY in ("change-me-in-production", "change-me"):
+    raise RuntimeError("JWT_SECRET_KEY must be changed from its default value in production.")
 
 
 def parse_cors_allowed_origins(frontend_url: str, extra_origins: str = "", include_local_defaults: bool = True) -> list[str]:
@@ -142,7 +184,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 # Embedding / Vector Search
-EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "ollama")
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "hash")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "768"))

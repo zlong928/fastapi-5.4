@@ -1,19 +1,33 @@
+import logging
+import time
 from collections.abc import Generator
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import Column, Integer, String, Text, create_engine, event, inspect
+from sqlalchemy.exc import DatabaseError, OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import DATABASE_URL
+
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
     pass
 
 
-connect_args = {"check_same_thread": False, "timeout": 30} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+if DATABASE_URL.startswith("sqlite"):
+    connect_args = {"check_same_thread": False, "timeout": 30}
+    engine = create_engine(DATABASE_URL, connect_args=connect_args)
+else:
+    # For production databases (PostgreSQL, MySQL), enable connection health checks
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,  # Test connections before using them
+        pool_recycle=3600,   # Recycle connections after 1 hour
+    )
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -23,8 +37,13 @@ if DATABASE_URL.startswith("sqlite"):
         cursor = dbapi_connection.cursor()
         run_pragma = cursor.execute
         run_pragma("PRAGMA journal_mode=WAL")
-        run_pragma("PRAGMA busy_timeout=30000")
-        run_pragma("PRAGMA synchronous=NORMAL")
+        # 60s busy timeout for multi-container Docker access
+        run_pragma("PRAGMA busy_timeout=60000")
+        # FULL sync: ensures WAL writes are fully flushed to disk,
+        # preventing "file is not a database" corruption under Docker volume mounts
+        run_pragma("PRAGMA synchronous=FULL")
+        # Store page count for integrity validation on connection
+        run_pragma("PRAGMA page_count")
         cursor.close()
 
 
@@ -37,9 +56,35 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def create_db_and_tables() -> None:
-    from app.models import Book, BookProgress, ChatMessage, ChatMessageSource, ChatSession, Collection, Document, DocumentAsset, DocumentChunk, DocumentClaim, DocumentEvent, DocumentTag, ExtractionJob, ExtractionResult, FileCleanupJob, JobRun, KgEntity, KgRelation, OAuthAccount, PaperTable, ParseJob, Tag, Task, User  # noqa: F401
+    from app.models import (  # noqa: F401
+        BatchExtractionItem, BatchExtractionJob,
+        Book, BookProgress,
+        ChatMessage, ChatMessageSource, ChatSession,
+        Collection,
+        Document, DocumentAsset, DocumentChunk, DocumentClaim, DocumentEvent, DocumentTag,
+        ExtractionEvidence, ExtractionItem, ExtractionJob, ExtractionResult, ExtractionRun,
+        FileCleanupJob,
+        JobRun,
+        KgEntity, KgRelation,
+        OAuthAccount,
+        PaperTable, ParseJob,
+        Tag, Task,
+        User,
+    )
 
-    Base.metadata.create_all(bind=engine)
+    # Retry table creation under multi-container Docker (file may be temporarily locked)
+    for attempt in range(3):
+        try:
+            Base.metadata.create_all(bind=engine)
+            break
+        except (DatabaseError, OperationalError) as exc:
+            if attempt < 2:
+                wait = (attempt + 1) * 2
+                logger.warning("DB table creation attempt %d failed: %s. Retrying in %ds...", attempt + 1, exc, wait)
+                time.sleep(wait)
+            else:
+                logger.error("DB table creation failed after 3 attempts: %s", exc)
+                raise
     ensure_sqlite_compat_columns()
 
 

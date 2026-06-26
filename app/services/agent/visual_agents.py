@@ -3,17 +3,16 @@ from __future__ import annotations
 from app.services.agent.llm_client import LLMClient
 from app.services.agent.types import FigureExtractionPlan, ImageType
 from app.services.agent.visual_contracts import visual_extraction_prompt
-from app.services.chart_extraction import CHART_TYPE_CATALOG
 
 
 _SUPPLEMENTAL_IMAGE_TYPE_RULES = {
-    ImageType.GROUPED_BAR.value: "分组柱状图，不同组别或材料并列柱，需要绑定类别和系列",
-    ImageType.BOX_PLOT.value: "箱线图/violin图",
-    ImageType.DUAL_AXIS_PLOT.value: "双Y轴图（左右两个y轴）",
-    ImageType.TABLE_IMAGE.value: "栅格化的表格图像",
-    ImageType.GENERIC_COORDINATE_PLOT.value: "复杂或罕见的坐标图",
-    ImageType.NON_DATA_IMAGE.value: "照片、荧光图、SEM、显微镜图等非普通坐标数据图",
-    ImageType.SCHEMATIC.value: "流程图、示意图、结构图",
+    ImageType.GROUPED_BAR.value: "Grouped bar chart with side-by-side bars for different groups or materials",
+    ImageType.BOX_PLOT.value: "Box plot or violin plot",
+    ImageType.DUAL_AXIS_PLOT.value: "Dual Y-axis plot (left and right y axes)",
+    ImageType.TABLE_IMAGE.value: "Rasterized table image",
+    ImageType.GENERIC_COORDINATE_PLOT.value: "Complex or rare coordinate chart",
+    ImageType.NON_DATA_IMAGE.value: "Photo, fluorescence image, SEM, microscopy image etc. (non-coordinate data)",
+    ImageType.SCHEMATIC.value: "Flowchart, schematic diagram, structural diagram",
 }
 
 _IMAGE_TYPE_ALIASES = {
@@ -33,32 +32,28 @@ def image_type_from_string(value: object) -> ImageType:
 
 
 def image_classification_prompt() -> str:
-    catalog_rules = {
-        spec.image_type: f"{spec.label}，例如 {', '.join(spec.typical_content)}"
-        for spec in CHART_TYPE_CATALOG
-    }
-    rules = {**catalog_rules, **_SUPPLEMENTAL_IMAGE_TYPE_RULES}
+    rules = _SUPPLEMENTAL_IMAGE_TYPE_RULES
     allowed_types = [image_type.value for image_type in ImageType]
     rule_lines = "\n".join(f"- {image_type}: {rules[image_type]}" for image_type in allowed_types if image_type in rules)
     allowed_type_text = "/".join(allowed_types)
-    return f"""你是科研图片类型识别专家。识别图片类型并输出JSON：
+    return f"""You are a scientific figure type classifier. Identify the image type and output JSON:
 {{
   "image_type": "{allowed_type_text}",
   "has_x_axis": true/false,
   "has_y_axis": true/false,
   "axis_type": "linear/log/time_series/none",
   "has_dual_y_axis": true/false,
-  "reason": "判断理由"
+  "reason": "classification reason"
 }}
 
-分类规则：
+Classification rules:
 {rule_lines}
 
-优先使用最具体的类型；只有无法判断时才使用 generic_coordinate_plot 或 unknown。"""
+Use the most specific type; only use generic_coordinate_plot or unknown when truly uncertain."""
 
 
 class ImageClassifierAgent:
-    """识别图片类型，并把图片送入稳定的专用处理链路。"""
+    """Classify image type and route to appropriate processing chain."""
 
     def __init__(self, client: LLMClient) -> None:
         self.client = client
@@ -77,7 +72,7 @@ class ImageClassifierAgent:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": f"图号：{plan.figure_id}\n图注：{plan.caption}\n请识别图片类型。"},
+                            {"type": "text", "text": f"Figure ID: {plan.figure_id}\nCaption: {plan.caption}\nPlease classify this image."},
                             {"type": "image_url", "image_url": {"url": image_data_url}},
                         ],
                     },
@@ -90,7 +85,7 @@ class ImageClassifierAgent:
 
 
 class CoordinateExtractionAgent:
-    """专门提取坐标图中的数据点"""
+    """Extract coordinate data from chart images via LLM."""
 
     def __init__(self, client: LLMClient) -> None:
         self.client = client
@@ -98,7 +93,7 @@ class CoordinateExtractionAgent:
     def extract_coordinates(self, plan: FigureExtractionPlan) -> dict:
         image_data_url = self.client.image_data_url(plan.image_path)
         if not image_data_url:
-            return {"error": "图片不可读"}
+            return {"error": "Image unreadable"}
         route_key = plan.image_type.value if plan.image_type else "generic_coordinate_plot"
         try:
             return self.client.chat_json(
@@ -110,7 +105,7 @@ class CoordinateExtractionAgent:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": f"图号：{plan.figure_id}\n图注：{plan.caption}\n\n请提取所有数据点坐标。"},
+                            {"type": "text", "text": f"Figure ID: {plan.figure_id}\nCaption: {plan.caption}\n\nExtract all data point coordinates."},
                             {"type": "image_url", "image_url": {"url": image_data_url}},
                         ],
                     },
@@ -122,7 +117,7 @@ class CoordinateExtractionAgent:
 
 
 class BarChartAgent:
-    """专门提取条形图/柱状图数据"""
+    """Extract bar chart / column chart data."""
 
     def __init__(self, client: LLMClient) -> None:
         self.client = client
@@ -130,7 +125,7 @@ class BarChartAgent:
     def extract_bars(self, plan: FigureExtractionPlan) -> dict:
         image_data_url = self.client.image_data_url(plan.image_path)
         if not image_data_url:
-            return {"error": "图片不可读"}
+            return {"error": "Image unreadable"}
         route_key = plan.image_type.value if plan.image_type else "bar_chart"
         try:
             return self.client.chat_json(
@@ -142,7 +137,7 @@ class BarChartAgent:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": f"图号：{plan.figure_id}\n图注：{plan.caption}\n\n请提取柱状图数据。"},
+                            {"type": "text", "text": f"Figure ID: {plan.figure_id}\nCaption: {plan.caption}\n\nExtract bar chart data."},
                             {"type": "image_url", "image_url": {"url": image_data_url}},
                         ],
                     },
@@ -154,7 +149,7 @@ class BarChartAgent:
 
 
 class HeatmapAgent:
-    """专门提取热图数据"""
+    """Extract heatmap data."""
 
     def __init__(self, client: LLMClient) -> None:
         self.client = client
@@ -162,7 +157,7 @@ class HeatmapAgent:
     def extract_heatmap(self, plan: FigureExtractionPlan) -> dict:
         image_data_url = self.client.image_data_url(plan.image_path)
         if not image_data_url:
-            return {"error": "图片不可读"}
+            return {"error": "Image unreadable"}
         route_key = plan.image_type.value if plan.image_type else "heatmap_matrix"
         try:
             return self.client.chat_json(
@@ -174,7 +169,7 @@ class HeatmapAgent:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": f"图号：{plan.figure_id}\n图注：{plan.caption}\n\n请提取热图数据。"},
+                            {"type": "text", "text": f"Figure ID: {plan.figure_id}\nCaption: {plan.caption}\n\nExtract heatmap data."},
                             {"type": "image_url", "image_url": {"url": image_data_url}},
                         ],
                     },
@@ -186,7 +181,7 @@ class HeatmapAgent:
 
 
 class TableImageAgent:
-    """专门提取栅格化表格数据"""
+    """Extract rasterized table data."""
 
     def __init__(self, client: LLMClient) -> None:
         self.client = client
@@ -194,7 +189,7 @@ class TableImageAgent:
     def extract_table_image(self, plan: FigureExtractionPlan) -> dict:
         image_data_url = self.client.image_data_url(plan.image_path)
         if not image_data_url:
-            return {"error": "图片不可读"}
+            return {"error": "Image unreadable"}
         try:
             return self.client.chat_json(
                 [
@@ -205,7 +200,7 @@ class TableImageAgent:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": f"图号：{plan.figure_id}\n图注：{plan.caption}\n\n请提取表格中的数据。"},
+                            {"type": "text", "text": f"Figure ID: {plan.figure_id}\nCaption: {plan.caption}\n\nExtract table data."},
                             {"type": "image_url", "image_url": {"url": image_data_url}},
                         ],
                     },
@@ -217,7 +212,7 @@ class TableImageAgent:
 
 
 class NonDataVisualAgent:
-    """处理非数据视觉证据（照片、显微图等）"""
+    """Handle non-data visual evidence (photos, microscopy, etc.)"""
 
     def __init__(self, client: LLMClient) -> None:
         self.client = client
@@ -225,7 +220,7 @@ class NonDataVisualAgent:
     def describe_visual(self, plan: FigureExtractionPlan) -> dict:
         image_data_url = self.client.image_data_url(plan.image_path)
         if not image_data_url:
-            return {"error": "图片不可读"}
+            return {"error": "Image unreadable"}
         route_key = plan.image_type.value if plan.image_type else "non_data_image"
         try:
             return self.client.chat_json(
@@ -237,7 +232,7 @@ class NonDataVisualAgent:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": f"图号：{plan.figure_id}\n图注：{plan.caption}\n\n请描述这张图像。"},
+                            {"type": "text", "text": f"Figure ID: {plan.figure_id}\nCaption: {plan.caption}\n\nDescribe this image."},
                             {"type": "image_url", "image_url": {"url": image_data_url}},
                         ],
                     },

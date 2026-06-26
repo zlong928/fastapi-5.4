@@ -13,7 +13,12 @@ from .job_run import JobRun
 from .oauth_account import OAuthAccount
 from .parse_job import ParseJob
 from .paper_table import PaperTable
+# DEPRECATED: ExtractionJob / ExtractionResult are legacy models kept for
+# backward compatibility. New extraction data is stored in
+# ExtractionRun / ExtractionItem / ExtractionEvidence.
 from .extraction import ExtractionJob, ExtractionResult
+from .extraction_v2 import ExtractionRun, ExtractionItem, ExtractionEvidence
+from .batch_extraction import BatchExtractionJob, BatchExtractionItem
 from .tag import DocumentTag, Tag
 from .task import Task
 from .user import User
@@ -40,6 +45,11 @@ __all__ = [
     "PaperTable",
     "ExtractionJob",
     "ExtractionResult",
+    "ExtractionRun",
+    "ExtractionItem",
+    "ExtractionEvidence",
+    "BatchExtractionJob",
+    "BatchExtractionItem",
     "Tag",
     "Task",
     "User",

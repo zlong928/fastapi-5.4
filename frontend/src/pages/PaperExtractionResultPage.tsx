@@ -1,16 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Braces, Check, CheckCircle2, Download, FileText, Image, Loader2, MapPin, RefreshCw, RotateCw, Table2, XCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { AlertCircle, AlertTriangle, ArrowLeft, Braces, Check, CheckCircle2, Download, FileText, Image, Loader2, MapPin, MousePointer2, Play, RefreshCw, RotateCw, Table2, X, XCircle } from "lucide-react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { API_BASE_URL, getPaper, getPaperAssetBlob, getPaperChartTypes, getStructuredExtraction, getToken, retryExtraction } from "@/lib/api";
+import { API_BASE_URL, getPaper, getPaperAssetBlob, getStructuredExtraction, getToken, retryExtraction, runPaperAssetCoordinatePreview } from "@/lib/api";
 import { formatChinaDateTime } from "@/lib/time";
-import { ChartTypeCatalogItem, ChartTypeRuntimeStats, CoordinatePreview, PaperFigureAssetItem, StructuredExtractionResponse, StructuredFigureResult, StructuredTableResult, StructuredTextResult } from "@/lib/types";
+import { CoordinatePreview, PaperFigureAssetItem, StructuredExtractionResponse, StructuredFigureResult, StructuredTableResult, StructuredTextResult } from "@/lib/types";
 import { ExtractionStatusBadge, fieldLabel, isExtractionBusy, shouldPollPaper } from "@/pages/paperShared";
 import { cn } from "@/lib/utils";
+
+/* ─── Data Point type (local, no ECharts dependency) ─── */
+type DataPoint = {
+  x_value: number;
+  y_value: number;
+  series_name?: string;
+  error_bar?: string;
+};
 
 /* ─── Helpers ─── */
 
@@ -41,16 +49,17 @@ function evidenceTypeLabel(type?: string | null) {
 }
 
 function sourceLabel(source?: string | null) {
+  if (!source || source === "page_visual_snapshot" || source === "fallback_snapshot" || source === "page_snapshot") return null;
   const labels: Record<string, string> = {
     extracted_image: "嵌入图片",
     rendered_figure_region: "图注裁剪",
-    page_visual_snapshot: "页面快照",
-    fallback_snapshot: "兜底快照",
+    mineru_chart: "MinerU 图表",
+    mineru_image: "MinerU 图片",
+    mineru_markdown: "MinerU 图片",
     table: "表格资产",
     figure: "图片资产",
-    page_snapshot: "页面快照",
   };
-  return source ? labels[source] ?? source : null;
+  return labels[source] ?? source;
 }
 
 function EvidenceMeta({ page, evidenceType, source, identifier }: { page?: number | null; evidenceType?: string | null; source?: string | null; identifier?: string | null }) {
@@ -90,7 +99,10 @@ function coordinatePreviewTone(status?: string | null) {
 }
 
 function downloadCoordinatePreview(preview: CoordinatePreview, figureLabel: string) {
-  if (!preview.csv_url) return;
+  if (!preview.csv_url) {
+    alert("暂无 CSV，请先生成数据提取");
+    return;
+  }
   const token = getToken();
   fetch(`${API_BASE_URL}${preview.csv_url}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
@@ -160,50 +172,6 @@ function SummaryCard({ icon: Icon, label, value, color }: { icon: typeof FileTex
       <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500"><Icon className={`h-3.5 w-3.5 ${color}`} />{label}</div>
       <p className="mt-1.5 text-xl font-bold text-slate-900">{value}</p>
     </div>
-  );
-}
-
-/* ─── Figure Result Card ─── */
-
-function FigureResultCard({ item, index, selected, onToggle, selectionMode }: { item: StructuredFigureResult; index: number; selected: boolean; onToggle: () => void; selectionMode: boolean }) {
-  return (
-    <article className={cn("overflow-hidden rounded-xl border bg-white shadow-sm transition", selected ? "border-blue-500 ring-2 ring-blue-500" : "border-slate-200")}>
-      {selectionMode && (
-        <div className="flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2">
-          <button
-            type="button"
-            onClick={onToggle}
-            className={cn(
-              "flex h-5 w-5 shrink-0 items-center justify-center rounded border transition",
-              selected ? "border-blue-600 bg-blue-600 text-white" : "border-slate-300 bg-white hover:border-slate-400"
-            )}
-          >
-            {selected ? <Check className="h-3.5 w-3.5" /> : null}
-          </button>
-          <span className="text-xs text-slate-500">图片 #{index + 1}</span>
-        </div>
-      )}
-      <FigureImage imageUrl={item.image_url} />
-      <div className="space-y-2.5 p-4">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-[11px] font-medium text-blue-600">{item.figure_id}</p>
-            <h3 className="mt-0.5 text-sm font-semibold text-slate-900">{fieldLabel(item.metric)}</h3>
-          </div>
-          <ConfidenceBadge confidence={item.confidence} />
-        </div>
-        {item.caption ? <p className="text-xs leading-5 text-slate-500">{item.caption}</p> : null}
-        <EvidenceMeta page={item.page} evidenceType={item.evidence_type} source={item.source} identifier={item.figure_id} />
-        <p className="whitespace-pre-wrap text-sm leading-6 text-slate-800">{item.value}</p>
-        {item.evidence ? (
-          <div className="rounded-lg bg-slate-50 p-2.5">
-            <p className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-400">证据来源</p>
-            <p className="line-clamp-3 text-xs leading-5 text-slate-600">{item.evidence}</p>
-          </div>
-        ) : null}
-        {item.notes ? <p className="text-xs italic text-slate-500">{item.notes}</p> : null}
-      </div>
-    </article>
   );
 }
 
@@ -302,127 +270,559 @@ function TextResultCard({ item, index, selected, onToggle, selectionMode }: { it
   );
 }
 
+/* ─── Chart Data Helpers ─── */
+
+const CSV_META_COLUMNS = new Set([
+  "indicator", "series_name", "x_unit", "y_unit",
+  "x_scale", "y_scale", "confidence", "quality_tags",
+  "panel_id", "curve_role",
+]);
+
+function csvToDataPoints(columns: string[], rows: Record<string, string>[]): DataPoint[] {
+  const dataCols = columns.filter((c) => !CSV_META_COLUMNS.has(c));
+  const xCol = dataCols[0] || columns[0];
+  const yCol = dataCols[1] || (columns.length >= 2 ? columns[1] : columns[0]);
+  const pts: DataPoint[] = [];
+  for (const row of rows) {
+    const x = Number(row[xCol]);
+    const y = Number(row[yCol]);
+    if (Number.isNaN(x) || Number.isNaN(y)) continue;
+    const pt: DataPoint = { x_value: x, y_value: y };
+    if (row.series_name) pt.series_name = row.series_name;
+    if (row.error_bar) pt.error_bar = row.error_bar;
+    pts.push(pt);
+  }
+  return pts;
+}
+
 /* ─── Result Body ─── */
 
-function PaperFiguresGallery({ figures }: { figures: PaperFigureAssetItem[] }) {
-  if (!figures.length) return null;
+const EXTRACTION_TARGETS = [
+  { id: "rheology_strain_sweep", label: "应变扫描", targets: ["G'", "G''", "strain", "modulus"] },
+  { id: "rheology_flow_curve", label: "流动曲线", targets: ["viscosity", "shear rate"] },
+  { id: "rheology_step_time_sweep", label: "时间扫描", targets: ["time", "viscosity", "shear rate"] },
+  { id: "line_plot", label: "折线/时序", targets: ["x", "y", "series"] },
+  { id: "bar_chart", label: "柱状图", targets: ["category", "value"] },
+  { id: "scatter_plot", label: "散点/拟合", targets: ["x", "y", "fit"] },
+];
+
+function parseCsvLine(line: string) {
+  const cells: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (character === '"' && line[index + 1] === '"') {
+      current += '"';
+      index += 1;
+    } else if (character === '"') {
+      quoted = !quoted;
+    } else if (character === "," && !quoted) {
+      cells.push(current);
+      current = "";
+    } else {
+      current += character;
+    }
+  }
+  cells.push(current);
+  return cells;
+}
+
+function useCoordinateCsv(preview?: CoordinatePreview | null) {
+  const [dataPoints, setDataPoints] = useState<DataPoint[]>([]);
+  const [xLabel, setXLabel] = useState("");
+  const [yLabel, setYLabel] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setDataPoints([]);
+    setXLabel("");
+    setYLabel("");
+    setError("");
+    if (!preview?.csv_url) return () => {};
+    setLoading(true);
+    const token = getToken();
+    fetch(`${API_BASE_URL}${preview.csv_url}`, { headers: token ? { Authorization: `Bearer ${token}` } : undefined })
+      .then((response) => {
+        if (!response.ok) throw new Error("CSV 读取失败");
+        return response.text();
+      })
+      .then((text) => {
+        if (cancelled) return;
+        const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+        if (!lines.length) return;
+        const columns = parseCsvLine(lines[0]);
+        const rows = lines.slice(1).map((line) => {
+          const cells = parseCsvLine(line);
+          return Object.fromEntries(columns.map((column, idx) => [column, cells[idx] ?? ""]));
+        });
+        // Detect data column labels for ChartDataViewer
+        const dataCols = columns.filter((c) => !CSV_META_COLUMNS.has(c));
+        if (dataCols.length >= 1) setXLabel(dataCols[0]);
+        if (dataCols.length >= 2) setYLabel(dataCols[1]);
+        setDataPoints(csvToDataPoints(columns, rows));
+      })
+      .catch((reason) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : "CSV 读取失败");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [preview?.csv_url]);
+
+  return { dataPoints, xLabel, yLabel, loading, error };
+}
+
+function DataTable({ dataPoints, xLabel, yLabel }: { dataPoints: DataPoint[]; xLabel?: string; yLabel?: string }) {
+  const hasSeries = dataPoints.some((p) => p.series_name);
+  const hasError = dataPoints.some((p) => p.error_bar);
+  const xh = xLabel || "x";
+  const yh = yLabel || "y";
+  return (
+    <div className="max-h-72 overflow-auto rounded-md border border-slate-200">
+      <table className="w-full text-xs">
+        <thead className="sticky top-0 bg-slate-50 text-left text-[11px] text-slate-500">
+          <tr>
+            {hasSeries ? <th className="border-b border-slate-100 px-3 py-2 font-medium">series</th> : null}
+            <th className="border-b border-slate-100 px-3 py-2 font-medium">{xh}</th>
+            <th className="border-b border-slate-100 px-3 py-2 font-medium">{yh}</th>
+            {hasError ? <th className="border-b border-slate-100 px-3 py-2 font-medium">error</th> : null}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {dataPoints.slice(0, 200).map((pt, i) => (
+            <tr key={i}>
+              {hasSeries ? <td className="max-w-[120px] truncate px-3 py-2 text-slate-600">{pt.series_name || "—"}</td> : null}
+              <td className="max-w-[180px] truncate px-3 py-2 font-mono text-slate-700">{pt.x_value}</td>
+              <td className="max-w-[180px] truncate px-3 py-2 font-mono text-slate-700">{pt.y_value}</td>
+              {hasError ? <td className="max-w-[120px] truncate px-3 py-2 text-slate-500">{pt.error_bar || ""}</td> : null}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {dataPoints.length > 200 ? <p className="px-3 py-1 text-[10px] text-slate-400">共 {dataPoints.length} 行，仅显示前 200 行</p> : null}
+    </div>
+  );
+}
+
+function CoordinateCsvPreview({ preview }: { preview?: CoordinatePreview | null }) {
+  const { dataPoints, xLabel: csvXLabel, yLabel: csvYLabel, loading, error } = useCoordinateCsv(preview);
+  if (!preview?.csv_url) {
+    return (
+      <div className="flex h-40 items-center justify-center rounded-md border border-dashed border-slate-200 text-sm text-slate-500">
+        暂无 CSV，点击生成后会在这里显示
+      </div>
+    );
+  }
+  if (loading) {
+    return <div className="flex h-40 items-center justify-center text-slate-400"><Loader2 className="h-4 w-4 animate-spin" /></div>;
+  }
+  if (error) {
+    return <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>;
+  }
+  if (!dataPoints.length) {
+    return <div className="flex h-40 items-center justify-center rounded-md border border-dashed border-slate-200 text-sm text-slate-500">CSV 为空</div>;
+  }
+  return (
+    <DataTable
+      dataPoints={dataPoints}
+      xLabel={csvXLabel || preview.semantic_columns?.[0]}
+      yLabel={csvYLabel || preview.semantic_columns?.[1]}
+    />
+  );
+}
+
+function FigureExtractionDialog({
+  figure,
+  onClose,
+  onGenerated,
+}: {
+  figure: PaperFigureAssetItem;
+  onClose: () => void;
+  onGenerated: () => void;
+}) {
+  const [chartType, setChartType] = useState(figure.coordinate_preview?.image_type || "auto");
+  const [targets, setTargets] = useState<string[]>(figure.coordinate_preview?.targets?.length ? figure.coordinate_preview.targets : []);
+  const [preview, setPreview] = useState<CoordinatePreview | null | undefined>(figure.coordinate_preview);
+  const runMutation = useMutation({
+    mutationFn: () => runPaperAssetCoordinatePreview(figure.id, {
+      chart_type: chartType || "auto",
+      targets,
+      sample_limit: 120,
+      force_regenerate: Boolean(preview?.csv_url),
+    }),
+    onSuccess: (nextPreview) => {
+      setPreview(nextPreview);
+      onGenerated();
+    },
+  });
+
+  function toggleTarget(target: string) {
+    setTargets((current) => current.includes(target) ? current.filter((item) => item !== target) : [...current, target]);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+      <div className="grid max-h-[92vh] w-full max-w-6xl overflow-hidden rounded-lg bg-white shadow-2xl lg:grid-cols-[420px_minmax(0,1fr)]">
+        <div className="min-h-0 overflow-auto border-r border-slate-200 bg-slate-50 p-4">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[11px] font-medium text-slate-500">图片资产 #{figure.id}</p>
+              <h2 className="truncate text-base font-semibold text-slate-950">{figure.figure_label}</h2>
+            </div>
+            <Button type="button" variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={onClose}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+          <FigureImage imageUrl={figure.image_url} />
+          <div className="mt-3 space-y-2">
+            <EvidenceMeta page={figure.page} evidenceType="figure" source={figure.source} identifier={figure.asset_type} />
+            {figure.caption ? <p className="text-xs leading-5 text-slate-600">{figure.caption}</p> : null}
+          </div>
+        </div>
+
+        <div className="min-h-0 overflow-auto p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-950">单图数据提取</h3>
+              <p className="mt-1 text-xs text-slate-500">选择图类型或字段后运行，只处理当前这张解析图片资产。</p>
+            </div>
+            {preview ? (
+              <Badge variant="outline" className={cn("border text-[10px]", coordinatePreviewTone(preview.status))}>
+                {coordinatePreviewStatusLabel(preview.status)}
+              </Badge>
+            ) : null}
+          </div>
+
+          <div className="mt-4 space-y-4">
+            <div>
+              <p className="mb-2 text-xs font-medium text-slate-600">可交互字段</p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setChartType("auto")}
+                  className={cn("rounded-md border px-2.5 py-1.5 text-xs transition", chartType === "auto" ? "border-slate-900 bg-slate-950 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300")}
+                >
+                  自动识别
+                </button>
+                {EXTRACTION_TARGETS.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      setChartType(item.id);
+                      setTargets((current) => Array.from(new Set([...current, ...item.targets])));
+                    }}
+                    className={cn("rounded-md border px-2.5 py-1.5 text-xs transition", chartType === item.id ? "border-blue-600 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300")}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <p className="mb-2 text-xs font-medium text-slate-600">提取目标</p>
+              <div className="flex flex-wrap gap-2">
+                {["x", "y", "series", "panel", "G'", "G''", "strain", "viscosity", "shear rate", "time", "category", "value"].map((target) => (
+                  <button
+                    key={target}
+                    type="button"
+                    onClick={() => toggleTarget(target)}
+                    className={cn("rounded-md border px-2.5 py-1.5 text-xs transition", targets.includes(target) ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300")}
+                  >
+                    {target}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="button" onClick={() => runMutation.mutate()} disabled={runMutation.isPending}>
+                {runMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                {preview?.csv_url ? "刷新数据提取" : "生成数据提取"}
+              </Button>
+              {preview?.csv_url ? (
+                <Button type="button" variant="outline" onClick={() => downloadCoordinatePreview(preview, figure.figure_label)}>
+                  <Download className="h-4 w-4" />
+                  下载 CSV
+                </Button>
+              ) : null}
+              {preview ? <span className="text-xs text-slate-500">{preview.row_count} 行 · {preview.image_type || "未分类"}</span> : null}
+            </div>
+
+            {runMutation.isPending ? (
+              <Alert>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <AlertDescription>正在处理图表数据提取，这可能需要 10-30 秒...</AlertDescription>
+              </Alert>
+            ) : null}
+
+            {runMutation.error ? (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{runMutation.error instanceof Error ? runMutation.error.message : "图片提取失败"}</AlertDescription>
+              </Alert>
+            ) : null}
+
+            {preview ? (
+              <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 sm:grid-cols-3">
+                <div><span className="text-slate-400">类型</span><br />{preview.image_type || "-"}</div>
+                <div><span className="text-slate-400">处理器</span><br />{preview.selected_extractor || "-"}</div>
+                <div><span className="text-slate-400">质量</span><br />{preview.data_quality || "-"}</div>
+              </div>
+            ) : null}
+
+            <CoordinateCsvPreview preview={preview} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PaperFigureCoordinateCard({ figure, onOpen, onGenerated }: { figure: PaperFigureAssetItem; onOpen: () => void; onGenerated: () => void }) {
+  const [localPreview, setLocalPreview] = useState<CoordinatePreview | null | undefined>(figure.coordinate_preview);
+  const runMutation = useMutation({
+    mutationFn: () => runPaperAssetCoordinatePreview(figure.id, {
+      chart_type: localPreview?.chart_type_hint || localPreview?.image_type || "auto",
+      targets: localPreview?.targets ?? [],
+      sample_limit: 120,
+      force_regenerate: Boolean(localPreview?.csv_url),
+    }),
+    onSuccess: (nextPreview) => {
+      setLocalPreview(nextPreview);
+      onGenerated();
+    },
+  });
+
+  useEffect(() => {
+    setLocalPreview(figure.coordinate_preview);
+  }, [figure.coordinate_preview, figure.id]);
+
+  function runPreview(event: MouseEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!runMutation.isPending) runMutation.mutate();
+  }
+
+  const preview = localPreview;
+  const canDownload = Boolean(preview?.csv_url);
+
+  return (
+    <article className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:border-blue-300 hover:ring-2 hover:ring-blue-100">
+      <button type="button" onClick={onOpen} className="block w-full text-left">
+        <FigureImage imageUrl={figure.image_url} />
+      </button>
+      <div className="p-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <p className="truncate text-xs font-medium text-slate-900">{figure.figure_label}</p>
+          <button
+            type="button"
+            onClick={onOpen}
+            className="rounded p-0.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+            aria-label={`查看 ${figure.figure_label}`}
+          >
+            <MousePointer2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        <p className="mt-0.5 text-[10px] text-slate-400">page {figure.page ?? "-"} · {figure.source || figure.asset_type}</p>
+        {figure.caption ? <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-500">{figure.caption}</p> : null}
+        {preview ? (
+          <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-2">
+            <div className="flex items-center justify-between gap-2">
+              <Badge variant="outline" className={cn("border text-[10px]", coordinatePreviewTone(preview.status))}>
+                {coordinatePreviewStatusLabel(preview.status)}
+              </Badge>
+              <span className="text-[10px] text-slate-400">CSV</span>
+            </div>
+            <p className="mt-1 text-[10px] leading-4 text-slate-500">
+              {preview.row_count} 行 · {preview.image_type || preview.data_quality || "未标注类型"}
+            </p>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-blue-200 bg-blue-50 px-2 py-2 text-[11px] font-medium text-blue-700 transition hover:border-blue-300 hover:bg-blue-100 disabled:cursor-wait disabled:opacity-70"
+            onClick={runPreview}
+            disabled={runMutation.isPending}
+          >
+            {runMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+            {runMutation.isPending ? "正在生成数据提取" : "点击生成数据提取"}
+          </button>
+        )}
+      </div>
+      {preview?.csv_url ? (
+        <div className="grid grid-cols-2 gap-2 border-t border-slate-100 p-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 px-2 text-[11px]"
+            onClick={runPreview}
+            disabled={runMutation.isPending}
+          >
+            {runMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            刷新数据提取
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 px-2 text-[11px]"
+            onClick={(event) => {
+              event.stopPropagation();
+              downloadCoordinatePreview(preview, figure.figure_label);
+            }}
+            disabled={!canDownload || runMutation.isPending}
+          >
+            <Download className="h-3.5 w-3.5" />
+            CSV
+          </Button>
+        </div>
+      ) : null}
+      {runMutation.error ? (
+        <p className="border-t border-red-100 bg-red-50 px-2 py-1.5 text-[10px] leading-4 text-red-700">
+          {runMutation.error instanceof Error ? runMutation.error.message : "图片提取失败"}
+        </p>
+      ) : null}
+    </article>
+  );
+}
+
+function PaperFiguresGallery({ figures, onGenerated }: { figures: PaperFigureAssetItem[]; onGenerated: () => void }) {
+  const [activeFigure, setActiveFigure] = useState<PaperFigureAssetItem | null>(null);
+  const coordinateFigures = figures.filter((figure) => figure.coordinate_capable);
+  if (!coordinateFigures.length) return null;
   return (
     <section>
       <div className="mb-3 flex items-center gap-2">
         <Image className="h-4 w-4 text-indigo-500" />
-        <h2 className="text-sm font-semibold text-slate-900">论文图片</h2>
-        <Badge variant="outline" className="text-[10px]">{figures.length}</Badge>
+        <h2 className="text-sm font-semibold text-slate-900">可提取坐标的图表</h2>
+        <Badge variant="outline" className="text-[10px]">{coordinateFigures.length}</Badge>
+        <span className="text-xs text-slate-500">点击单张图生成或查看 CSV</span>
       </div>
       <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-4">
-        {figures.map((fig) => (
-          <article key={fig.id} className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-            <FigureImage imageUrl={fig.image_url} />
-            <div className="p-2.5">
-              <p className="truncate text-xs font-medium text-slate-900">{fig.figure_label}</p>
-              <p className="mt-0.5 text-[10px] text-slate-400">page {fig.page ?? "-"} · {fig.source || fig.asset_type}</p>
-              {fig.caption ? <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-500">{fig.caption}</p> : null}
-              {fig.coordinate_preview ? (
-                <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <Badge variant="outline" className={cn("border text-[10px]", coordinatePreviewTone(fig.coordinate_preview.status))}>
-                      {coordinatePreviewStatusLabel(fig.coordinate_preview.status)}
-                    </Badge>
-                    {fig.coordinate_preview.csv_url ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-7 px-2 text-[11px]"
-                        onClick={() => downloadCoordinatePreview(fig.coordinate_preview!, fig.figure_label)}
-                      >
-                        <Download className="h-3.5 w-3.5" />
-                        CSV
-                      </Button>
-                    ) : null}
-                  </div>
-                  <p className="mt-1 text-[10px] leading-4 text-slate-500">
-                    {fig.coordinate_preview.row_count} 点 · {fig.coordinate_preview.data_quality || "未标注质量"}
-                  </p>
-                </div>
-              ) : null}
-            </div>
-          </article>
+        {coordinateFigures.map((fig) => (
+          <PaperFigureCoordinateCard
+            key={fig.id}
+            figure={fig}
+            onOpen={() => setActiveFigure(fig)}
+            onGenerated={onGenerated}
+          />
         ))}
       </div>
+      {activeFigure ? (
+        <FigureExtractionDialog
+          figure={activeFigure}
+          onClose={() => setActiveFigure(null)}
+          onGenerated={onGenerated}
+        />
+      ) : null}
     </section>
   );
 }
 
-function ChartTypeMatrix({ items, stats }: { items: ChartTypeCatalogItem[]; stats: ChartTypeRuntimeStats[] }) {
-  if (!items.length) return null;
-  const statsByType = new Map(stats.map((item) => [item.image_type, item]));
+/* ─── Figure Result Card ─── */
+
+function FigureResultCard({ figure }: { figure: StructuredFigureResult }) {
+  // Try CSV fetch first (semantic headers from write_coordinate_csv format)
+  const [csvDataPoints, setCsvDataPoints] = useState<DataPoint[]>([]);
+  const [csvCols, setCsvCols] = useState<{ x: string; y: string }>({ x: "x", y: "y" });
+  const [csvLoading, setCsvLoading] = useState(false);
+
+  useEffect(() => {
+    if (!figure.csv_url) return;
+    let cancelled = false;
+    setCsvLoading(true);
+    const token = getToken();
+    fetch(`${API_BASE_URL}${figure.csv_url}`, { headers: token ? { Authorization: `Bearer ${token}` } : undefined })
+      .then((r) => { if (!r.ok) throw new Error("CSV fetch failed"); return r.text(); })
+      .then((text) => {
+        if (cancelled) return;
+        const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+        if (!lines.length) return;
+        const cols = parseCsvLine(lines[0]);
+        const dataCols = cols.filter((c) => !CSV_META_COLUMNS.has(c));
+        const xc = dataCols[0] || cols[0];
+        const yc = dataCols[1] || (cols.length >= 2 ? cols[1] : cols[0]);
+        setCsvCols({ x: xc, y: yc });
+        const rows = lines.slice(1).map((l) => {
+          const cells = parseCsvLine(l);
+          return Object.fromEntries(cols.map((col, i) => [col, cells[i] ?? ""]));
+        });
+        setCsvDataPoints(csvToDataPoints(cols, rows));
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setCsvLoading(false); });
+    return () => { cancelled = true; };
+  }, [figure.csv_url]);
+
+  // Fallback: parse data_points from JSON API response
+  const jsonDataPoints: DataPoint[] = (() => {
+    const raw = figure.data_points;
+    if (!Array.isArray(raw) || raw.length === 0) return [];
+    const pts: DataPoint[] = [];
+    for (const p of raw) {
+      if (!p || typeof p !== "object") continue;
+      const r = p as Record<string, string | number>;
+      const x = typeof r.x_value === "number" ? r.x_value : Number(r.x_value);
+      const y = typeof r.y_value === "number" ? r.y_value : Number(r.y_value);
+      if (!Number.isNaN(x) && !Number.isNaN(y)) {
+        pts.push({
+          x_value: x,
+          y_value: y,
+          series_name: String(r.series_name ?? r.series ?? ""),
+          error_bar: String(r.error_bar ?? ""),
+        });
+      }
+    }
+    return pts;
+  })();
+
+  // Use CSV data when available, fall back to JSON
+  const dataPoints = csvDataPoints.length > 0 ? csvDataPoints : jsonDataPoints;
+  const xLabel = csvCols.x || figure.x_axis_label || figure.image_type || "x";
+  const yLabel = csvCols.y || figure.y_axis_label || figure.metric || "y";
+
   return (
-    <section>
-      <div className="mb-3 flex items-center gap-2">
-        <Braces className="h-4 w-4 text-slate-500" />
-        <h2 className="text-sm font-semibold text-slate-900">图片处理矩阵</h2>
-        <Badge variant="outline" className="text-[10px]">{items.length}</Badge>
-      </div>
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="overflow-auto">
-          <table className="w-full min-w-[760px] text-xs">
-            <thead className="bg-slate-50 text-left text-[11px] text-slate-500">
-              <tr>
-                <th className="px-3 py-2 font-medium">类型</th>
-                <th className="px-3 py-2 font-medium">处理链路</th>
-                <th className="px-3 py-2 font-medium">CSV</th>
-                <th className="px-3 py-2 font-medium">复核</th>
-                <th className="px-3 py-2 font-medium">当前结果</th>
-                <th className="px-3 py-2 font-medium">典型内容</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {items.map((item) => (
-                <tr key={item.image_type}>
-                  {(() => {
-                    const stat = statsByType.get(item.image_type);
-                    return (
-                      <>
-                  <td className="px-3 py-2">
-                    <p className="font-medium text-slate-900">{item.label}</p>
-                    <p className="mt-0.5 font-mono text-[10px] text-slate-400">{item.image_type}</p>
-                  </td>
-                  <td className="px-3 py-2 font-mono text-[11px] text-slate-600">{item.processing_chain}</td>
-                  <td className="px-3 py-2">
-                    <Badge variant="outline" className={cn("border text-[10px]", item.suitable_for_csv ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-50 text-slate-500")}>
-                      {item.suitable_for_csv ? "可导出" : "不适合"}
-                    </Badge>
-                  </td>
-                  <td className="px-3 py-2">
-                    <Badge variant="outline" className={cn("border text-[10px]", item.requires_review ? "border-amber-200 bg-amber-50 text-amber-700" : "border-slate-200 bg-white text-slate-500")}>
-                      {item.requires_review ? "需要" : "低"}
-                    </Badge>
-                  </td>
-                  <td className="px-3 py-2">
-                    {stat && stat.total > 0 ? (
-                      <div className="flex flex-wrap gap-1">
-                        <Badge variant="outline" className="border-slate-200 bg-slate-50 text-[10px] text-slate-600">{stat.total} 图</Badge>
-                        {stat.accepted ? <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-[10px] text-emerald-700">{stat.accepted} 已标定</Badge> : null}
-                        {stat.review_required ? <Badge variant="outline" className="border-amber-200 bg-amber-50 text-[10px] text-amber-700">{stat.review_required} 复核</Badge> : null}
-                        {stat.skipped ? <Badge variant="outline" className="border-slate-200 bg-white text-[10px] text-slate-500">{stat.skipped} 跳过</Badge> : null}
-                        {stat.failed ? <Badge variant="outline" className="border-red-200 bg-red-50 text-[10px] text-red-600">{stat.failed} 失败</Badge> : null}
-                        {stat.row_count ? <Badge variant="outline" className="border-blue-200 bg-blue-50 text-[10px] text-blue-700">{stat.row_count} 点</Badge> : null}
-                      </div>
-                    ) : (
-                      <span className="text-[11px] text-slate-400">-</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-slate-500">{item.typical_content.slice(0, 3).join(" · ")}</td>
-                      </>
-                    );
-                  })()}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+    <article className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-col gap-3 p-4 sm:flex-row">
+        {figure.image_url ? (
+          <div className="w-full shrink-0 sm:w-48">
+            <FigureImage imageUrl={figure.image_url} />
+          </div>
+        ) : null}
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              {figure.figure_id ? <p className="text-[11px] font-medium text-indigo-600">{figure.figure_id}</p> : null}
+              <h3 className="text-sm font-semibold text-slate-900">{fieldLabel(figure.metric)}</h3>
+              <p className="mt-0.5 text-xs text-slate-500">{figure.value}</p>
+            </div>
+            <ConfidenceBadge confidence={figure.confidence} />
+          </div>
+          <EvidenceMeta page={figure.page} evidenceType={figure.evidence_type} source={figure.source} identifier={figure.figure_id} />
+          {figure.caption ? <p className="line-clamp-2 text-xs leading-5 text-slate-500">{figure.caption}</p> : null}
+
+          {csvLoading ? (
+            <div className="flex h-24 items-center justify-center text-slate-400"><Loader2 className="h-4 w-4 animate-spin" /></div>
+          ) : dataPoints.length > 0 ? (
+            <DataTable dataPoints={dataPoints} xLabel={xLabel} yLabel={yLabel} />
+          ) : figure.evidence ? (
+            <div className="rounded-lg bg-slate-50 p-2.5">
+              <p className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-400">来源</p>
+              <p className="text-xs leading-5 text-slate-600">{figure.evidence}</p>
+            </div>
+          ) : null}
         </div>
       </div>
-    </section>
+    </article>
   );
 }
 
@@ -430,15 +830,15 @@ function ResultBody({ data, jobId }: { data: StructuredExtractionResponse; jobId
   const [showRaw, setShowRaw] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedResultIds, setSelectedResultIds] = useState<number[]>([]);
-  const chartTypesQuery = useQuery({ queryKey: ["paper-chart-types"], queryFn: getPaperChartTypes });
+  const queryClient = useQueryClient();
 
   const hasFigures = data.figure_results.length > 0;
   const hasTables = data.table_results.length > 0;
   const hasText = data.text_results.length > 0;
-  const hasPaperFigures = (data.paper_figures ?? []).length > 0;
+  const hasPaperFigures = (data.paper_figures ?? []).some((figure) => figure.coordinate_capable);
 
   const totalSelected = selectedResultIds.length;
-  const totalItems = data.figure_results.length + data.table_results.length + data.text_results.length;
+  const totalItems = data.table_results.length + data.text_results.length;
 
   function toggleResult(resultId: number) {
     setSelectedResultIds(prev => prev.includes(resultId) ? prev.filter(id => id !== resultId) : [...prev, resultId]);
@@ -446,7 +846,6 @@ function ResultBody({ data, jobId }: { data: StructuredExtractionResponse; jobId
 
   function selectAll() {
     const allIds = [
-      ...data.figure_results.map(r => r.id),
       ...data.table_results.map(r => r.id),
       ...data.text_results.map(r => r.id)
     ];
@@ -538,30 +937,26 @@ function ResultBody({ data, jobId }: { data: StructuredExtractionResponse; jobId
 
       <SummaryBar data={data} />
 
-      <ChartTypeMatrix items={chartTypesQuery.data ?? []} stats={data.chart_type_stats ?? []} />
-
-      {hasPaperFigures ? <PaperFiguresGallery figures={data.paper_figures} /> : null}
+      {hasPaperFigures ? (
+        <PaperFiguresGallery
+          figures={data.paper_figures}
+          onGenerated={() => queryClient.invalidateQueries({ queryKey: ["extraction-structured", jobId] })}
+        />
+      ) : null}
 
       {hasFigures ? (
         <section>
           <div className="mb-3 flex items-center gap-2">
-            <Image className="h-4 w-4 text-blue-500" />
-            <h2 className="text-sm font-semibold text-slate-900">图片/图表分析结果</h2>
+            <Image className="h-4 w-4 text-indigo-500" />
+            <h2 className="text-sm font-semibold text-slate-900">图表提取</h2>
             <Badge variant="outline" className="text-[10px]">{data.figure_results.length}</Badge>
-            {selectionMode && selectedResultIds.filter(id => data.figure_results.some(r => r.id === id)).length > 0 && (
-              <Badge variant="outline" className="bg-blue-50 text-blue-600 text-[10px]">已选 {selectedResultIds.filter(id => data.figure_results.some(r => r.id === id)).length}</Badge>
+            {selectionMode && selectedResultIds.filter(id => data.figure_results.some(f => f.id === id)).length > 0 && (
+              <Badge variant="outline" className="bg-indigo-50 text-indigo-600 text-[10px]">已选 {selectedResultIds.filter(id => data.figure_results.some(f => f.id === id)).length}</Badge>
             )}
           </div>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {data.figure_results.map((item, i) => (
-              <FigureResultCard
-                key={item.id}
-                item={item}
-                index={i}
-                selected={selectedResultIds.includes(item.id)}
-                onToggle={() => toggleResult(item.id)}
-                selectionMode={selectionMode}
-              />
+          <div className="grid gap-3 lg:grid-cols-2">
+            {data.figure_results.map((fig) => (
+              <FigureResultCard key={fig.id} figure={fig} />
             ))}
           </div>
         </section>

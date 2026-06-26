@@ -77,7 +77,7 @@ export function canExtractPaperListItem(paper?: PaperListItem | null) {
   if (!paper) return false;
   if (paper.status === "done" || paper.status === "parsed" || paper.status === "completed") return true;
   const counts = paper.asset_counts ?? {};
-  return Boolean((counts.table ?? 0) || (counts.figure ?? 0) || (counts.page_snapshot ?? 0));
+  return Boolean((counts.table ?? 0) || (counts.figure ?? 0));
 }
 
 export function shouldPollPaper(paper?: PaperDetail | null) {

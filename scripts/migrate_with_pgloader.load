@@ -1,0 +1,20 @@
+LOAD DATABASE
+     FROM sqlite:///data/app.db
+     INTO postgresql://fastapi_user:fastapi_pass@localhost:5432/fastapi_app
+
+WITH include no drop, create tables, create indexes, reset sequences,
+     disable triggers,
+     batch rows = 1000,
+     batch concurrency = 1,
+     multiple readers per thread,
+     prefetch rows = 100
+
+SET PostgreSQL PARAMETERS
+     maintenance_work_mem = '128MB',
+     work_mem = '64MB'
+
+CAST type datetime to timestamptz drop default drop not null using zero-dates-to-null,
+     type date to timestamptz drop default drop not null using zero-dates-to-null;
+
+BEFORE LOAD DO
+     $$ CREATE EXTENSION IF NOT EXISTS pgcrypto; $$;

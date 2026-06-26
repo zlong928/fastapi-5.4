@@ -11,6 +11,8 @@ import {
   ChatStreamSession,
   ChartRecipeCatalogItem,
   ChartTypeCatalogItem,
+  CoordinatePreview,
+  CoordinatePreviewRunRequest,
   BookmarkCreate,
   BookmarkCreateResponse,
   ChatStreamSource,
@@ -34,6 +36,7 @@ import {
   ExtractionJobListItem,
   ExtractionMetrics,
   HealthResponse,
+  ImageBatchExtractionJob,
   LoginRequest,
   MessageResponse,
   PaginatedTasksResponse,
@@ -42,7 +45,6 @@ import {
   PaperAskResponse,
   PaperListItem,
   PaperStatistics,
-  PaperUploadResponse,
   PasswordForgotRequest,
   PasswordResetRequest,
   RegisterRequest,
@@ -70,6 +72,18 @@ const resolvedApiBaseUrl = import.meta.env.PROD && (!rawApiBaseUrl || isLocalApi
 export const API_BASE_URL = resolvedApiBaseUrl.replace(/\/+$/, "");
 const TOKEN_KEY = "file_processing_token";
 
+// Custom error types for better error handling
+export class APIError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public isNetworkError: boolean = false
+  ) {
+    super(message);
+    this.name = "APIError";
+  }
+}
+
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY);
 }
@@ -86,26 +100,40 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
   const headers = new Headers(init?.body instanceof FormData ? init.headers : { "Content-Type": "application/json", ...init?.headers });
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
 
-  if (!response.ok) {
-    let message = `Request failed with ${response.status}`;
-    try {
-      const payload = (await response.json()) as { detail?: string };
-      if (payload.detail) message = payload.detail;
-    } catch {
-      message = response.statusText || message;
-    }
-    if (response.status === 401) {
-      clearToken();
-      if (!window.location.pathname.startsWith("/login") && !window.location.pathname.startsWith("/register") && !window.location.pathname.startsWith("/forgot-password") && !window.location.pathname.startsWith("/reset-password")) {
-        window.location.assign("/login");
+  try {
+    const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
+
+    if (!response.ok) {
+      let message = `Request failed with ${response.status}`;
+      try {
+        const payload = (await response.json()) as { detail?: string };
+        if (payload.detail) message = payload.detail;
+      } catch {
+        message = response.statusText || message;
       }
+      if (response.status === 401) {
+        clearToken();
+        if (!window.location.pathname.startsWith("/login") && !window.location.pathname.startsWith("/register") && !window.location.pathname.startsWith("/forgot-password") && !window.location.pathname.startsWith("/reset-password")) {
+          window.location.assign("/login");
+        }
+      }
+      throw new APIError(message, response.status, false);
     }
-    throw new Error(message);
-  }
 
-  return response.json() as Promise<T>;
+    return response.json() as Promise<T>;
+  } catch (error) {
+    // Network errors (e.g., connection refused, timeout)
+    if (error instanceof TypeError && error.message.includes("fetch")) {
+      throw new APIError("网络连接失败，请检查网络后重试", 0, true);
+    }
+    // Re-throw APIError as-is
+    if (error instanceof APIError) {
+      throw error;
+    }
+    // Unknown errors
+    throw new APIError(`请求失败: ${error}`, 0, false);
+  }
 }
 
 function authHeaders() {
@@ -209,20 +237,28 @@ export async function uploadDocument(file: File, title?: string, processingMode:
   return uploadForm<DocumentUploadResponse>("/documents/upload", formData, onProgress);
 }
 
-export async function uploadPaper(file: File, onProgress?: (progress: number) => void): Promise<PaperUploadResponse> {
-  const formData = new FormData();
-  formData.append("file", file);
-  return uploadForm<PaperUploadResponse>("/papers/upload", formData, onProgress);
-}
-
 export function getPapers(): Promise<PaperListItem[]> { return request<PaperListItem[]>("/papers"); }
 export function getPaper(paperId: number): Promise<PaperDetail> { return request<PaperDetail>(`/papers/${paperId}`); }
 export function parsePaper(paperId: number): Promise<PaperDetail> { return request<PaperDetail>(`/papers/${paperId}/parse`, { method: "POST" }); }
 export function deletePaper(paperId: number): Promise<MessageResponse> { return request<MessageResponse>(`/papers/${paperId}`, { method: "DELETE" }); }
+export function batchExtractImages(paperId: number): Promise<ImageBatchExtractionJob> {
+  return request<ImageBatchExtractionJob>(`/papers/${paperId}/batch-extract-images`, { method: "POST" });
+}
+export function getBatchExtractionJobStatus(paperId: number, jobId: number): Promise<ImageBatchExtractionJob | null> {
+  return request<ImageBatchExtractionJob | null>(`/papers/${paperId}/batch-extract-jobs/${jobId}`);
+}
+export function getLatestActiveBatchJob(paperId: number): Promise<ImageBatchExtractionJob | null> {
+  return request<ImageBatchExtractionJob | null>(`/papers/${paperId}/batch-extract-jobs/latest-active`);
+}
 export function getPaperStatistics(): Promise<PaperStatistics> { return request<PaperStatistics>("/papers/statistics"); }
 export function getPaperChartTypes(): Promise<ChartTypeCatalogItem[]> { return request<ChartTypeCatalogItem[]>("/papers/chart-types"); }
 export function getPaperChartRecipes(): Promise<ChartRecipeCatalogItem[]> { return request<ChartRecipeCatalogItem[]>("/papers/chart-recipes"); }
-export function runExtraction(paperId: number, query: string): Promise<ExtractionJob> { return request<ExtractionJob>("/extractions/run", { method: "POST", body: JSON.stringify({ paperId, query }) }); }
+export function runPaperAssetCoordinatePreview(assetId: number, payload: CoordinatePreviewRunRequest): Promise<CoordinatePreview> {
+  return request<CoordinatePreview>(`/papers/assets/${assetId}/coordinate-preview`, { method: "POST", body: JSON.stringify(payload) });
+}
+export function runExtraction(paperId: number, query: string, assetId?: number): Promise<ExtractionJob> {
+  return request<ExtractionJob>("/extractions/run", { method: "POST", body: JSON.stringify({ paperId, query, assetId }) });
+}
 export function batchRunExtraction(paperIds: number[], query: string): Promise<BatchExtractionResult[]> { return request<BatchExtractionResult[]>("/extractions/batch", { method: "POST", body: JSON.stringify({ paper_ids: paperIds, query }) }); }
 export function retryExtraction(jobId: number): Promise<ExtractionJob> { return request<ExtractionJob>(`/extractions/${jobId}/retry`, { method: "POST" }); }
 export function getExtraction(jobId: number): Promise<ExtractionJob> { return request<ExtractionJob>(`/extractions/${jobId}`); }
@@ -293,8 +329,11 @@ export function searchDocumentChunks(query: string, limit: number = 20, document
 export function reEmbedDocument(documentId: number): Promise<{ document_id: number; chunks_embedded: number; message: string }> { return request<{ document_id: number; chunks_embedded: number; message: string }>(`/documents/${documentId}/re-embed`, { method: "POST" }); }
 export function reEmbedAllDocuments(): Promise<{ user_id: number; documents_processed: number; chunks_embedded: number }> { return request<{ user_id: number; documents_processed: number; chunks_embedded: number }>("/documents/re-embed-all", { method: "POST" }); }
 export function getDocumentChunks(documentId: number): Promise<DocumentChunk[]> { return request<DocumentChunk[]>(`/documents/${documentId}/chunks`); }
-export function getDocumentAssets(documentId: number, assetType?: string): Promise<DocumentAsset[]> {
-  const query = assetType ? `?asset_type=${encodeURIComponent(assetType)}` : "";
+export function getDocumentAssets(documentId: number, assetType?: string, view?: "raw" | "paper_visuals"): Promise<DocumentAsset[]> {
+  const searchParams = new URLSearchParams();
+  if (assetType) searchParams.set("asset_type", assetType);
+  if (view) searchParams.set("view", view);
+  const query = searchParams.toString() ? `?${searchParams.toString()}` : "";
   return request<DocumentAsset[]>(`/documents/${documentId}/assets${query}`);
 }
 export function getDocumentClaims(documentId: number): Promise<DocumentClaim[]> { return request<DocumentClaim[]>(`/documents/${documentId}/claims`); }

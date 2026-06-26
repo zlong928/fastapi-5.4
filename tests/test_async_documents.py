@@ -1253,7 +1253,7 @@ def test_pipeline_timeout_marks_document_failed(db_session_factory, db, storage,
     db.refresh(job)
     pipeline = DocumentParsePipeline(session_factory=db_session_factory, file_storage=storage)
 
-    def slow_extract(_document_id):
+    def slow_extract(_document_id, **_kwargs):
         raise TimeoutError("parse deadline exceeded")
 
     monkeypatch.setattr(pipeline, "_extract_document", slow_extract)
@@ -1267,6 +1267,54 @@ def test_pipeline_timeout_marks_document_failed(db_session_factory, db, storage,
     assert document.fail_reason == "文件解析超时"
     assert job.status == "failed"
     assert job.error_message == "文件解析超时"
+
+
+def test_required_mineru_failure_preserves_existing_outputs(db_session_factory, db, storage, user, monkeypatch):
+    document = create_document(db, storage, user, status="done", filename="legacy.pdf", content=PDF_BYTES)
+    document.source_type = "pdf"
+    document.mime_type = "application/pdf"
+    legacy_asset = DocumentAsset(
+        document_id=document.id,
+        asset_type="figure",
+        page_number=3,
+        file_path="1/paper_agent/legacy.png",
+        mime_type="image/png",
+        metadata_json=json.dumps({"source": "rendered_figure_region", "figure_label": "Figure 1"}),
+    )
+    chunk = DocumentChunk(
+        document_id=document.id,
+        chunk_index=0,
+        chunk_type="body",
+        text="legacy body",
+        cleaned_text="legacy body",
+    )
+    job = JobRun(kind="document_parse", document_id=document.id, user_id=user.id, status="queued")
+    db.add_all([legacy_asset, chunk, job])
+    db.commit()
+    db.refresh(job)
+    pipeline = DocumentParsePipeline(session_factory=db_session_factory, file_storage=storage)
+
+    class FailingMinerU:
+        def parse_pdf_file(self, *_args, **_kwargs):
+            raise RuntimeError("mineru unavailable")
+
+    monkeypatch.setattr("app.services.document_parse_pipeline.MinerUParserService", lambda: FailingMinerU())
+
+    result = pipeline.run(
+        document.id,
+        parse_job_id=job.id,
+        require_mineru=True,
+        preserve_outputs_on_failure=True,
+    )
+
+    db.refresh(document)
+    db.refresh(job)
+    assert result.status == "done"
+    assert document.status == "done"
+    assert document.fail_reason == "MinerU 解析失败：mineru unavailable"
+    assert job.status == "failed"
+    assert db.query(DocumentAsset).filter(DocumentAsset.document_id == document.id).count() == 1
+    assert db.query(DocumentChunk).filter(DocumentChunk.document_id == document.id).count() == 1
 
 
 def test_pipeline_missing_source_file_marks_document_failed(db_session_factory, db, storage, user):

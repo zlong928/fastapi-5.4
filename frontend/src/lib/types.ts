@@ -613,21 +613,18 @@ export interface PaperListItem {
   updated_at: string;
 }
 
-export interface PaperUploadResponse {
-  id: number;
-  title: string;
-  status: DocumentStatus;
-}
-
 export interface PaperFigure {
   id: number;
   paper_id: number;
   asset_type: "figure" | "page_snapshot" | string;
   image_path: string;
+  image_url?: string | null;
+  thumbnail_url?: string | null;
   figure_label: string;
   caption: string;
   page?: number | null;
   source?: string | null;
+  evidence_type?: string | null;
   fallback: boolean;
   visual_role?: string | null;
   notes?: string | null;
@@ -638,6 +635,7 @@ export interface PaperFigure {
 }
 
 export interface CoordinatePreview {
+  image_type: string;
   status: string;
   row_count: number;
   data_quality: string;
@@ -647,6 +645,25 @@ export interface CoordinatePreview {
   summary_csv_path?: string | null;
   quality_audit_csv_path?: string | null;
   run_manifest_path?: string | null;
+  selected_extractor?: string;
+  reason?: string;
+  chart_type_hint?: string;
+  targets?: string[];
+  semantic_columns?: string[];
+  semantic_binding?: string;
+  review_status?: string;
+  review_notes?: string;
+  extraction_method?: string;
+  text_evidence_refs?: string[];
+  request_id?: string;
+  triggered_at?: string | null;
+}
+
+export interface CoordinatePreviewRunRequest {
+  chart_type: string;
+  targets: string[];
+  sample_limit: number;
+  force_regenerate?: boolean;
 }
 
 export interface PaperTable {
@@ -694,6 +711,7 @@ export interface ExtractionJob {
   created_at: string;
   updated_at: string;
   results: ExtractionResult[];
+  progress?: ExtractionJobProgress | null;
 }
 
 export interface ExtractionJobListItem {
@@ -835,6 +853,22 @@ export interface BatchExtractionResult {
   error?: string | null;
 }
 
+export interface ImageBatchExtractionJob {
+  message?: string;
+  job_id: number;
+  total: number;
+  processed: number;
+  success: number;
+  skipped: number;
+  failed: number;
+  status: string;
+  queue_name?: string;
+  error_message?: string | null;
+  created_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
 export interface StructuredFigureResult {
   id: number;
   figure_id?: string | null;
@@ -848,6 +882,19 @@ export interface StructuredFigureResult {
   evidence: string;
   confidence?: string | null;
   notes?: string | null;
+  image_type?: string | null;
+  review_status?: string | null;
+  extraction_method?: string | null;
+  data_points?: Record<string, unknown>[];
+  text_evidence_refs?: string[];
+  x_axis_label?: string | null;
+  x_axis_unit?: string | null;
+  x_axis_scale?: string | null;
+  y_axis_label?: string | null;
+  y_axis_unit?: string | null;
+  y_axis_scale?: string | null;
+  series_name?: string | null;
+  csv_url?: string | null;
 }
 
 export interface StructuredTableResult {
@@ -916,6 +963,8 @@ export interface PaperFigureAssetItem {
   image_url?: string | null;
   page?: number | null;
   source?: string | null;
+  evidence_type?: string;
   asset_type: string;
+  coordinate_capable?: boolean;
   coordinate_preview?: CoordinatePreview | null;
 }

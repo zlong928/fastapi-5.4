@@ -77,5 +77,5 @@ def openai_chat_with_browser(messages: list[dict[str, str]], model: str, api_key
         if driver:
             try:
                 driver.quit()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to quit browser driver: %s", e)

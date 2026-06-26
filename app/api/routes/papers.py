@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import csv
+import io
 import json
 import re
+import shutil
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -10,12 +14,15 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.config import BATCH_EXTRACTION_QUEUE_NAME
 from app.core.time import app_now
 from app.db.session import get_db
 from app.models import Document, DocumentAsset, DocumentClaim, DocumentEvent, ExtractionJob, ExtractionResult, PaperTable, User
 from app.schemas.paper import (
     ChartRecipeCatalogItem,
     ChartTypeCatalogItem,
+    CoordinatePreviewRead,
+    CoordinatePreviewRunRequest,
     PaperAskEvidence,
     PaperAskRequest,
     PaperAskResponse,
@@ -24,14 +31,15 @@ from app.schemas.paper import (
     PaperListItem,
     PaperStatisticsResponse,
     PaperTableRead,
-    PaperUploadResponse,
 )
 from app.services.chart_extraction import CHART_TYPE_CATALOG, chart_recipe_catalog
 from app.services.export_service import ExportService
 from app.services.file_storage import FileStorageService
 from app.services.paper_demo_service import PaperDemoService
-from app.services.paper.coordinate_preview import coordinate_preview_read
+from app.services.paper.coordinate_preview import coordinate_preview_read, is_coordinate_asset, run_coordinate_preview_for_asset
 from app.services.paper.evidence import asset_bbox, asset_image_url, asset_metadata, normalize_evidence_type
+from app.services.paper.visual_assets import display_visual_assets
+from app.utils.json import json_loads_object_or_empty
 
 router = APIRouter(prefix="/papers", tags=["papers"])
 PAPER_ASSET_TYPES = ("figure", "page_snapshot")
@@ -187,28 +195,11 @@ def _progress_label(paper: Document) -> str:
 
 
 def _json_metadata(value: str | None) -> dict:
-    if not value:
-        return {}
-    try:
-        parsed = json.loads(value)
-    except Exception:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+    return json_loads_object_or_empty(value)
 
 
 def _should_display_figure(asset: DocumentAsset) -> bool:
-    if asset.asset_type == "figure":
-        return True
-    if asset.asset_type != "page_snapshot":
-        return False
-    metadata = _json_metadata(asset.metadata_json)
-    source = metadata.get("source", "")
-    visual_role = metadata.get("visual_role", "")
-    if source == "fallback_snapshot" or visual_role == "fallback_snapshot":
-        return False
-    if source == "page_visual_snapshot" or visual_role == "page_evidence":
-        return True
-    return False
+    return asset in display_visual_assets([asset])
 
 
 def _detail(db: Session, paper: Document) -> PaperDetailResponse:
@@ -218,7 +209,7 @@ def _detail(db: Session, paper: Document) -> PaperDetailResponse:
         .order_by(DocumentAsset.created_at.asc(), DocumentAsset.id.asc())
         .all()
     )
-    figures = [asset for asset in all_visual_assets if _should_display_figure(asset)]
+    figures = display_visual_assets(all_visual_assets)
     table_assets = (
         db.query(DocumentAsset)
         .filter(DocumentAsset.document_id == paper.id, DocumentAsset.asset_type == "table")
@@ -359,17 +350,22 @@ async def ask_papers(payload: PaperAskRequest, current_user: User = Depends(get_
     return PaperAskResponse(answer=answer, evidence=evidence, uncertainties=uncertainties)
 
 
-@router.post("/upload", response_model=PaperUploadResponse, status_code=status.HTTP_410_GONE)
-async def upload_paper() -> PaperUploadResponse:
-    raise HTTPException(status_code=status.HTTP_410_GONE, detail="请使用 /documents/upload 上传 PDF，论文页只是 PDF documents 的视图层。")
-
-
 @router.get("", response_model=list[PaperListItem])
-async def list_papers(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[PaperListItem]:
+async def list_papers(
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of papers to return"),
+    offset: int = Query(0, ge=0, description="Number of papers to skip"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> list[PaperListItem]:
+    from sqlalchemy.orm import selectinload
+
     papers = (
         db.query(Document)
+        .options(selectinload(Document.assets))  # Eager load assets to avoid N+1
         .filter(Document.user_id == current_user.id, Document.source_type == "pdf", Document.is_deleted == False)
         .order_by(Document.created_at.desc())
+        .limit(limit)
+        .offset(offset)
         .all()
     )
     return [
@@ -496,7 +492,7 @@ async def get_paper_asset(asset_id: int, current_user: User = Depends(get_curren
 
 
 @router.get("/assets/{asset_id}/coordinate-preview.csv")
-async def get_paper_coordinate_preview(asset_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> FileResponse:
+async def get_paper_coordinate_preview(asset_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> Response:
     asset = db.get(DocumentAsset, asset_id)
     if asset is None or asset.asset_type not in PAPER_ASSET_TYPES:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Coordinate preview not found.")
@@ -513,11 +509,80 @@ async def get_paper_coordinate_preview(asset_id: int, current_user: User = Depen
     path = FileStorageService().get_file_path(csv_path)
     if not path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Coordinate preview file not found.")
-    return FileResponse(
-        path=path,
+    body = _user_coordinate_csv(path)
+    return Response(
+        content=body,
         media_type="text/csv; charset=utf-8",
-        filename=f"asset-{asset.id}-coordinate-preview.csv",
+        headers={"Content-Disposition": f'attachment; filename="asset-{asset.id}-coordinate-preview.csv"'},
     )
+
+
+def _user_coordinate_csv(path) -> str:
+    with path.open(newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+
+    if not rows:
+        return ""
+
+    # Use the actual CSV columns from the file (which includes semantic column names)
+    all_fields = list(rows[0].keys()) if rows else []
+
+    # Prioritize context fields at the beginning
+    context_fields = [
+        field
+        for field in ("indicator", "panel_id", "series_name", "curve_role")
+        if field in all_fields and any(str(row.get(field) or "").strip() for row in rows)
+    ]
+
+    # Then include all other columns in their original order
+    remaining_fields = [field for field in all_fields if field not in context_fields]
+    fields = context_fields + remaining_fields
+
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=fields)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({field: row.get(field, "") for field in fields})
+    return buffer.getvalue()
+
+
+@router.post("/assets/{asset_id}/coordinate-preview", response_model=CoordinatePreviewRead)
+async def run_paper_coordinate_preview(
+    asset_id: int,
+    payload: CoordinatePreviewRunRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CoordinatePreviewRead:
+    asset = db.get(DocumentAsset, asset_id)
+    if asset is None or asset.asset_type not in PAPER_ASSET_TYPES:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Image asset not found.")
+    paper = _paper_or_404(db, asset.document_id, current_user)
+    if paper.id != asset.document_id or not asset.file_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Image asset not found.")
+    metadata = asset_metadata(asset)
+    if not is_coordinate_asset(asset, metadata):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该图片资产不是可交互坐标图表，不能生成坐标 CSV。")
+
+    storage = FileStorageService()
+    try:
+        # Run the heavy computation in a thread pool to avoid blocking the event loop
+        preview = await asyncio.to_thread(
+            run_coordinate_preview_for_asset,
+            asset=asset,
+            storage=storage,
+            chart_type=payload.chart_type,
+            targets=payload.targets,
+            sample_limit=payload.sample_limit,
+            force_regenerate=payload.force_regenerate,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"图片坐标提取失败：{exc}") from exc
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+    return preview
 
 
 @router.get("/export")
@@ -552,6 +617,276 @@ async def export_papers(
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"'
         }
+    )
+
+
+@router.post("/{paper_id}/batch-extract-images")
+async def batch_extract_images(
+    paper_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """批量提取MinerU解析出的所有图片资产的坐标数据（基于后台队列）
+
+    特性：
+    1. LLM Agent 智能识别图片类型
+    2. 后台队列处理，支持任务恢复
+    3. 只处理有坐标轴的图表，跳过显微镜图、流程图等
+    4. 实时进度追踪
+
+    返回任务ID，前端需要轮询任务状态
+    """
+    from app.services.batch_extraction_service import BatchExtractionService
+
+    paper = _paper_or_404(db, paper_id, current_user)
+    service = BatchExtractionService(db)
+
+    # 检查是否有正在进行的批量提取（幂等性保护）
+    existing_job = service.active_job_for_document(paper.id)
+    if existing_job:
+        recovered_job = service.recover_interrupted_job(existing_job)
+        if recovered_job.status == "pending":
+            queued = service.submit_job_to_queue_if_missing(recovered_job.id)
+            return {
+                "message": "批量提取任务已恢复" if queued else "批量提取任务正在队列中",
+                "job_id": recovered_job.id,
+                "total": recovered_job.total_images,
+                "processed": recovered_job.processed_images,
+                "success": recovered_job.success_count,
+                "skipped": recovered_job.skipped_count,
+                "failed": recovered_job.failed_count,
+                "status": recovered_job.status,
+                "queue_name": BATCH_EXTRACTION_QUEUE_NAME,
+            }
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"该文档正在进行批量提取，请等待完成后再试。任务ID: {recovered_job.id}"
+        )
+
+    # 创建批量提取任务
+    try:
+        job = service.create_job(paper, current_user)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+    # 提交任务到队列
+    service.submit_job_to_queue(job.id)
+
+    return {
+        "message": "批量提取任务已创建",
+        "job_id": job.id,
+        "total": job.total_images,
+        "processed": job.processed_images,
+        "success": job.success_count,
+        "skipped": job.skipped_count,
+        "failed": job.failed_count,
+        "status": job.status,
+        "queue_name": BATCH_EXTRACTION_QUEUE_NAME,
+    }
+
+
+@router.get("/{paper_id}/batch-extract-jobs/latest-active")
+async def get_latest_active_batch_job(
+    paper_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """获取该文档最新的活跃批量提取任务（pending/processing）"""
+    from app.models import BatchExtractionJob
+    from app.services.batch_extraction_service import BatchExtractionService
+
+    paper = _paper_or_404(db, paper_id, current_user)
+    service = BatchExtractionService(db)
+    job = service.active_job_for_document(paper.id)
+
+    if not job:
+        return None
+
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "total": job.total_images,
+        "processed": job.processed_images,
+        "success": job.success_count,
+        "skipped": job.skipped_count,
+        "failed": job.failed_count,
+        "error_message": job.error_message,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+    }
+
+
+@router.get("/{paper_id}/batch-extract-jobs/{job_id}")
+async def get_batch_extraction_job_status(
+    paper_id: int,
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """查询批量提取任务状态"""
+    from app.models import BatchExtractionJob
+    from app.services.batch_extraction_service import BatchExtractionService
+
+    paper = _paper_or_404(db, paper_id, current_user)
+
+    service = BatchExtractionService(db)
+    job = service.get_job(job_id)
+
+    if not job or job.document_id != paper.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在"
+        )
+
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "total": job.total_images,
+        "processed": job.processed_images,
+        "success": job.success_count,
+        "skipped": job.skipped_count,
+        "failed": job.failed_count,
+        "error_message": job.error_message,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+    }
+
+
+@router.get("/assets/{asset_id}/preview-csv")
+async def preview_asset_csv(
+    asset_id: int,
+    token: str = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """生成HTML页面来预览资产的CSV数据"""
+    asset = db.get(DocumentAsset, asset_id)
+    if asset is None or asset.asset_type not in PAPER_ASSET_TYPES:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found.")
+    paper = _paper_or_404(db, asset.document_id, current_user)
+    if paper.id != asset.document_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found.")
+
+    metadata = asset_metadata(asset)
+    preview = metadata.get("coordinate_preview")
+    if not isinstance(preview, dict):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Coordinate preview not found.")
+
+    csv_path = str(preview.get("coordinate_csv_path") or "")
+    if not csv_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Coordinate preview not found.")
+
+    storage = FileStorageService()
+    path = storage.get_file_path(csv_path)
+    if not path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Coordinate preview file not found.")
+
+    # 读取CSV数据
+    csv_data = _user_coordinate_csv(path)
+    rows = list(csv.DictReader(io.StringIO(csv_data)))
+
+    # 生成HTML预览页面
+    html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSV Preview - {asset.label or f'Asset {asset.id}'}</title>
+    <style>
+        * {{ box-sizing: border-box; }}
+        body {{
+            font-family: system-ui, -apple-system, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f8f9fa;
+        }}
+        .container {{
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            padding: 24px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }}
+        h1 {{
+            margin: 0 0 8px 0;
+            font-size: 24px;
+            color: #1e293b;
+        }}
+        .meta {{
+            color: #64748b;
+            font-size: 14px;
+            margin-bottom: 24px;
+        }}
+        .table-wrapper {{
+            overflow-x: auto;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }}
+        thead {{
+            background: #f1f5f9;
+            position: sticky;
+            top: 0;
+        }}
+        th {{
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #475569;
+            border-bottom: 2px solid #e2e8f0;
+            white-space: nowrap;
+        }}
+        td {{
+            padding: 10px 12px;
+            border-bottom: 1px solid #e2e8f0;
+            color: #334155;
+        }}
+        tbody tr:hover {{
+            background: #f8fafc;
+        }}
+        .footer {{
+            margin-top: 16px;
+            color: #64748b;
+            font-size: 13px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{asset.label or f'Asset {asset.id}'}</h1>
+        <div class="meta">
+            Paper: {paper.title} | Asset ID: {asset.id} | Total Rows: {len(rows)}
+        </div>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        {''.join(f'<th>{col}</th>' for col in (rows[0].keys() if rows else []))}
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(f'<tr>{"".join(f"<td>{val}</td>" for val in row.values())}</tr>' for row in rows[:200])}
+                </tbody>
+            </table>
+        </div>
+        {f'<div class="footer">Showing first 200 rows of {len(rows)}</div>' if len(rows) > 200 else ''}
+    </div>
+</body>
+</html>"""
+
+    return Response(
+        content=html,
+        media_type="text/html; charset=utf-8",
     )
 
 

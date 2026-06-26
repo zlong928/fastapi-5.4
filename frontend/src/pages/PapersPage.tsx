@@ -106,7 +106,7 @@ export function PapersPage() {
                     <div>{paper.progress_label || paperStatusLabel(paper.status)}</div>
                     {paper.asset_counts ? (
                       <div className="mt-1 text-xs text-slate-400">
-                        表 {paper.asset_counts.table ?? 0} · 图 {paper.asset_counts.figure ?? 0} · 截图 {paper.asset_counts.page_snapshot ?? 0}
+                        表 {paper.asset_counts.table ?? 0} · 图 {paper.asset_counts.figure ?? 0}
                       </div>
                     ) : null}
                   </td>

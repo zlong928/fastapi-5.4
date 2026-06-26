@@ -1,27 +1,25 @@
 from __future__ import annotations
 
-import csv
-import json
+import logging
 import random
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from app.services.chart_extraction.extractors import ExtractorContext, select_extractor
-from app.services.chart_extraction.chart_type_catalog import CHART_TYPE_CATALOG
-from app.services.chart_extraction.chart_recipes import chart_recipe_catalog
-from app.services.chart_extraction.image_routing import refine_image_type_from_extracted_axes, skip_reason
 from app.services.chart_extraction.io import (
     load_image_records,
-    write_coordinate_csv,
     write_quality_audit_csv,
+    write_coordinate_csv,
     write_summary_csv,
 )
 from app.services.chart_extraction.models import ImageRecord
-from app.services.chart_extraction.plot_geometry import detect_plot_area
-from app.services.chart_extraction.quality import annotate_quality, image_status_from_rows, summarize_quality
+from app.services.chart_extraction.quality import summarize_quality
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -37,15 +35,51 @@ def sample_points(points: list[dict], limit: int, seed: int) -> list[dict]:
     if len(points) <= limit:
         chosen = points
     else:
-        chosen = random.Random(seed).sample(points, limit)
+        chosen = _stratified_sample_points(points, limit, seed)
     return sorted(
         chosen,
         key=lambda item: (
+            str(item.get("panel_id", "")),
+            str(item.get("series_id", "")),
+            str(item.get("curve_role", "")),
             str(item.get("color_group", "")),
-            float(item["x_coordinate"]),
-            float(item["y_coordinate"]),
+            float(item.get("x_coordinate", 0)),
+            float(item.get("y_coordinate", 0)),
         ),
     )
+
+
+def _stratified_sample_points(points: list[dict], limit: int, seed: int) -> list[dict]:
+    buckets: dict[tuple[str, str, str], list[dict]] = {}
+    for point in points:
+        key = (
+            str(point.get("panel_id") or ""),
+            str(point.get("series_id") or point.get("color_group") or ""),
+            str(point.get("curve_role") or ""),
+        )
+        buckets.setdefault(key, []).append(point)
+    if len(buckets) <= 1:
+        return random.Random(seed).sample(points, limit)
+
+    rng = random.Random(seed)
+    ordered_keys = sorted(buckets, key=lambda key: (key[0], key[1], key[2]))
+    selected: list[dict] = []
+    used_ids: set[int] = set()
+    base_quota = max(1, limit // len(ordered_keys))
+    for key in ordered_keys:
+        bucket = buckets[key]
+        quota = min(len(bucket), base_quota)
+        picks = rng.sample(bucket, quota) if len(bucket) > quota else list(bucket)
+        selected.extend(picks)
+        used_ids.update(id(point) for point in picks)
+
+    remaining = max(0, limit - len(selected))
+    if remaining:
+        leftovers = [point for key in ordered_keys for point in buckets[key] if id(point) not in used_ids]
+        if len(leftovers) > remaining:
+            leftovers = rng.sample(leftovers, remaining)
+        selected.extend(leftovers)
+    return selected[:limit]
 
 
 def write_overlay(image: np.ndarray, points: list[dict], out_path: Path) -> None:
@@ -58,60 +92,27 @@ def write_overlay(image: np.ndarray, points: list[dict], out_path: Path) -> None
     cv2.imwrite(str(out_path), overlay)
 
 
-def process_mineru_image_record(record: ImageRecord, out_dir: Path, sample_limit: int = 15) -> dict:
-    image = cv2.imread(str(record.path))
-    if image is None:
-        return {"image_file": record.path.name, "status": "failed", "reason": "image_unreadable", "row_count": 0}
+def process_mineru_image_record(
+    record: ImageRecord,
+    out_dir: Path,
+    sample_limit: int = 15,
+) -> dict:
+    from app.services.chart_extraction.multi_agent_orchestrator import MultiAgentOrchestrator
 
-    reason = skip_reason(record, image)
-    if reason:
-        return {"image_file": record.path.name, "image_type": "", "status": "skipped", "reason": reason, "row_count": 0}
+    orchestrator = MultiAgentOrchestrator()
+    result = orchestrator.extract(record, out_dir, sample_limit)
 
-    area = detect_plot_area(image)
-    context = ExtractorContext(record=record, image=image, plot_area=area)
-    extractor = select_extractor(context)
-    extraction = extractor.extract(context)
-    raw_image_type = extraction.image_type
-    image_type = refine_image_type_from_extracted_axes(record, raw_image_type, extraction.points)
-    routing_status = "refined" if image_type != raw_image_type else "direct"
-    selected_extractor = extractor.__class__.__name__
-    sampled = sample_points(extraction.points, sample_limit, seed=record.ordinal * 1009)
-    rows = []
-    for idx, point in enumerate(sampled, start=1):
-        row = dict(point)
-        row.update(
-            {
-                "image_file": record.path.name,
-                "image_type": image_type,
-                "mineru_sub_type": record.mineru_sub_type,
-                "series_name": point.get("series_name") or f"{point.get('color_group', 'series')}_{idx}",
-                "extraction_method": extraction.extraction_method,
-                "selected_extractor": selected_extractor,
-                "raw_image_type": raw_image_type,
-                "final_image_type": image_type,
-                "routing_status": routing_status,
-            }
-        )
-        rows.append(row)
-    annotate_quality(rows)
-
-    csv_path = out_dir / f"{record.ordinal:02d}_{record.path.stem}_coordinates.csv"
-    overlay_path = out_dir / f"{record.ordinal:02d}_{record.path.stem}_overlay.jpg"
-    write_coordinate_csv(csv_path, rows)
-    write_overlay(image, sampled, overlay_path)
     return {
-        "image_file": record.path.name,
-        "image_type": image_type,
-        "status": image_status_from_rows(rows),
-        "reason": "",
-        "row_count": len(rows),
-        **summarize_quality(rows),
-        "selected_extractor": selected_extractor,
-        "raw_image_type": raw_image_type,
-        "final_image_type": image_type,
-        "routing_status": routing_status,
-        "csv_path": str(csv_path),
-        "overlay_path": str(overlay_path),
+        "image_file": result.image_file,
+        "image_type": result.image_type,
+        "status": result.status,
+        "reason": result.reason,
+        "row_count": result.row_count,
+        **summarize_quality(result.points),
+        "verification_passed": result.verification_passed,
+        "verification_confidence": result.verification_confidence,
+        "csv_path": result.csv_path,
+        "overlay_path": result.overlay_path,
     }
 
 
@@ -127,67 +128,63 @@ def process_mineru_image_batch(
     records = load_image_records(images_dir, content_list_path)
     if image_path:
         resolved_image_path = image_path.resolve()
+        image_name = image_path.name
+        original_count = len(records)
+
         records = [record for record in records if record.path.resolve() == resolved_image_path]
 
-    summary = [process_mineru_image_record(record, out_dir, sample_limit) for record in records]
-    combined_rows: list[dict] = []
-    for item in summary:
-        csv_path = item.get("csv_path")
-        if not csv_path:
-            continue
-        with Path(str(csv_path)).open(encoding="utf-8-sig") as handle:
-            combined_rows.extend(csv.DictReader(handle))
+        if not records:
+            all_records = load_image_records(images_dir, content_list_path)
+            records = [record for record in all_records if record.path.name == image_name]
+            if records:
+                logger.info(
+                    "image_path matched by filename: images_dir=%s filename=%s",
+                    images_dir,
+                    image_name,
+                )
+
+        if not records:
+            logger.warning(
+                "image_path filter resulted in empty records: images_dir=%s image_path=%s original_records=%d",
+                images_dir,
+                image_path,
+                original_count,
+            )
+            if original_count > 0:
+                logger.warning(
+                    "available record paths: %s",
+                    [str(r.path.resolve()) for r in load_image_records(images_dir, content_list_path)[:5]],
+                )
+
+    summary = []
+    for record in records:
+        for attempt in range(2):
+            try:
+                result = process_mineru_image_record(record, out_dir, sample_limit)
+                summary.append(result)
+                break
+            except Exception:
+                logger.exception("image_pipeline fatal error image=%s attempt=%d", record.path.name, attempt + 1)
+                if attempt == 0:
+                    continue
+                summary.append({"image_file": record.path.name, "status": "failed", "reason": "unexpected_error", "row_count": 0})
 
     combined_path = out_dir / "combined_coordinate_samples.csv"
-    if combined_rows:
-        write_coordinate_csv(combined_path, combined_rows)
-
     summary_path = out_dir / "batch_coordinate_summary.csv"
-    write_summary_csv(summary_path, summary)
     audit_path = out_dir / "quality_audit_report.csv"
-    write_quality_audit_csv(audit_path, summary)
     manifest_path = out_dir / "run_manifest.json"
-    manifest_payload = {
-        "schema_version": "chart_extraction_run_manifest.v1",
-        "inputs": {
-            "images_dir": str(images_dir),
-            "content_list_path": str(content_list_path) if content_list_path else "",
-            "image_path": str(image_path) if image_path else "",
-            "sample_limit": sample_limit,
-        },
-        "outputs": {
-            "summary_csv": str(summary_path),
-            "combined_csv": str(combined_path),
-            "quality_audit_csv": str(audit_path),
-        },
-        "chart_type_catalog": [
-            {
-                "image_type": spec.image_type,
-                "label": spec.label,
-                "processing_chain": spec.processing_chain,
-                "suitable_for_csv": spec.suitable_for_csv,
-                "coordinate_output": spec.coordinate_output,
-                "binding_requirements": list(spec.binding_requirements),
-                "requires_review": spec.requires_review,
-            }
-            for spec in CHART_TYPE_CATALOG
-        ],
-        "internal_fallback_types": [
-            {
-                "image_type": "coordinate_plot",
-                "label": "通用坐标图兜底",
-                "processing_chain": "coordinate_plot",
-                "suitable_for_csv": True,
-                "coordinate_output": "xy_normalized_or_ocr_csv",
-                "binding_requirements": ["axis_tick_binding"],
-                "requires_review": True,
-                "reason": "Used when MinerU metadata or visual routing cannot bind the image to a more specific planned chart type.",
-            }
-        ],
-        "recipe_catalog": chart_recipe_catalog(),
-        "processed": summary,
-    }
-    manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_summary_csv(summary_path, summary)
+    write_quality_audit_csv(audit_path, summary)
+    _write_combined_coordinate_csv(combined_path, summary)
+    _write_run_manifest(
+        manifest_path,
+        images_dir=images_dir,
+        content_list_path=content_list_path,
+        out_dir=out_dir,
+        sample_limit=sample_limit,
+        image_path=image_path,
+        summary=summary,
+    )
     return MinerUImageBatchResult(
         summary_path=summary_path,
         combined_csv_path=combined_path,
@@ -195,3 +192,45 @@ def process_mineru_image_batch(
         manifest_path=manifest_path,
         processed=summary,
     )
+
+
+def _write_combined_coordinate_csv(path: Path, summary: list[dict]) -> None:
+    csv_paths = [Path(str(row.get("csv_path") or "")) for row in summary if row.get("csv_path")]
+    header: str | None = None
+    lines: list[str] = []
+    for csv_path in csv_paths:
+        if not csv_path.is_file():
+            continue
+        file_lines = csv_path.read_text(encoding="utf-8-sig").splitlines()
+        if not file_lines:
+            continue
+        if header is None:
+            header = file_lines[0]
+            lines.append(header)
+        if file_lines[0] != header:
+            continue
+        lines.extend(file_lines[1:])
+    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8-sig")
+
+
+def _write_run_manifest(
+    path: Path,
+    *,
+    images_dir: Path,
+    content_list_path: Path | None,
+    out_dir: Path,
+    sample_limit: int,
+    image_path: Path | None,
+    summary: list[dict],
+) -> None:
+    payload = {
+        "schema_version": "mineru_image_coordinate_batch.v1",
+        "images_dir": str(images_dir),
+        "content_list_path": str(content_list_path) if content_list_path else "",
+        "out_dir": str(out_dir),
+        "sample_limit": sample_limit,
+        "image_path": str(image_path) if image_path else "",
+        "image_count": len(summary),
+        "processed": summary,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

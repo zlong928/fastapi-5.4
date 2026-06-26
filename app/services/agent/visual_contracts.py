@@ -14,57 +14,57 @@ class VisualExtractionContract:
     def render(self, route_key: str) -> str:
         requirements = "\n".join(f"{index + 1}. {item}" for index, item in enumerate(self.requirements))
         schema = self.schema_template.format(route_key=route_key)
-        return f"""{self.role}当前处理链路：{route_key}。输出JSON：
+        return f"""{self.role} Current route: {route_key}. Output JSON:
 {schema}
 
-关键要求：
+Key requirements:
 {requirements}"""
 
 
 VISUAL_EXTRACTION_CONTRACTS: dict[str, VisualExtractionContract] = {
     "coordinate": VisualExtractionContract(
         key="coordinate",
-        role="你是坐标数据提取专家。从图表中提取所有数据点坐标。",
+        role="You are a coordinate data extraction expert. Extract all data point coordinates from charts.",
         schema_template="""{{
-  "figure": "图号",
+  "figure": "figure_label",
   "chart_type": "{route_key}",
   "panels": [
     {{
-      "panel": "子图编号（如A/B/left/right）",
-      "source_page": "页码",
-      "x_axis": {{"label": "X轴标签", "unit": "单位", "type": "linear/log/time_series/spectrum_frequency"}},
-      "y_axis": {{"label": "Y轴标签", "unit": "单位", "type": "linear/log"}},
+      "panel": "panel_id (e.g. A/B/left/right)",
+      "source_page": "page_number",
+      "x_axis": {{"label": "X axis label", "unit": "unit", "type": "linear/log/time_series/spectrum_frequency"}},
+      "y_axis": {{"label": "Y axis label", "unit": "unit", "type": "linear/log"}},
       "has_dual_y_axis": false,
       "right_y_axis": null,
       "phases": [
-        {{"phase_name": "phase I/phase II/阶段名称", "x_start": 数值或null, "x_end": 数值或null, "boundary_note": "阶段边界说明"}}
+        {{"phase_name": "phase I/phase II", "x_start": null, "x_end": null, "boundary_note": "boundary description"}}
       ],
       "series": [
         {{
-          "series_name": "数据系列名称",
-          "color": "颜色",
-          "marker": "标记类型",
+          "series_name": "series name",
+          "color": "color",
+          "marker": "marker type",
           "data_points": [
-            {{"x": 数值, "y": 数值, "phase": "所属阶段或null", "y_error": 误差值或null}},
-            {{"x": 数值, "y": 数值, "phase": "所属阶段或null", "y_error": 误差值或null}}
+            {{"x": value, "y": value, "phase": null, "y_error": null}},
+            {{"x": value, "y": value, "phase": null, "y_error": null}}
           ]
         }}
       ],
       "extraction_method": "vector/image_digitization",
-      "notes": "备注信息"
+      "notes": "notes"
     }}
   ]
 }}""",
         requirements=(
-            "提取图中每个可见数据点的x、y坐标",
-            "区分不同数据系列（按颜色、标记）",
-            "识别坐标轴类型（线性/对数）",
-            "识别是否有双y轴",
-            "如果是双相/分阶段时序图，必须提取 phases，并把每个点绑定到 phase",
-            "如果是多曲线图，必须用 legend 将 series_name 与颜色/marker 绑定",
-            "如果是带误差棒统计图，必须尽量读取 y_error、mean±SD、显著性标记",
-            "如果是光谱/谱图，x_axis.type 使用 spectrum_frequency，并保留峰位、峰强或趋势",
-            "所有可量化数值必须是数字，不要用字符串",
+            "Extract every visible data point's x,y coordinates",
+            "Distinguish different data series by color and marker",
+            "Identify axis type (linear/log)",
+            "Check for dual y-axis",
+            "For biphasic/phase time series, extract phases and bind each point to its phase",
+            "For multi-curve charts, bind series_name to color/marker via legend",
+            "For error bar charts, read y_error, mean+/-SD, significance markers",
+            "For spectrum/frequency charts, use spectrum_frequency for x_axis.type and preserve peaks",
+            "All quantifiable values must be numbers, not strings",
         ),
         csv_fields=(
             "image_file",
@@ -94,31 +94,31 @@ VISUAL_EXTRACTION_CONTRACTS: dict[str, VisualExtractionContract] = {
     ),
     "bar_chart": VisualExtractionContract(
         key="bar_chart",
-        role="你是条形图/柱状图数据提取专家。",
+        role="You are a bar chart / column chart data extraction expert.",
         schema_template="""{{
-  "figure": "图号",
-  "panel": "子图编号",
+  "figure": "figure_label",
+  "panel": "panel_id",
   "chart_type": "{route_key}",
-  "x_axis": {{"label": "X轴标签", "categories": ["类别1", "类别2"]}},
-  "y_axis": {{"label": "Y轴标签", "unit": "单位"}},
+  "x_axis": {{"label": "X axis label", "categories": ["category1", "category2"]}},
+  "y_axis": {{"label": "Y axis label", "unit": "unit"}},
   "series": [
     {{
-      "series_name": "数据系列名称",
+      "series_name": "series name",
       "bars": [
-        {{"category": "类别1", "value": 数值, "error_bar": 误差值或null, "significance": "显著性标记或null"}}
+        {{"category": "category1", "value": number, "error_bar": null, "significance": null}}
       ]
     }}
   ],
   "extraction_method": "vector/raster_digitization/llm_assisted_reading",
   "confidence": 0.85,
-  "notes": "备注"
+  "notes": "notes"
 }}""",
         requirements=(
-            "识别每个柱形的高度并转换为数值",
-            "提取误差线（error bar）的值",
-            "区分分组柱状图的不同系列",
-            "如有显著性标记（*, **, p值、字母分组），写入 bars 的 significance 字段或 notes",
-            "所有数值必须是数字",
+            "Identify each bar's height and convert to numerical value",
+            "Extract error bar values",
+            "Distinguish different series in grouped bar charts",
+            "Record significance markers (*, **, p-value, letter groups) in bars significance field or notes",
+            "All values must be numbers",
         ),
         csv_fields=(
             "image_file",
@@ -148,24 +148,24 @@ VISUAL_EXTRACTION_CONTRACTS: dict[str, VisualExtractionContract] = {
     ),
     "heatmap": VisualExtractionContract(
         key="heatmap",
-        role="你是热图/二维颜色场数据提取专家。",
+        role="You are a heatmap / 2D color field data extraction expert.",
         schema_template="""{{
-  "figure": "图号",
-  "panel": "子图编号",
+  "figure": "figure_label",
+  "panel": "panel_id",
   "chart_type": "{route_key}",
-  "x_axis": {{"label": "X轴标签", "values": ["列1", "列2"]}},
-  "y_axis": {{"label": "Y轴标签", "categories": ["行1", "行2"]}},
+  "x_axis": {{"label": "X axis label", "values": ["col1", "col2"]}},
+  "y_axis": {{"label": "Y axis label", "categories": ["row1", "row2"]}},
   "matrix": [[0.5, 0.8], [0.3, 0.9]],
-  "colorbar": {{"min": 0, "max": 1, "label": "colorbar标签", "unit": "单位或null"}},
+  "colorbar": {{"min": 0, "max": 1, "label": "colorbar label", "unit": "unit or null"}},
   "extraction_method": "llm_assisted_reading",
   "confidence": 0.6,
   "notes": "Colorbar values approximate due to gradient"
 }}""",
         requirements=(
-            "提取热图的行列标签",
-            "根据颜色估算矩阵数值（如无法精确读取，标注approximate）",
-            "提取colorbar的范围、单位和含义",
-            "如果是二维颜色场，导出网格化 rows/columns/matrix，不要当成散点图",
+            "Extract heatmap row and column labels",
+            "Estimate matrix values from colors (mark as approximate if uncertain)",
+            "Extract colorbar range, unit, and meaning",
+            "For 2D color fields, export as grid rows/columns/matrix, not as scatter points",
         ),
         csv_fields=(
             "image_file",
@@ -192,13 +192,13 @@ VISUAL_EXTRACTION_CONTRACTS: dict[str, VisualExtractionContract] = {
     ),
     "table_image": VisualExtractionContract(
         key="table_image",
-        role="你是表格图像OCR专家。",
+        role="You are a table image OCR expert.",
         schema_template="""{{
-  "figure": "图号",
+  "figure": "figure_label",
   "panel": null,
   "chart_type": "{route_key}",
   "table_data": {{
-    "headers": ["列1", "列2", "列3"],
+    "headers": ["col1", "col2", "col3"],
     "rows": [
       ["A1", "85.3", "99.2"],
       ["A2", "90.1", "98.5"]
@@ -209,32 +209,32 @@ VISUAL_EXTRACTION_CONTRACTS: dict[str, VisualExtractionContract] = {
   "notes": "OCR quality high"
 }}""",
         requirements=(
-            "读取表格的所有单元格内容",
-            "保留表头和数据行的分离",
-            "保持单元格的相对位置关系",
+            "Read all cell contents from the table",
+            "Keep header and data rows separated",
+            "Maintain relative cell positions",
         ),
         csv_fields=(),
     ),
     "non_data_visual": VisualExtractionContract(
         key="non_data_visual",
-        role="你是非坐标图片分析专家，处理显微图、SEM、荧光图、EDS mapping、照片、示意图和结构渲染。",
+        role="You are a non-coordinate image analysis expert, handling microscopy, SEM, fluorescence, EDS mapping, photos, schematics, and structural renders.",
         schema_template="""{{
-  "figure": "图号",
-  "panel": "子图编号",
+  "figure": "figure_label",
+  "panel": "panel_id",
   "chart_type": "{route_key}",
-  "description": "详细的图像描述",
-  "visible_elements": ["scale bar: 10 μm", "cracks", "particles"],
+  "description": "detailed image description",
+  "visible_elements": ["scale bar: 10 um", "cracks", "particles"],
   "quantitative_observations": [
-    {{"name": "孔径/面积/细胞计数/元素分布等", "value": 数值或null, "unit": "单位或null", "method": "scale_bar/visual_count/qualitative"}}
+    {{"name": "pore size/area/cell count/element distribution", "value": null, "unit": null, "method": "scale_bar/visual_count/qualitative"}}
   ],
   "extraction_method": "descriptive",
   "unsupported_reason": "No numerical data to extract"
 }}""",
         requirements=(
-            "描述图像的主要内容和可见元素",
-            "提取比例尺、标尺等元信息",
-            "如果是 microscopy_quant，优先读取 scale bar，并提取面积、孔径、细胞计数、元素分布等可量化观察",
-            "如果是 schematic_or_photo，通常不导出 CSV，只保留 caption 和可见结构说明",
+            "Describe the main content and visible elements of the image",
+            "Extract scale bar, ruler, and other metadata",
+            "For microscopy_quant, prioritize reading scale bar and extract area, pore size, cell count, element distribution",
+            "For schematic_or_photo, typically no CSV export, just preserve caption and structural description",
         ),
         csv_fields=(
             "image_file",
@@ -267,117 +267,117 @@ def visual_contract_csv_fields(contract_key: str) -> tuple[str, ...]:
 
 
 def generic_visual_system_prompt() -> str:
-    return """你是顶级科研图表数据提取专家。你的任务是从图片中提取所有可见的数据和信息，并用中文详细解释。
+    return """You are a top scientific chart data extraction expert. Your task is to extract all visible data and information from images and explain in detail.
 
-## 分析步骤：
+## Analysis Steps:
 
-### 第一步：识别图表类型和结构
-- 图表类型：柱状图/折线图/散点图/显微镜图/流程图/结构示意图/表格/组合图/其他
-- 坐标轴信息：X轴标签、单位、刻度值；Y轴标签、单位、刻度值
-- 图例信息：所有系列的名称、颜色、标记符号
-- 标题和注释：主标题、子标题、图中所有文字标注
+### Step 1: Identify chart type and structure
+- Chart type: bar/line/scatter/microscopy/schematic/table/composite/other
+- Axis info: X axis label, unit, scale values; Y axis label, unit, scale values
+- Legend info: all series names, colors, markers
+- Title and annotations: main title, subtitles, all text labels in figure
 
-### 第二步：提取所有数据点
-- 柱状图：每个柱子的高度数值
-- 折线图：每个数据点的X、Y坐标
-- 散点图：每个点的位置
-- 显微镜图/示意图：关键尺寸、标注的数值
-- 表格：所有单元格的数据
+### Step 2: Extract all data points
+- Bar chart: height value of each bar
+- Line chart: X,Y coordinates of each data point
+- Scatter plot: position of each point
+- Microscopy/schematic: key dimensions, annotated values
+- Table: all cell data
 
-如果数值清晰可读：记录精确数值。
-如果数值模糊：估算范围，如“约50-60”。
-如果无法读取：标注“数值不可读”，但描述大致位置和趋势。
+If values are clearly readable: record exact values.
+If values are blurry: estimate range, e.g. "approximately 50-60".
+If unreadable: note "value not readable" but describe approximate position and trend.
 
-### 第三步：提取文本标注
-记录图中所有文字：数据标签、统计显著性标记、箭头说明、误差线数值、百分比、倍数关系。
+### Step 3: Extract text annotations
+Record all text in figure: data labels, statistical significance markers, arrow annotations, error bar values, percentages, fold changes.
 
-### 第四步：总结关键发现
-用中文总结最大值、最小值、组间对比、变化趋势、统计显著性和关键数据点。
+### Step 4: Summarize key findings
+Summarize in detail: max values, min values, inter-group comparisons, trends, statistical significance, and key data points.
 
-## 输出JSON格式：
+## Output JSON format:
 {
-  "figure_type": "具体图表类型",
-  "title": "图表标题（中文）",
+  "figure_type": "specific chart type",
+  "title": "chart title",
   "axes": {
-    "x_axis": {"label": "X轴标签（中文）", "unit": "单位", "visible_values": ["刻度1", "刻度2"]},
-    "y_axis": {"label": "Y轴标签（中文）", "unit": "单位", "range": "范围（如0-100）"}
+    "x_axis": {"label": "X axis label", "unit": "unit", "visible_values": ["scale1", "scale2"]},
+    "y_axis": {"label": "Y axis label", "unit": "unit", "range": "range (e.g. 0-100)"}
   },
   "legend": [
-    {"name": "系列名（中文）", "color": "颜色描述", "marker": "标记类型"}
+    {"name": "series name", "color": "color description", "marker": "marker type"}
   ],
   "data_points": [
     {
-      "series": "所属系列（中文）",
-      "x": "X值或分类",
-      "y": "Y值",
-      "value_label": "数据标签",
-      "error_bar": "误差值（如有）",
-      "significance": "显著性标记（如有）"
+      "series": "series name",
+      "x": "X value or category",
+      "y": "Y value",
+      "value_label": "data label",
+      "error_bar": "error value if any",
+      "significance": "significance marker if any"
     }
   ],
-  "annotations": ["图中所有文字标注（中文）"],
+  "annotations": ["all text annotations in figure"],
   "statistics": {
-    "max_value": {"value": 数值, "condition": "条件（中文）"},
-    "min_value": {"value": 数值, "condition": "条件（中文）"},
-    "comparisons": ["对比1：A比B高50%", "对比2：C显著低于D (p<0.05)"]
+    "max_value": {"value": number, "condition": "condition"},
+    "min_value": {"value": number, "condition": "condition"},
+    "comparisons": ["comparison 1: A is 50% higher than B", "comparison 2: C significantly lower than D (p<0.05)"]
   },
-  "overall_description": "完整的中文描述，包括图表展示了什么、主要数据点、关键趋势、重要对比",
+  "overall_description": "complete description including what the chart shows, main data points, key trends, important comparisons",
   "extractions": [{
-    "metric": "提取的指标名",
+    "metric": "extracted metric name",
     "success": true,
-    "data": {"具体数值字段": 数值},
-    "qualitative": "用中文详细描述该指标的数值、趋势、对比关系",
+    "data": {"specific value fields": number},
+    "qualitative": "detailed description of the metric value, trend, comparisons",
     "confidence": "high/medium/low",
-    "notes": "补充说明（中文）",
-    "evidence": "图中可见的证据（坐标轴数值、标注文字等）"
+    "notes": "additional notes",
+    "evidence": "visible evidence in figure (axis values, annotation text, etc.)"
   }],
   "key_findings": [
-    "关键发现1：具体数值+单位+对比（中文）",
-    "关键发现2：趋势+幅度+显著性（中文）"
+    "Finding 1: specific value + unit + comparison",
+    "Finding 2: trend + magnitude + significance"
   ],
-  "extraction_completeness": "完整度评估（如：已提取所有可见数据点/部分数据点模糊）"
+  "extraction_completeness": "completeness assessment"
 }
 
-## 严格要求：
-1. 全部中文：所有描述、标签、结论必须用中文。
-2. 不遗漏数据：提取图中每一个可见的数据点。
-3. 精确优先：能看清数值就记录精确数值，不要只说“较高”或“增加”。
-4. 结构化：数据必须结构化存储在 data_points 数组中。
-5. 可验证：所有结论必须基于图中可见证据。
-6. 完整解释：key_findings 必须包含具体数值和单位。
-7. 中文图例：如果图例是英文，翻译成中文。
+## Strict requirements:
+1. All descriptions, labels, conclusions must be in English.
+2. Do not miss data: extract every visible data point in the figure.
+3. Precision first: record exact values when readable, do not just say "higher" or "increased".
+4. Structured: data must be stored in the data_points array.
+5. Verifiable: all conclusions must be based on visible evidence in the figure.
+6. Complete explanation: key_findings must include specific values and units.
 
-如果无法稳定输出合法 JSON，也不要空响应；请直接输出一段中文证据描述。系统会使用同一次响应作为降级证据，禁止等待二次分析。"""
+If unable to output valid JSON consistently, do not return empty response; output a text evidence description instead."""
 
 
 def generic_visual_user_prompt(figure_id: str, caption: str, tasks_desc: str, review_note: str = "") -> str:
-    review = f"\n复核提示：{review_note}" if review_note else ""
-    return f"""# 图表信息
-- 图表编号：{figure_id}
-- 图注：{caption}
+    review = f"\nReview note: {review_note}" if review_note else ""
+    return f"""# Chart Information
+- Figure ID: {figure_id}
+- Caption: {caption}
 
-# 提取任务
+# Extraction Tasks
 {tasks_desc}
 
-# 分析要求
-请严格按照系统提示的步骤，完整提取这个图表中的所有信息：
+# Analysis Requirements
+Follow the system prompt steps carefully to completely extract all information from this chart:
 
-1. 完整识别结构：图表类型、坐标轴（标签+刻度值）、图例（所有系列）
-2. 提取所有数据点：图中每个柱/点/线的具体数值，不要遗漏
-3. 记录所有文字：标题、标签、数据标签、统计标记、注释
-4. 总结关键发现：用中文说明主要数据、对比关系、显著性，必须包含具体数值
+1. Complete structure identification: chart type, axes (labels + scale values), legend (all series)
+2. Extract all data points: exact values for each bar/point/line, do not miss any
+3. Record all text: title, labels, data labels, statistical markers, annotations
+4. Summarize key findings: main data, comparisons, significance, must include specific values
 
-关键要求：
-- 提取图中每一个可见的数据点
-- 所有描述必须用中文
-- 数值必须精确记录（能看清就记数值）
-- 结论必须具体（如“A组85%，比B组60%高41.7%”，而不是“A组较高”）
+Key requirements:
+- Extract every visible data point in the figure
+- Values must be recorded precisely (record exact value when readable)
+- Conclusions must be specific (e.g. "Group A 85%, 41.7% higher than Group B 60%", not "Group A is higher")
 {review}"""
 
 
 def visual_text_fallback_prompt() -> str:
     return (
-        "请用中文描述这张论文图或页面截图。只列出图中实际可见、可核验的正向信息："
-        "可读数值、趋势、坐标轴、图例、文字标注、显著性标记、结构位置或形态。"
-        "如果某类信息不存在，不要写“没有/无法提取/不包含”。不要输出 JSON，不要解释过程，控制在500字以内。"
+        "Please describe this paper figure or page screenshot in English. Only list positive information "
+        "that is actually visible and verifiable in the figure: readable values, trends, axes, legends, "
+        "text annotations, significance markers, structural positions or morphology. "
+        "If a certain type of information does not exist, do not write 'not present/cannot extract/does not contain'. "
+        "Do not output JSON, do not explain the process, keep within 500 words."
     )

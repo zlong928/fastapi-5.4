@@ -223,7 +223,8 @@ class AgentResultMapper:
             if figure.metadata_json:
                 try:
                     label = str(json.loads(figure.metadata_json).get("figure_label") or label)
-                except Exception:
+                except (json.JSONDecodeError, KeyError, TypeError) as e:
+                    # Ignore malformed metadata, use default label
                     pass
             out[f"{label} [asset:{figure.id}]"] = figure.id
             out[label] = figure.id
@@ -240,7 +241,8 @@ class AgentResultMapper:
                     metadata = json.loads(figure.metadata_json)
                     label = str(metadata.get("figure_label") or label)
                     caption = str(metadata.get("caption") or "")
-                except Exception:
+                except (json.JSONDecodeError, KeyError, TypeError) as e:
+                    # Ignore malformed metadata, use defaults
                     pass
             out[f"{label} [asset:{figure.id}]"] = caption
             out[label] = caption
@@ -304,6 +306,9 @@ class AgentResultMapper:
             "line_plot",
             "biphasic_time_series",
             "multi_line_plot",
+            "rheology_flow_curve",
+            "rheology_strain_sweep",
+            "rheology_step_time_sweep",
             "scatter_plot",
             "spectrum_curve",
             "bar_or_line_with_errorbar",

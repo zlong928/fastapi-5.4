@@ -12,6 +12,7 @@ from app.services.paper.asset_understanding_service import AssetUnderstandingSer
 from app.services.paper.figure_extractor import FigureExtractor
 from app.services.paper.table_extractor import TableExtractor
 from app.services.paper.text_extractor import TextExtractor
+from app.services.paper.visual_assets import is_mineru_visual_asset
 
 
 class PaperEnhancementService:
@@ -52,9 +53,13 @@ class PaperEnhancementService:
                 raise RuntimeError(text_report.message or "PDF 正文提取失败")
 
             existing_text = text_report.text or paper.cleaned_text or paper.parsed_text or ""
-            figure_report = self.figure_extractor.extract(source_path=source_path, paper=paper, pages=text_report.pages)
-            if figure_report.status == "failed":
-                raise RuntimeError(figure_report.message or "PDF 图片/截图提取失败")
+            existing_mineru_visuals = self._has_mineru_visual_assets(paper)
+            if existing_mineru_visuals:
+                figure_report = None
+            else:
+                figure_report = self.figure_extractor.extract(source_path=source_path, paper=paper, pages=text_report.pages)
+                if figure_report.status == "failed":
+                    raise RuntimeError(figure_report.message or "PDF 图片/截图提取失败")
 
             table_report = self.table_extractor.extract(
                 paper_id=paper.id,
@@ -73,9 +78,10 @@ class PaperEnhancementService:
                 paper.parsed_text = "当前 PDF 未解析到可抽取正文。"
                 paper.cleaned_text = paper.parsed_text
 
-            for asset in figure_report.assets:
-                self.asset_understanding.understand(asset)
-                self.db.add(asset)
+            if figure_report is not None:
+                for asset in figure_report.assets:
+                    self.asset_understanding.understand(asset)
+                    self.db.add(asset)
             table_assets = [self._table_asset_from_legacy_table(table, index) for index, table in enumerate(table_report.tables)]
             for asset in table_assets:
                 self.asset_understanding.understand(asset)
@@ -85,15 +91,15 @@ class PaperEnhancementService:
             paper.parsed_at = paper.parsed_at or app_now()
             paper.updated_at = app_now()
             done_metadata = {
-                "figure_count": figure_report.figure_count,
-                "snapshot_count": figure_report.snapshot_count,
-                "figure_status": figure_report.status,
+                "figure_count": 0 if figure_report is None else figure_report.figure_count,
+                "snapshot_count": 0 if figure_report is None else figure_report.snapshot_count,
+                "figure_status": "mineru_preserved" if figure_report is None else figure_report.status,
                 "table_count": len(table_assets),
                 "table_status": table_report.status,
                 "table_source": table_report.source,
             }
             self._log_event(paper, "paper_enhancement_done", "论文增强解析完成。", done_metadata)
-            if figure_report.status == "partial":
+            if figure_report is not None and figure_report.status == "partial":
                 self._log_event(paper, "paper_figures_partial", figure_report.message, done_metadata)
             if table_report.status in {"fallback", "partial"}:
                 self._log_event(
@@ -132,6 +138,17 @@ class PaperEnhancementService:
             ),
         ).delete(synchronize_session=False)
         self.db.query(PaperTable).filter(PaperTable.paper_id == paper.id).delete(synchronize_session=False)
+
+    def _has_mineru_visual_assets(self, paper: Document) -> bool:
+        assets = (
+            self.db.query(DocumentAsset)
+            .filter(
+                DocumentAsset.document_id == paper.id,
+                DocumentAsset.asset_type.in_(["figure", "page_snapshot"]),
+            )
+            .all()
+        )
+        return any(is_mineru_visual_asset(asset) for asset in assets)
 
     def _table_asset_from_legacy_table(self, table: PaperTable, index: int) -> DocumentAsset:
         metadata = {

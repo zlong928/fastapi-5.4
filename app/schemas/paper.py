@@ -6,12 +6,6 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
-class PaperUploadResponse(BaseModel):
-    id: int
-    title: str
-    status: str
-
-
 class PaperListItem(BaseModel):
     id: int
     title: str
@@ -25,6 +19,7 @@ class PaperListItem(BaseModel):
 
 
 class CoordinatePreviewRead(BaseModel):
+    image_type: str = ""
     status: str = ""
     row_count: int = 0
     data_quality: str = ""
@@ -34,6 +29,25 @@ class CoordinatePreviewRead(BaseModel):
     summary_csv_path: Optional[str] = None
     quality_audit_csv_path: Optional[str] = None
     run_manifest_path: Optional[str] = None
+    selected_extractor: str = ""
+    reason: str = ""
+    chart_type_hint: str = ""
+    targets: list[str] = Field(default_factory=list)
+    request_id: str = ""
+    triggered_at: Optional[datetime] = None
+    semantic_binding: str = ""
+    review_status: str = ""
+    review_notes: str = ""
+    extraction_method: str = ""
+    text_evidence_refs: list[str] = Field(default_factory=list)
+    semantic_columns: list[str] = Field(default_factory=list)
+
+
+class CoordinatePreviewRunRequest(BaseModel):
+    chart_type: str = Field(default="auto", max_length=80)
+    targets: list[str] = Field(default_factory=list, max_length=12)
+    sample_limit: int = Field(default=120, ge=1, le=500)
+    force_regenerate: bool = False
 
 
 class PaperFigureRead(BaseModel):
@@ -110,6 +124,7 @@ class ExtractionJobRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     results: list[ExtractionResultRead] = Field(default_factory=list)
+    progress: Optional[dict] = None
 
     class Config:
         from_attributes = True
@@ -168,6 +183,7 @@ class PaperDetailResponse(BaseModel):
 class ExtractionRunRequest(BaseModel):
     paperId: int
     query: str = Field(min_length=1, max_length=2000)
+    assetId: Optional[int] = None
 
 
 class BatchExtractionRunRequest(BaseModel):
@@ -257,6 +273,18 @@ class StructuredFigureResult(BaseModel):
     evidence: str
     confidence: Optional[str] = None
     notes: Optional[str] = None
+    image_type: Optional[str] = None
+    review_status: Optional[str] = None
+    extraction_method: Optional[str] = None
+    data_points: list[dict] = Field(default_factory=list)
+    text_evidence_refs: list[str] = Field(default_factory=list)
+    x_axis_label: Optional[str] = None
+    x_axis_unit: Optional[str] = None
+    x_axis_scale: Optional[str] = None
+    y_axis_label: Optional[str] = None
+    y_axis_unit: Optional[str] = None
+    y_axis_scale: Optional[str] = None
+    series_name: Optional[str] = None
 
 
 class StructuredTableResult(BaseModel):
@@ -291,7 +319,9 @@ class PaperFigureAsset(BaseModel):
     image_url: Optional[str] = None
     page: Optional[int] = None
     source: Optional[str] = None
+    evidence_type: str = "unknown"
     asset_type: str
+    coordinate_capable: bool = False
     coordinate_preview: Optional[CoordinatePreviewRead] = None
 
 

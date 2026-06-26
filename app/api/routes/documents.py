@@ -46,8 +46,9 @@ from app.services.document_upload_service import DocumentUploadService, Duplicat
 from app.services.export_service import ExportService
 from app.services.job_run_service import JobRunService
 from app.services.paper.evidence import asset_image_url, asset_metadata, normalize_evidence_type
+from app.services.paper.visual_assets import display_visual_assets
 from app.services.soft_delete_service import SoftDeleteService
-from app.utils.json import json_loads_object_or_none
+from app.utils.json import json_loads_object_or_empty, json_loads_object_or_none
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 asset_router = APIRouter(tags=["document-assets"])
@@ -74,8 +75,7 @@ def serialize_latest_parse_job(job_run: JobRun | None) -> ParseJobRead | None:
 
 
 def _json_object(value: str | None) -> dict:
-    parsed = json_loads_object_or_none(value)
-    return parsed if isinstance(parsed, dict) else {}
+    return json_loads_object_or_empty(value)
 
 
 def _asset_counts(document: Document) -> dict[str, int]:
@@ -206,6 +206,14 @@ async def upload_document(file: UploadFile = File(...), title: str | None = Form
 
 @router.post("/batch-upload", response_model=list[DocumentBatchUploadItem], status_code=status.HTTP_202_ACCEPTED)
 async def upload_batch(files: list[UploadFile] = File(...), processing_mode: DocumentProcessingMode = Form(DocumentProcessingMode.AUTO), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[DocumentBatchUploadItem]:
+    # Limit batch upload to prevent resource exhaustion
+    MAX_BATCH_FILES = 50
+    if len(files) > MAX_BATCH_FILES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"批量上传最多支持 {MAX_BATCH_FILES} 个文件，当前提交了 {len(files)} 个"
+        )
+
     results: list[DocumentBatchUploadItem] = []
     upload_service = DocumentUploadService(db)
     for file in files:
@@ -569,6 +577,7 @@ async def get_document_chunks(document_id: int, current_user: User = Depends(get
 async def get_document_assets(
     document_id: int,
     asset_type: str | None = Query(None, pattern="^(table|figure|page_snapshot|equation|unknown)$"),
+    view: str = Query("raw", pattern="^(raw|paper_visuals)$"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[DocumentAssetRead]:
@@ -577,9 +586,16 @@ async def get_document_assets(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
     assert_document_owner(document, current_user)
     query = db.query(DocumentAsset).filter(DocumentAsset.document_id == document.id)
-    if asset_type:
+    paper_visual_view = view == "paper_visuals" and (asset_type is None or asset_type in {"figure", "page_snapshot"})
+    if paper_visual_view:
+        query = query.filter(DocumentAsset.asset_type.in_(["figure", "page_snapshot"]))
+    elif asset_type:
         query = query.filter(DocumentAsset.asset_type == asset_type)
     assets = query.order_by(DocumentAsset.asset_index.asc().nullslast(), DocumentAsset.created_at.asc(), DocumentAsset.id.asc()).all()
+    if paper_visual_view:
+        assets = display_visual_assets(assets)
+        if asset_type:
+            assets = [asset for asset in assets if asset.asset_type == asset_type]
     return [serialize_document_asset(asset) for asset in assets]
 
 

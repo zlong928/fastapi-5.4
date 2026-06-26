@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "@/components/Layout";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { DocumentDetailPage } from "@/pages/DocumentDetailPage";
 import { BookReaderPage } from "@/pages/BookReaderPage";
@@ -29,9 +30,10 @@ export function App() {
   const [queryClient] = useState(() => new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 5_000 } } }));
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <Layout>
-        <Routes>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <Layout>
+          <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
@@ -44,7 +46,9 @@ export function App() {
           <Route path="/papers/:id" element={<ProtectedRoute><PaperDetailPage /></ProtectedRoute>} />
           <Route path="/papers/:id/extraction" element={<ProtectedRoute><PaperExtractionTaskPage /></ProtectedRoute>} />
           <Route path="/papers/:id/results" element={<ProtectedRoute><PaperExtractionResultPage /></ProtectedRoute>} />
+          <Route path="/papers/image-extraction" element={<ProtectedRoute><Navigate to="/papers" replace /></ProtectedRoute>} />
           <Route path="/extractions" element={<ProtectedRoute><ExtractionsPage /></ProtectedRoute>} />
+          <Route path="/test/image-extraction" element={<ProtectedRoute><Navigate to="/papers" replace /></ProtectedRoute>} />
           <Route path="/documents/:id" element={<ProtectedRoute><DocumentDetailPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="/notes" element={<ProtectedRoute><NotesPage /></ProtectedRoute>} />
@@ -63,5 +67,6 @@ export function App() {
         </Routes>
       </Layout>
     </QueryClientProvider>
+    </ErrorBoundary>
   );
 }

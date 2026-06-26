@@ -35,6 +35,40 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _extra_headers(value: object) -> dict[str, str]:
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        return {
+            str(key): str(header_value)
+            for key, header_value in value.items()
+            if str(key).strip() and header_value is not None
+        }
+    if not isinstance(value, str):
+        return {}
+    text = value.strip()
+    if not text:
+        return {}
+    if text.startswith("{"):
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return {}
+        return _extra_headers(parsed)
+    headers: dict[str, str] = {}
+    for item in text.split(","):
+        if ":" in item:
+            key, header_value = item.split(":", 1)
+        elif "=" in item:
+            key, header_value = item.split("=", 1)
+        else:
+            continue
+        key = key.strip()
+        if key:
+            headers[key] = header_value.strip()
+    return headers
+
+
 class LLMClient:
     """Shared LLM call layer for all agents. Thread-safe token tracking."""
 
@@ -43,6 +77,10 @@ class LLMClient:
         self.api_key = str(config.get("api_key") or "")
         self.model = str(config.get("model") or "gpt-4o-mini")
         self.api_format = str(config.get("api_format") or os.getenv("LLM_API_FORMAT", "responses")).strip().lower()
+        self.extra_headers = _extra_headers(config.get("extra_headers") if "extra_headers" in config else os.getenv("LLM_EXTRA_HEADERS", ""))
+        lora_id = str(config.get("lora_id") or os.getenv("LLM_LORA_ID", "")).strip()
+        if lora_id:
+            self.extra_headers["lora_id"] = lora_id
         self.timeout = float(config.get("timeout") or 60)
         self.stream_max_seconds = max(
             1.0,
@@ -58,7 +96,7 @@ class LLMClient:
             float(
                 config["min_request_interval_seconds"]
                 if "min_request_interval_seconds" in config
-                else _env_float("LLM_MIN_REQUEST_INTERVAL_SECONDS", 0.8)
+                else _env_float("LLM_MIN_REQUEST_INTERVAL_SECONDS", 0.0)
             ),
         )
         self.allow_root_chat_fallback = (
@@ -253,7 +291,9 @@ class LLMClient:
                     self._throttle_request_start()
                     response = httpx.post(
                         url,
-                        headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                        headers={
+                            **self._request_headers(),
+                        },
                         json=body,
                         timeout=self.timeout,
                     )
@@ -291,7 +331,7 @@ class LLMClient:
 
     def _responses_urls(self) -> list[str]:
         base = self.base_url.rstrip("/")
-        if base.endswith("/v1"):
+        if base.endswith("/v1") or base.endswith("/v2"):
             return [f"{base}/responses"]
         return [f"{base}/v1/responses"]
 
@@ -323,7 +363,9 @@ class LLMClient:
         with httpx.stream(
             "POST",
             url,
-            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            headers={
+                **self._request_headers(),
+            },
             json=body,
             timeout=self.timeout,
         ) as response:
@@ -363,7 +405,9 @@ class LLMClient:
     def _non_stream_content(self, url: str, body: dict) -> tuple[str, dict]:
         response = httpx.post(
             url,
-            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            headers={
+                **self._request_headers(),
+            },
             json=body,
             timeout=self.timeout,
         )
@@ -380,12 +424,24 @@ class LLMClient:
 
     def _chat_urls(self) -> list[str]:
         base = self.base_url.rstrip("/")
-        if base.endswith("/v1"):
+        if base.endswith("/v1") or base.endswith("/v2"):
             return [f"{base}/chat/completions"]
         urls = [f"{base}/v1/chat/completions"]
         if self.allow_root_chat_fallback:
             urls.append(f"{base}/chat/completions")
         return urls
+
+    def _request_headers(self) -> dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            **self.extra_headers,
+        }
+        # 使用标准的API客户端User-Agent，避免被识别为浏览器
+        user_agent = os.getenv("LLM_USER_AGENT", "fastapi-llm-client/1.0")
+        if user_agent:
+            headers["User-Agent"] = user_agent
+        return headers
 
     def _prepare_image_bytes(self, raw: bytes) -> tuple[bytes, str]:
         if len(raw) <= self.max_image_bytes and not self.force_jpeg_images:

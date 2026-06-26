@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Database, Monitor, RotateCcw, Shield, UserRound } from "lucide-react";
-import { useAuth } from "@/auth/AuthContext";
+import { useAuth } from "@/auth/useAuth";
 import { Button } from "@/components/ui/button";
 
 const STORAGE_KEY = "second-brain:user-settings";

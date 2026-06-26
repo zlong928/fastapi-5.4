@@ -1,15 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, CalendarClock, CheckCircle2, Download, FileText, Image as ImageIcon, Loader2, RefreshCw, Table2, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CalendarClock, CheckCircle2, Download, Eye, FileText, Image as ImageIcon, Loader2, RefreshCw, Sparkles, Table2, Trash2, X, XCircle, Zap } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { API_BASE_URL, deletePaper, getDocumentAssets, getDocumentClaims, getDocumentEvents, getPaper, getPaperAssetBlob, getToken, parsePaper } from "@/lib/api";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { API_BASE_URL, batchExtractImages, deletePaper, getBatchExtractionJobStatus, getDocumentAssets, getDocumentClaims, getDocumentEvents, getExtraction, getLatestActiveBatchJob, getPaper, getPaperAssetBlob, getPaperExtractions, getStructuredExtraction, getToken, parsePaper, runExtraction } from "@/lib/api";
 import { formatChinaDateTime } from "@/lib/time";
-import { DocumentAsset, DocumentClaim, PaperDetail } from "@/lib/types";
+import { DocumentAsset, DocumentClaim, ExtractionJob, ImageBatchExtractionJob, PaperDetail, PaperFigureAssetItem, StructuredFigureResult } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { PaperStatusBadge, shouldPollPaper } from "@/pages/paperShared";
+import { extractionStatusLabel, isExtractionBusy, PaperStatusBadge, shouldPollPaper } from "@/pages/paperShared";
 
 type TabKey = "text" | "images" | "tables" | "logs";
 
@@ -19,6 +20,8 @@ const TAB_LABELS: Record<TabKey, string> = {
   tables: "表格",
   logs: "日志"
 };
+
+const CONTENT_EXTRACTION_QUERY = "提取论文中所有图表数据的定量信息，包括坐标轴数值、图注、表格数据，以及上下文关联的指标和数值";
 
 function assetImagePath(asset: DocumentAsset) {
   return asset.file_path ? `/papers/assets/${asset.id}` : "";
@@ -31,8 +34,9 @@ function textValue(value: unknown, fallback = "-") {
 }
 
 function imageKind(asset: DocumentAsset) {
-  if (asset.asset_type === "page_snapshot") return "页面截图";
   const source = asset.metadata?.source;
+  if (source === "mineru_chart") return "MinerU 图表";
+  if (source === "mineru_image" || source === "mineru_markdown") return "MinerU 图片";
   if (source === "extracted_image") return "PDF 图片对象";
   if (source === "rendered_figure_region") return "图像区域";
   return "论文图片";
@@ -52,6 +56,39 @@ function coordinatePreviewTone(status?: string | null) {
   if (status === "accepted") return "border-emerald-200 bg-emerald-50 text-emerald-700";
   if (status === "review_required") return "border-amber-200 bg-amber-50 text-amber-700";
   return "border-slate-200 bg-slate-50 text-slate-600";
+}
+
+function openCsvPreview(assetId: number) {
+  const token = getToken();
+  if (!token) {
+    alert("请先登录");
+    return;
+  }
+  // 在新窗口中打开预览页面，使用Authorization header
+  const url = `${API_BASE_URL}/papers/assets/${assetId}/preview-csv`;
+  const previewWindow = window.open("", '_blank', 'width=1200,height=800');
+
+  if (!previewWindow) {
+    alert("无法打开新窗口，请检查浏览器弹窗拦截设置");
+    return;
+  }
+
+  // 使用fetch获取HTML并在新窗口中显示
+  fetch(url, {
+    headers: { Authorization: `Bearer ${token}` }
+  })
+    .then(response => {
+      if (!response.ok) throw new Error("加载预览失败");
+      return response.text();
+    })
+    .then(html => {
+      previewWindow.document.write(html);
+      previewWindow.document.close();
+    })
+    .catch(error => {
+      previewWindow.close();
+      alert(error.message || "加载预览失败");
+    });
 }
 
 function downloadCoordinatePreview(asset: DocumentAsset) {
@@ -77,6 +114,89 @@ function downloadCoordinatePreview(asset: DocumentAsset) {
     .catch((error) => {
       alert(error.message || "CSV 下载失败");
     });
+}
+
+function escapeCsvCell(value: unknown) {
+  const text = String(value ?? "");
+  if (/[",\n]/.test(text)) return `"${text.replace(/"/g, "\"\"")}"`;
+  return text;
+}
+
+function buildContentResultsCsv(figureLabel: string, results: StructuredFigureResult[]) {
+  const headers = [
+    "figure_id",
+    "metric",
+    "value",
+    "evidence",
+    "confidence",
+    "review_status",
+    "extraction_method",
+    "notes",
+  ];
+  const rows = results.map((result) => [
+    result.figure_id || figureLabel,
+    result.metric || "",
+    result.value || "",
+    result.evidence || "",
+    result.confidence || "",
+    result.review_status || "",
+    result.extraction_method || "",
+    result.notes || "",
+  ]);
+  return [headers, ...rows].map((row) => row.map(escapeCsvCell).join(",")).join("\n");
+}
+
+function openContentCsvPreview(figureLabel: string, results: StructuredFigureResult[]) {
+  const previewWindow = window.open("", "_blank", "width=1200,height=800");
+  if (!previewWindow) {
+    alert("无法打开新窗口，请检查浏览器弹窗拦截设置");
+    return;
+  }
+
+  const csv = buildContentResultsCsv(figureLabel, results);
+  const safeLabel = (figureLabel || "content-results").replace(/[^\w.-]+/g, "_");
+  const escapedCsv = csv
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  previewWindow.document.write(`
+    <!doctype html>
+    <html lang="zh-CN">
+      <head>
+        <meta charset="utf-8" />
+        <title>${safeLabel} 内容提取 CSV</title>
+        <style>
+          body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; margin: 0; padding: 24px; background: #f8fafc; color: #0f172a; }
+          .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+          .button { display: inline-flex; align-items: center; border: 1px solid #cbd5e1; background: white; color: #0f172a; border-radius: 8px; padding: 8px 12px; cursor: pointer; font: inherit; }
+          pre { margin: 0; padding: 16px; background: white; border: 1px solid #e2e8f0; border-radius: 12px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+        </style>
+      </head>
+      <body>
+        <div class="toolbar">
+          <strong>${figureLabel} 内容提取 CSV</strong>
+          <button class="button" id="download-btn">下载CSV</button>
+        </div>
+        <pre>${escapedCsv}</pre>
+        <script>
+          const csv = ${JSON.stringify(csv)};
+          document.getElementById("download-btn")?.addEventListener("click", () => {
+            const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = "${safeLabel}_content_results.csv";
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+          });
+        </script>
+      </body>
+    </html>
+  `);
+  previewWindow.document.close();
 }
 
 function Stat({ icon: Icon, label, value }: { icon: typeof FileText; label: string; value: string | number }) {
@@ -173,10 +293,16 @@ function ImageAssetCard({ asset, onOpen }: { asset: DocumentAsset; onOpen: (src:
             <Badge variant="outline" className={cn("border text-[10px]", coordinatePreviewTone(coordinatePreview.status))}>
               {coordinatePreviewStatusLabel(coordinatePreview.status)}
             </Badge>
-            <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={() => downloadCoordinatePreview(asset)}>
-              <Download className="h-3.5 w-3.5" />
-              CSV
-            </Button>
+            <div className="flex gap-1">
+              <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={() => openCsvPreview(asset.id)}>
+                <Eye className="h-3.5 w-3.5" />
+                浏览器查看
+              </Button>
+              <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={() => downloadCoordinatePreview(asset)}>
+                <Download className="h-3.5 w-3.5" />
+                CSV
+              </Button>
+            </div>
           </div>
           <p className="mt-1 text-[10px] leading-4 text-slate-500">
             {coordinatePreview.row_count ?? 0} 点 · {coordinatePreview.data_quality || "未标注质量"}
@@ -216,12 +342,175 @@ function TableAssetCard({ asset }: { asset: DocumentAsset }) {
   );
 }
 
+function BatchExtractionProgress({
+  jobId, paperId, onComplete, onCancel,
+}: {
+  jobId: number;
+  paperId: number;
+  onComplete: () => void;
+  onCancel: () => void;
+}) {
+  const jobQuery = useQuery({
+    queryKey: ["batch-job", paperId, jobId],
+    queryFn: () => getBatchExtractionJobStatus(paperId, jobId),
+    refetchInterval: (query) => {
+      const s = query.state.data?.status;
+      return s === "completed" || s === "failed" ? false : 2000;
+    },
+  });
+
+  const job = jobQuery.data;
+
+  useEffect(() => {
+    if (job && (job.status === "completed" || job.status === "failed")) {
+      onComplete();
+    }
+  }, [job?.status]);
+
+  if (!job) {
+    return (
+      <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        加载任务状态...
+      </div>
+    );
+  }
+
+  const pct = job.total > 0 ? Math.round((job.processed / job.total) * 100) : 0;
+  const isDone = job.status === "completed" || job.status === "failed";
+
+  return (
+    <div className="min-w-[280px] rounded-md border border-blue-200 bg-blue-50 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm font-medium text-blue-800">
+          {isDone ? (
+            job.status === "completed" ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <XCircle className="h-4 w-4 text-red-600" />
+          ) : (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          )}
+          {job.status === "completed" ? "提取完成" : job.status === "failed" ? "提取失败" : "批量提取中..."}
+        </div>
+        <span className="text-xs text-blue-600">{job.processed}/{job.total}</span>
+      </div>
+
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-blue-100">
+        <div
+          className={cn(
+            "h-full rounded-full transition-all duration-500",
+            job.status === "failed" ? "bg-red-500" : "bg-blue-600"
+          )}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+
+      <div className="mt-2 flex flex-wrap gap-3 text-xs text-blue-700">
+        <span>成功 {job.success}</span>
+        <span>跳过 {job.skipped}</span>
+        {job.failed > 0 ? <span className="text-red-600">失败 {job.failed}</span> : null}
+      </div>
+
+      {job.status === "failed" && job.error_message ? (
+        <p className="mt-2 text-xs text-red-700">{job.error_message}</p>
+      ) : null}
+
+      {!isDone ? (
+        <button
+          type="button"
+          onClick={onCancel}
+          className="mt-2 text-xs text-blue-500 underline underline-offset-2 hover:text-blue-800"
+        >
+          隐藏进度
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function ContentExtractionProgress({
+  jobId, onComplete, onCancel,
+}: {
+  jobId: number;
+  onComplete: (job: ExtractionJob) => void;
+  onCancel: () => void;
+}) {
+  const jobQuery = useQuery({
+    queryKey: ["extraction", jobId],
+    queryFn: () => getExtraction(jobId),
+    refetchInterval: (query) => {
+      const s = query.state.data?.status;
+      return isExtractionBusy(s) ? 2000 : false;
+    },
+  });
+
+  const job = jobQuery.data;
+
+  useEffect(() => {
+    if (job && !isExtractionBusy(job.status)) {
+      onComplete(job);
+    }
+  }, [job?.status]);
+
+  if (!job) {
+    return (
+      <div className="flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        加载内容提取状态...
+      </div>
+    );
+  }
+
+  const progress = job.progress;
+  const percent = progress?.percent ?? (job.status === "done" ? 100 : job.status === "failed" ? 0 : 10);
+  const isDone = !isExtractionBusy(job.status);
+  const failed = job.status === "failed";
+
+  return (
+    <div className="min-w-[280px] rounded-md border border-emerald-200 bg-emerald-50 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className={cn("flex min-w-0 items-center gap-2 text-sm font-medium", failed ? "text-red-700" : "text-emerald-800")}>
+          {isDone ? (
+            failed ? <XCircle className="h-4 w-4 text-red-600" /> : <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+          ) : (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          )}
+          <span className="truncate">{failed ? "内容提取失败" : job.status === "done" ? "内容提取完成" : progress?.phase_label || extractionStatusLabel(job.status)}</span>
+        </div>
+        <span className="text-xs tabular-nums text-emerald-600">{Math.round(percent)}%</span>
+      </div>
+
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-emerald-100">
+        <div
+          className={cn("h-full rounded-full transition-all duration-500", failed ? "bg-red-500" : "bg-emerald-600")}
+          style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
+        />
+      </div>
+
+      <p className={cn("mt-2 line-clamp-2 text-xs", failed ? "text-red-700" : "text-emerald-700")}>
+        {failed ? job.error_message || progress?.message || "内容提取失败" : progress?.message || job.query}
+      </p>
+
+      {!isDone ? (
+        <button
+          type="button"
+          onClick={onCancel}
+          className="mt-2 text-xs text-emerald-600 underline underline-offset-2 hover:text-emerald-800"
+        >
+          隐藏进度
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 export function PaperDetailPage() {
   const paperId = Number(useParams().id);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabKey>("text");
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [activeJobId, setActiveJobId] = useState<number | null>(null);
+  const [activeContentJobId, setActiveContentJobId] = useState<number | null>(null);
+  const [showComparison, setShowComparison] = useState(false);
 
   const paperQuery = useQuery({
     queryKey: ["paper", paperId],
@@ -230,22 +519,35 @@ export function PaperDetailPage() {
     refetchInterval: (queryState) => shouldPollPaper(queryState.state.data) ? 2000 : false
   });
   const claimsQuery = useQuery({ queryKey: ["paper", paperId, "claims"], queryFn: () => getDocumentClaims(paperId), enabled: Number.isFinite(paperId) });
-  const assetsQuery = useQuery({ queryKey: ["paper", paperId, "assets"], queryFn: () => getDocumentAssets(paperId), enabled: Number.isFinite(paperId) });
+  const assetsQuery = useQuery({ queryKey: ["paper", paperId, "assets", "paper_visuals"], queryFn: () => getDocumentAssets(paperId, undefined, "paper_visuals"), enabled: Number.isFinite(paperId) });
   const eventsQuery = useQuery({ queryKey: ["paper", paperId, "events"], queryFn: () => getDocumentEvents(paperId, 1, 50), enabled: Number.isFinite(paperId) });
+
+  const latestJobQuery = useQuery({
+    queryKey: ["paper", paperId, "batch-job", "latest"],
+    queryFn: () => getLatestActiveBatchJob(paperId),
+    enabled: Number.isFinite(paperId),
+  });
+  useEffect(() => {
+    if (latestJobQuery.data?.job_id) setActiveJobId(latestJobQuery.data.job_id);
+  }, [latestJobQuery.data]);
+
+  const contentJobsQuery = useQuery({
+    queryKey: ["paper-extractions", paperId],
+    queryFn: () => getPaperExtractions(paperId),
+    enabled: Number.isFinite(paperId),
+    refetchInterval: (query) => (query.state.data ?? []).some((job) => isExtractionBusy(job.status)) ? 2000 : false,
+  });
+  useEffect(() => {
+    const runningJob = (contentJobsQuery.data ?? []).find((job) => isExtractionBusy(job.status));
+    if (runningJob) setActiveContentJobId(runningJob.id);
+  }, [contentJobsQuery.data]);
 
   const paper = paperQuery.data;
   const claims = claimsQuery.data ?? [];
   const assets = assetsQuery.data ?? [];
   const events = eventsQuery.data?.items ?? [];
   const tables = useMemo(() => assets.filter((asset) => asset.asset_type === "table"), [assets]);
-  const images = useMemo(() => assets.filter((asset) => {
-    if (asset.asset_type === "figure") return true;
-    if (asset.asset_type === "page_snapshot") {
-      const source = asset.metadata?.source;
-      return source === "page_visual_snapshot" || source === "rendered_figure_region";
-    }
-    return false;
-  }), [assets]);
+  const images = useMemo(() => assets.filter((asset) => asset.asset_type === "figure"), [assets]);
 
   const refreshMutation = useMutation({
     mutationFn: () => parsePaper(paperId),
@@ -256,6 +558,47 @@ export function PaperDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["paper", paperId, "events"] });
     }
   });
+
+  const batchExtractMutation = useMutation({
+    mutationFn: () => batchExtractImages(paperId),
+    onSuccess: (data) => {
+      setActiveJobId(data.job_id);
+      queryClient.invalidateQueries({ queryKey: ["paper", paperId, "events"] });
+    },
+    onError: (err) => {
+      alert(`格式提取失败: ${err instanceof Error ? err.message : "未知错误"}\n\n请检查网络连接或稍后重试`);
+    }
+  });
+
+  const contentExtractMutation = useMutation({
+    mutationFn: () => runExtraction(paperId, CONTENT_EXTRACTION_QUERY),
+    onSuccess: (data) => {
+      setActiveContentJobId(data.id);
+      queryClient.invalidateQueries({ queryKey: ["paper-extractions", paperId] });
+      queryClient.invalidateQueries({ queryKey: ["paper", paperId, "events"] });
+    },
+    onError: (err) => {
+      alert(`内容提取失败: ${err instanceof Error ? err.message : "未知错误"}`);
+    }
+  });
+
+  const handleBatchComplete = () => {
+    queryClient.invalidateQueries({ queryKey: ["paper", paperId] });
+    queryClient.invalidateQueries({ queryKey: ["paper", paperId, "assets"] });
+    queryClient.invalidateQueries({ queryKey: ["paper", paperId, "events"] });
+    queryClient.invalidateQueries({ queryKey: ["paper", paperId, "batch-job", "latest"] });
+    setTimeout(() => setActiveJobId(null), 3000);
+  };
+
+  const handleContentComplete = (job: ExtractionJob) => {
+    queryClient.invalidateQueries({ queryKey: ["paper", paperId] });
+    queryClient.invalidateQueries({ queryKey: ["paper-extractions", paperId] });
+    queryClient.invalidateQueries({ queryKey: ["paper", paperId, "events"] });
+    queryClient.invalidateQueries({ queryKey: ["extraction-structured", job.id] });
+    if (job.status === "done") {
+      setTimeout(() => setActiveContentJobId(null), 3000);
+    }
+  };
 
   const deleteMutation = useMutation({
     mutationFn: () => deletePaper(paperId),
@@ -291,6 +634,55 @@ export function PaperDetailPage() {
               <Button variant="outline" className="rounded-md border-slate-200 shadow-none" onClick={() => refreshMutation.mutate()} disabled={busy}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                 重新解析
+              </Button>
+            ) : null}
+            {hasFigures && paper.status === "done" && activeJobId ? (
+              <BatchExtractionProgress
+                jobId={activeJobId}
+                paperId={paperId}
+                onComplete={handleBatchComplete}
+                onCancel={() => setActiveJobId(null)}
+              />
+            ) : null}
+            {hasFigures && paper.status === "done" && activeContentJobId ? (
+              <ContentExtractionProgress
+                jobId={activeContentJobId}
+                onComplete={handleContentComplete}
+                onCancel={() => setActiveContentJobId(null)}
+              />
+            ) : null}
+            {hasFigures && paper.status === "done" && !activeJobId && !activeContentJobId ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger>
+                  <Button
+                    variant="outline"
+                    className="rounded-md border-blue-200 bg-blue-50 text-blue-700 shadow-none hover:bg-blue-100"
+                    disabled={batchExtractMutation.isPending || contentExtractMutation.isPending}
+                  >
+                    {batchExtractMutation.isPending || contentExtractMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+                    批量提取
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent>
+                  <DropdownMenuItem onClick={() => batchExtractMutation.mutate()} disabled={batchExtractMutation.isPending}>
+                    <ImageIcon className="h-4 w-4" />
+                    格式提取
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => contentExtractMutation.mutate()} disabled={contentExtractMutation.isPending}>
+                    <Sparkles className="h-4 w-4" />
+                    内容提取
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null}
+            {hasFigures && paper.status === "done" ? (
+              <Button
+                variant="outline"
+                className="rounded-md border-purple-200 bg-purple-50 text-purple-700 shadow-none hover:bg-purple-100"
+                onClick={() => setShowComparison(true)}
+              >
+                <FileText className="h-4 w-4" />
+                效果对比
               </Button>
             ) : null}
             <Button asChild className="rounded-md">
@@ -376,11 +768,12 @@ export function PaperDetailPage() {
       ) : null}
       {activeTab === "logs" ? (
         <Panel title="操作日志">
-          {events.length ? <div className="divide-y divide-slate-100 rounded-md border border-slate-200">{events.map((event) => <article key={event.id} className="p-4"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-semibold text-slate-950">{event.event_type}</p><span className="inline-flex items-center gap-1 text-xs text-slate-400"><CalendarClock className="h-3.5 w-3.5" />{formatChinaDateTime(event.created_at)}</span></div><p className="mt-1 text-sm leading-6 text-slate-600">{event.message}</p></article>)}</div> : <Empty text="暂无操作日志" />}
+          {events.length ? <div className="divide-y divide-slate-100 rounded-md border border-slate-200">{events.map((event) => <EventRow key={event.id} event={event} />)}</div> : <Empty text="暂无操作日志" />}
         </Panel>
       ) : null}
 
       {previewImage ? <ImageModal src={previewImage} paper={paper} onClose={() => setPreviewImage(null)} /> : null}
+      {showComparison ? <ExtractionComparisonModal paperId={paperId} paperTitle={paper.title} onClose={() => setShowComparison(false)} /> : null}
     </main>
   );
 }
@@ -405,6 +798,275 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
 
 function Empty({ text }: { text: string }) {
   return <div className="rounded-md bg-slate-50 p-8 text-center text-sm text-slate-400">{text}</div>;
+}
+
+function EventRow({ event }: { event: { id: number; event_type: string; message: string; created_at: string } }) {
+  const isExtraction = event.event_type.startsWith("batch_extraction_") || event.event_type.startsWith("extraction_");
+  const isStarted = event.event_type.endsWith("_started");
+  const isCompleted = event.event_type.endsWith("_completed") || event.event_type === "extraction_done";
+  const isFailed = event.event_type.endsWith("_failed") || event.event_type === "extraction_failed";
+  const displayMessage = normalizeExtractionEventMessage(event);
+
+  const icon = isStarted ? <Zap className="h-4 w-4 text-blue-600" />
+    : isCompleted ? <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+    : isFailed ? <XCircle className="h-4 w-4 text-red-600" />
+    : null;
+
+  const tone = isCompleted ? "text-emerald-700"
+    : isFailed ? "text-red-700"
+    : isExtraction ? "text-blue-700"
+    : "text-slate-950";
+
+  return (
+    <article className="p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          {icon}
+          <p className={cn("text-sm font-semibold", tone)}>
+            {isExtraction ? displayMessage : event.event_type}
+          </p>
+        </div>
+        <span className="inline-flex items-center gap-1 text-xs text-slate-400">
+          <CalendarClock className="h-3.5 w-3.5" />
+          {formatChinaDateTime(event.created_at)}
+        </span>
+      </div>
+      {!isExtraction && displayMessage ? (
+        <p className="mt-1 text-sm leading-6 text-slate-600">{displayMessage}</p>
+      ) : null}
+    </article>
+  );
+}
+
+function normalizeExtractionEventMessage(event: { event_type: string; message: string }) {
+  if (
+    event.event_type === "extraction_started"
+    || event.message.includes("提取任务开始（v2-enhanced 管道）")
+    || event.message.includes("内容提取已开始")
+  ) {
+    return "内容提取开始";
+  }
+  if (
+    event.event_type === "extraction_done"
+    || event.message.includes("提取完成（v2-enhanced 管道）")
+    || event.message.includes("内容提取结束")
+  ) {
+    return "内容提取完成";
+  }
+  return event.message;
+}
+
+function ExtractionComparisonModal({
+  paperId, paperTitle, onClose,
+}: {
+  paperId: number;
+  paperTitle: string;
+  onClose: () => void;
+}) {
+  const jobsQuery = useQuery({
+    queryKey: ["paper-extractions", paperId],
+    queryFn: () => getPaperExtractions(paperId),
+    enabled: Number.isFinite(paperId),
+  });
+
+  const latestDoneJob = useMemo(
+    () => (jobsQuery.data ?? []).find((j) => j.status === "done"),
+    [jobsQuery.data],
+  );
+
+  const structuredQuery = useQuery({
+    queryKey: ["extraction-structured", latestDoneJob?.id],
+    queryFn: () => getStructuredExtraction(latestDoneJob!.id),
+    enabled: !!latestDoneJob,
+  });
+
+  const structured = structuredQuery.data;
+  const paperFigures = structured?.paper_figures ?? [];
+  const figureResults = structured?.figure_results ?? [];
+
+  const resultsByAssetUrl = useMemo(() => {
+    const map = new Map<string, StructuredFigureResult[]>();
+    for (const r of figureResults) {
+      const url = r.image_url || "";
+      if (!map.has(url)) map.set(url, []);
+      map.get(url)!.push(r);
+    }
+    return map;
+  }, [figureResults]);
+
+  const loading = jobsQuery.isLoading || structuredQuery.isLoading;
+  const noContentJob = !loading && !latestDoneJob;
+  const noResults = !loading && !!latestDoneJob && !structured;
+
+  if (loading) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/80">
+        <div className="flex items-center gap-2 text-sm text-slate-500">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          加载提取数据...
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-white">
+      <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+        <div className="min-w-0">
+          <h2 className="truncate text-lg font-semibold text-slate-950">效果对比 — {paperTitle}</h2>
+          <p className="text-xs text-slate-500">
+            {paperFigures.length} 张图片
+            {latestDoneJob ? ` · 基于内容提取任务 #${latestDoneJob.id}` : ""}
+          </p>
+        </div>
+        <Button type="button" variant="outline" size="sm" onClick={onClose}>
+          <X className="mr-1 h-4 w-4" />关闭
+        </Button>
+      </div>
+
+      <div className="flex-1 overflow-auto p-6">
+        {noContentJob ? (
+          <div className="flex flex-col items-center gap-3 py-20 text-sm text-slate-400">
+            <FileText className="h-10 w-10" />
+            <p>尚未完成内容提取，请先运行内容提取</p>
+          </div>
+        ) : noResults ? (
+          <div className="flex flex-col items-center gap-3 py-20 text-sm text-slate-400">
+            <FileText className="h-10 w-10" />
+            <p>内容提取结果不可用</p>
+          </div>
+        ) : paperFigures.length === 0 ? (
+          <div className="flex flex-col items-center gap-3 py-20 text-sm text-slate-400">
+            <ImageIcon className="h-10 w-10" />
+            <p>该论文未提取到图片</p>
+          </div>
+        ) : (
+          <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+            {paperFigures.map((figure) => {
+              const contentResults = resultsByAssetUrl.get(figure.image_url || "") || [];
+              return (
+                <ComparisonCard
+                  key={figure.id}
+                  figure={figure}
+                  contentResults={contentResults}
+                />
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ComparisonCard({
+  figure, contentResults,
+}: {
+  figure: PaperFigureAssetItem;
+  contentResults: StructuredFigureResult[];
+}) {
+  const [imageSrc, setImageSrc] = useState("");
+  const imageUrl = figure.image_url;
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl = "";
+    if (!imageUrl) {
+      setImageSrc("");
+      return;
+    }
+    getPaperAssetBlob(imageUrl)
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setImageSrc(objectUrl);
+      })
+      .catch(() => setImageSrc(""));
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [imageUrl]);
+
+  const cp = figure.coordinate_preview;
+
+  return (
+    <article className="rounded-lg border border-slate-200 bg-white shadow-sm">
+      {imageSrc ? (
+        <div className="aspect-[4/3] w-full overflow-hidden rounded-t-lg bg-slate-50">
+          <img src={imageSrc} alt={figure.figure_label} className="h-full w-full object-contain" />
+        </div>
+      ) : (
+        <div className="flex aspect-[4/3] items-center justify-center rounded-t-lg bg-slate-50 text-sm text-slate-400">图片加载中</div>
+      )}
+
+      <div className="space-y-1 border-b border-slate-100 px-4 py-3">
+        <h3 className="truncate text-sm font-semibold text-slate-950">{figure.figure_label}</h3>
+        {figure.caption ? <p className="line-clamp-2 text-xs text-slate-500">{figure.caption}</p> : null}
+        {figure.page ? <p className="text-xs text-slate-400">第 {figure.page} 页</p> : null}
+      </div>
+
+      <div className="grid grid-cols-2 divide-x divide-slate-200">
+        <div className="space-y-2 p-4">
+          <p className="flex items-center gap-1 text-xs font-semibold text-blue-700">
+            <ImageIcon className="h-3.5 w-3.5" />
+            格式提取
+          </p>
+          {cp ? (
+            <div className="space-y-1 rounded-md bg-blue-50 p-2 text-xs leading-5 text-blue-800">
+              <p>图片类型: {cp.image_type || "-"}</p>
+              <p>数据点: {cp.row_count ?? "-"}</p>
+              <p>质量: {cp.data_quality || "-"}</p>
+              <p>状态: {coordinatePreviewStatusLabel(cp.status) || "-"}</p>
+              {cp.csv_url ? (
+                <button
+                  type="button"
+                  onClick={() => openCsvPreview(figure.id)}
+                  className="mt-1 inline-flex items-center gap-1 text-blue-600 underline underline-offset-2 hover:text-blue-800"
+                >
+                  <Eye className="h-3 w-3" />查看CSV
+                </button>
+              ) : null}
+            </div>
+          ) : (
+            <p className="rounded-md bg-slate-50 p-2 text-xs text-slate-400">暂无格式提取数据</p>
+          )}
+        </div>
+
+        <div className="space-y-2 p-4">
+          <p className="flex items-center gap-1 text-xs font-semibold text-emerald-700">
+            <Sparkles className="h-3.5 w-3.5" />
+            内容提取
+          </p>
+          {contentResults.length > 0 ? (
+            <div className="space-y-1.5">
+              <button
+                type="button"
+                onClick={() => openContentCsvPreview(figure.figure_label, contentResults)}
+                className="inline-flex items-center gap-1 text-emerald-600 underline underline-offset-2 hover:text-emerald-800"
+              >
+                <Eye className="h-3 w-3" />查看CSV
+              </button>
+              {contentResults.map((r) => (
+                <div key={r.id} className="rounded-md bg-emerald-50 p-2 text-xs leading-5">
+                  <p className="font-medium text-emerald-900">{r.metric}</p>
+                  <p className="mt-0.5 text-emerald-700">值: {r.value}</p>
+                  {r.confidence ? (
+                    <p className="text-emerald-500">置信度: {r.confidence}</p>
+                  ) : null}
+                  {r.evidence ? (
+                    <p className="mt-0.5 line-clamp-2 text-emerald-600">{r.evidence}</p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-md bg-slate-50 p-2 text-xs text-slate-400">暂无内容提取数据</p>
+          )}
+        </div>
+      </div>
+    </article>
+  );
 }
 
 function ImageModal({ src, paper, onClose }: { src: string; paper: PaperDetail; onClose: () => void }) {
